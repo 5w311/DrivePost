@@ -79,16 +79,16 @@ iPhones don't let a web app appear in the share sheet, so sharing goes through a
 
 **Setup & sharing** in the remote shows your **personal link**: your server's address with your share token in it. That link is all the Shortcut needs. The Shortcut sends what you shared to the link and shows the server's answer as a notification. It only uses actions that have been in Shortcuts since iOS 15.
 
-- **By hand:** the Setup page lists the steps. It's one action with three fields, plus a notification.
-- **Ready-made:** if `server/public/send-to-car.shortcut` exists, the Setup page offers it as a download instead. Adding it asks for your personal link, which the button has already copied. The file is the same for everyone and has no address or token in it.
+To add it, open **Setup & sharing** on the iPhone in Safari and tap **Get the Shortcut**. That copies your personal link and downloads the Shortcut. Open the download, paste the link when Shortcuts asks for it, and tap **Add Shortcut**. The first time you share, iOS asks whether the Shortcut may connect to your server: tap **Always Allow**. The Setup page also lists the steps for making the same Shortcut by hand.
 
-iPhones only open Shortcut files that carry Apple's signature, and that signature has to be made on a Mac signed in to iCloud. To make the ready-made file:
+The Shortcut file (`server/public/send-to-car.shortcut`) is the same for everyone and has no address or token in it. `scripts/make-shortcut.mjs` builds it, and `shortcut/send-to-car.unsigned.plist` is the readable version of what it does.
+
+iPhones only open Shortcut files that carry Apple's signature. The script gets one with the `shortcuts` tool on a Mac, or from [Shortcuty's public signing service](https://github.com/Shortcuty/Signing-Server-API-Documentation) on any other computer. The file in this repository was signed there. You only need to do this again if you change the Shortcut, or if iPhones stop opening the file because its signature has aged out:
 
 ```bash
-node scripts/make-shortcut.mjs --sign   # on a Mac; writes server/public/send-to-car.shortcut
+node scripts/make-shortcut.mjs --sign      # writes server/public/send-to-car.shortcut
+python3 scripts/inspect-shortcut.py        # unpacks the signed file and checks it matches the readable version
 ```
-
-`shortcut/send-to-car.unsigned.plist` is the same Shortcut unsigned, so you can read exactly what it does.
 
 Making a new share token (Setup page, under Security) changes your personal link. Open Send to Car in Shortcuts and paste the new link over the old one.
 
@@ -169,7 +169,7 @@ Tesla only lets its browser take over the entire display in Park. While driving,
 ## Project layout
 
 ```
-scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder
+scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder and checker
 shortcut/        The iPhone Shortcut, unsigned, for reading
 server/src/      Node server: auth, state, yt-dlp, ffmpeg streaming, TS chunker
 server/public/   Car page, phone remote, setup page, JSMpeg

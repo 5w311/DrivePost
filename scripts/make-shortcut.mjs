@@ -11,25 +11,39 @@
  *   2. sends it to the DriveTest link as {"url": "..."},
  *   3. shows the server's answer ("Added to Up Next: ...") as a notification.
  *
- * iPhones only open Shortcut files that carry Apple's signature, and that
- * signature can only be made on a Mac that is signed in to iCloud:
+ * iPhones only open Shortcut files that carry Apple's signature. This script
+ * gets one of two ways:
  *
- *   node scripts/make-shortcut.mjs          write the unsigned file only
- *   node scripts/make-shortcut.mjs --sign   also sign it (on a Mac), which
- *                                           writes server/public/send-to-car.shortcut
+ *   node scripts/make-shortcut.mjs                write the unsigned file only
+ *   node scripts/make-shortcut.mjs --sign         sign it: on a Mac with the
+ *                                                 built-in `shortcuts` tool,
+ *                                                 anywhere else online
+ *   node scripts/make-shortcut.mjs --sign=online  sign it with Shortcuty's free
+ *                                                 public signing service
+ *                                                 (https://sign.shortcuty.app)
+ *   node scripts/make-shortcut.mjs --sign=mac     sign it on this Mac (needs to
+ *                                                 be signed in to iCloud)
  *
- * While there is no signed file, the Setup page shows how to make the
- * Shortcut by hand instead. Once server/public/send-to-car.shortcut exists,
- * the Setup page offers it as a download.
+ * Signing online uploads the unsigned Shortcut, which is fine because there
+ * is nothing personal in it. The signed file goes to
+ * server/public/send-to-car.shortcut, and the Setup page then offers it as a
+ * download. Without that file, the Setup page shows how to make the Shortcut
+ * by hand.
+ *
+ * You only need to run this if you change the Shortcut. The signed file is
+ * already in the repository.
  */
 import fs from 'node:fs';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const SHORTCUT_NAME = 'Send to Car';
 export const QUESTION = 'Paste your DriveTest link here. To copy it, open Setup & sharing in the DriveTest remote.';
+
+const SIGN_URL = 'https://sign.shortcuty.app/api/v1/sign'; // documented at github.com/Shortcuty/Signing-Server-API-Documentation
 
 const REQUEST_UUID = '6F2D5B0A-4C1E-4E57-9A53-0D5C6E1B7A11';
 const VARIABLE = '\uFFFC'; // where a variable sits inside a piece of text
@@ -172,25 +186,45 @@ function signOnMac(plist) {
   }
 }
 
+// Shortcuty's public signing service: upload the unsigned file, get it back
+// signed so that anyone can add it.
+async function signOnline(plist) {
+  const bytes = Buffer.from(plist, 'utf8');
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: 'application/octet-stream' }), `${SHORTCUT_NAME}.shortcut`);
+  const res = await fetch(SIGN_URL, { method: 'POST', body: form, signal: AbortSignal.timeout(180000) });
+  const body = Buffer.from(await res.arrayBuffer());
+  if (!res.ok) throw new Error(`The signing service answered ${res.status}: ${body.toString('utf8').slice(0, 300)}`);
+  // The service says which bytes it signed; make sure they were ours.
+  const sent = crypto.createHash('sha256').update(bytes).digest('hex');
+  const signedInput = res.headers.get('x-shortcut-input-sha256');
+  if (signedInput && signedInput.toLowerCase() !== sent) throw new Error('The signing service signed something other than what was sent.');
+  const mode = res.headers.get('x-shortcut-signing-mode');
+  if (mode && mode !== 'anyone') throw new Error(`Signed for "${mode}", but it has to be for anyone.`);
+  return body;
+}
+
 async function main() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const unsignedFile = path.join(root, 'shortcut', 'send-to-car.unsigned.plist');
   const signedFile = path.join(root, 'server', 'public', 'send-to-car.shortcut');
-  const sign = process.argv.slice(2).includes('--sign');
+  const arg = process.argv.slice(2).find((x) => x === '--sign' || x.startsWith('--sign='));
+  const how = !arg ? null : arg === '--sign' ? (process.platform === 'darwin' ? 'mac' : 'online') : arg.slice('--sign='.length);
 
   const plist = shortcutPlist();
   fs.mkdirSync(path.dirname(unsignedFile), { recursive: true });
   fs.writeFileSync(unsignedFile, plist);
   console.log(`Wrote ${path.relative(root, unsignedFile)} (unsigned, for reading and reviewing)`);
-  if (!sign) {
-    console.log('Not signed. iPhones only open signed Shortcuts: run again with --sign on a Mac.');
+  if (!how) {
+    console.log('Not signed. iPhones only open signed Shortcuts: run again with --sign.');
     return;
   }
-  if (process.platform !== 'darwin') throw new Error('Signing only works on a Mac (it uses the `shortcuts` tool and your iCloud sign-in).');
-  const signed = signOnMac(plist);
+  if (how !== 'mac' && how !== 'online') throw new Error(`Unknown way to sign: ${how} (use mac or online)`);
+  if (how === 'mac' && process.platform !== 'darwin') throw new Error('--sign=mac only works on a Mac. Use --sign=online instead.');
+  const signed = how === 'mac' ? signOnMac(plist) : await signOnline(plist);
   if (!looksSigned(signed)) throw new Error("What came back isn't a signed Shortcut.");
   fs.writeFileSync(signedFile, signed);
-  console.log(`Wrote ${path.relative(root, signedFile)} (${signed.length} bytes, signed)`);
+  console.log(`Wrote ${path.relative(root, signedFile)} (${signed.length} bytes, signed ${how === 'mac' ? 'on this Mac' : 'by sign.shortcuty.app'})`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
