@@ -10,6 +10,7 @@ import { Store } from './state.js';
 import { handleStream } from './stream.js';
 import {
   search,
+  suggest,
   videoMeta,
   extractVideoId,
   isValidId,
@@ -137,8 +138,11 @@ async function route(req, res) {
 
   // Phone pairing link from the car's QR code.
   if (req.method === 'GET' && p.startsWith('/p/')) {
-    if (auth.claimPairCode(p.slice(3))) {
+    const code = p.slice(3);
+    if (auth.claimPairCode(code)) {
       auth.issueCookie(req, res);
+      // Tell the car, so it can put the QR code away by itself.
+      broadcast({ type: 'paired', code });
       return redirect(res, '/remote');
     }
     return redirect(res, '/login?expired=1&next=/remote');
@@ -189,6 +193,11 @@ async function route(req, res) {
       } catch (err) {
         return send(res, 502, { error: `Search failed: ${err.message}` });
       }
+    }
+
+    if (req.method === 'GET' && p === '/api/suggest') {
+      const suggestions = await suggest(url.searchParams.get('q')).catch(() => []);
+      return send(res, 200, { suggestions });
     }
 
     if (req.method === 'POST' && p === '/api/resolve') {

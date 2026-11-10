@@ -122,13 +122,37 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 .brand { font-weight: 800; letter-spacing: -0.02em; font-size: 20px; white-space: nowrap; }
 .brand span { color: var(--accent); }
 .search { flex: 1; display: flex; gap: 8px; max-width: 640px; }
+
+/* Search suggestions */
+.has-suggest { position: relative; }
+.suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 20;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5); overflow: hidden;
+}
+.suggest-row {
+  min-height: 52px; padding: 0 16px; display: flex; align-items: center; gap: 0;
+  white-space: pre; overflow: hidden; cursor: pointer; border-bottom: 1px solid var(--line);
+}
+.suggest-row:last-child { border-bottom: 0; }
+.suggest-row span { color: var(--muted); }
+.suggest-row b { font-weight: 650; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.suggest-row span:only-child { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.suggest-row b, .suggest-row span:only-child { min-width: 0; }
+.suggest-row.active, .suggest-row:active { background: var(--panel-3); }
+/* On the phone the list sits in the page flow under the search box. */
+body.remote .has-suggest { flex-wrap: wrap; scroll-margin-top: 72px; }
+body.remote .suggest { position: static; flex: 0 0 100%; box-shadow: none; }
+body.remote .suggest-row { min-height: 48px; }
 .top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .top-actions select { width: auto; }
 
 .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 400px; }
 .stage-col { min-width: 0; display: flex; flex-direction: column; padding: 14px; gap: 12px; overflow: hidden; }
 .stage {
-  position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 190px);
+  position: relative; aspect-ratio: 16 / 9; max-height: calc(100vh - 190px);
+  /* as wide as fits, without growing taller than the window allows */
+  width: min(100%, calc((100vh - 190px) * 16 / 9));
   background: #000; border-radius: var(--radius); overflow: hidden; align-self: center;
 }
 .canvas-host { position: absolute; inset: 0; }
@@ -183,7 +207,7 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 }
 .stats-k { color: var(--muted); }
 .stats-v { color: #fff; }
-button.ghost.on { color: var(--accent); }
+button.ghost.on { color: var(--accent); background: rgba(62, 139, 255, 0.14); }
 
 .tap-start {
   position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.6); z-index: 3;
@@ -234,14 +258,24 @@ body.fullscreen.has-now.fill .video-canvas { object-fit: cover; }
 body.fullscreen.has-now .ctl.small.text { display: block; }
 .ctl.small { width: 52px; height: 52px; flex: none; }
 .ctl.small .icon { width: 28px; height: 28px; }
-.top-actions button.on { border-color: var(--accent); color: var(--accent); }
+/* Toggles that are switched on look pressed. */
+.top-actions button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* Theater: hide the side panel so the video gets the full width. */
+body.theater .side { display: none; }
+body.theater .layout { grid-template-columns: 1fr; }
+body.theater .stage { max-height: calc(100vh - 150px); width: min(100%, calc((100vh - 150px) * 16 / 9)); }
 
 @media (max-width: 900px) {
   body.car { height: auto; overflow: auto; }
   body.car.fullscreen.has-now { overflow: hidden; }
+  /* Narrow windows: search gets its own row; Theater has nothing to hide. */
+  .topbar { flex-wrap: wrap; }
+  body.car .search { order: 2; flex-basis: 100%; max-width: none; }
+  #theaterBtn { display: none; }
   .layout { grid-template-columns: 1fr; }
   .side { border-left: 0; border-top: 1px solid var(--line); min-height: 60vh; }
-  .stage { max-height: none; }
+  .stage, body.theater .stage { max-height: none; width: 100%; }
   body.car .brand { display: none; }
 }
 

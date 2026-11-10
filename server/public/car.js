@@ -17,11 +17,14 @@
   var stalls = [];
   var lastStepDown = 0;
   var showStats = false;
+  var theater = false;
+  var pairing = null; // the QR sheet that's open, if any
 
   try {
     var v = parseFloat(localStorage.getItem('dt.volume'));
     if (v >= 0 && v <= 1) volume = v;
     showStats = localStorage.getItem('dt.stats') === '1';
+    theater = localStorage.getItem('dt.theater') === '1';
   } catch (e) {}
 
   // ---------- player ----------
@@ -70,7 +73,11 @@
   });
   player.setVolume(volume);
   // Handy from the browser console when troubleshooting.
-  DT.debug = { player: player, state: function () { return state; } };
+  DT.debug = {
+    player: player,
+    state: function () { return state; },
+    pairingLink: function () { return pairing && pairing.link; }
+  };
 
   // Drop one quality level for the rest of this video and say why.
   function stepDown(reason) {
@@ -142,6 +149,13 @@
     pos: function () {},
     toast: function (msg) {
       DT.toast(msg.message);
+    },
+    paired: function (msg) {
+      // The phone scanned our QR code: put the code away.
+      if (!pairing || pairing.code !== msg.code) return;
+      pairing.sheet.close();
+      pairing = null;
+      DT.toast('Phone connected');
     },
     online: function (on) {
       $('#conn').classList.toggle('on', on);
@@ -360,7 +374,7 @@
     var s = player.active;
     var on = showStats && !!s;
     box.classList.toggle('hidden', !on);
-    $('#statsBtn').classList.toggle('on', showStats);
+    pressed($('#statsBtn'), showStats);
     if (!on) return;
     var i = s.info();
     var frameMs = 1000 / (i.fps || 30);
@@ -393,6 +407,26 @@
     renderStats();
   });
 
+  // A toggle that's on looks pressed (and says so to screen readers).
+  function pressed(btn, on) {
+    btn.classList.toggle('on', !!on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  // ---------- theater ----------
+  // Hides the side panel so the video gets the full width; search stays.
+
+  function applyTheater() {
+    document.body.classList.toggle('theater', theater);
+    pressed($('#theaterBtn'), theater);
+  }
+  applyTheater();
+  $('#theaterBtn').addEventListener('click', function () {
+    theater = !theater;
+    try { localStorage.setItem('dt.theater', theater ? '1' : '0'); } catch (e) {}
+    applyTheater();
+  });
+
   // ---------- fullscreen ----------
   // The setting lives on the server, so the phone can flip it too and it
   // survives a reload. It only takes effect while something is playing.
@@ -407,7 +441,7 @@
     document.body.classList.toggle('has-now', !!(state && state.now));
     setIcon($('#fsToggle'), on ? 'compress' : 'expand');
     $('#fsToggle').setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
-    $('#fullscreenBtn').classList.toggle('on', on);
+    pressed($('#fullscreenBtn'), on);
     // Fill zooms the picture to cover the window (edges are cropped); Fit
     // shows all of it with black bars.
     var fill = !!(state && state.settings && state.settings.fill);
@@ -469,8 +503,10 @@
       qr,
       el('div', { class: 'muted', style: 'text-align:center', text: 'Scan with your phone camera. The code works once and expires in 10 minutes.' })
     ], true);
+    pairing = null;
     DT.api('/api/pair').then(function (r) {
       qr.innerHTML = r.svg;
+      pairing = { code: r.link.split('/p/')[1], link: r.link, sheet: sheet };
     }).catch(function (e) {
       qr.textContent = e.message;
     });
@@ -479,8 +515,17 @@
 
   // ---------- search ----------
 
+  function recentTitles() {
+    return state ? state.history.map(function (h) { return h.title; }) : [];
+  }
+  DT.autocomplete($('#q'), { local: recentTitles, onPick: runSearch });
+
   $('#searchForm').addEventListener('submit', function (ev) {
     ev.preventDefault();
+    runSearch();
+  });
+
+  function runSearch() {
     var q = $('#q').value.trim();
     if (!q) return;
     $('#q').blur();
@@ -501,7 +546,7 @@
       searching = false;
       renderLists();
     });
-  });
+  }
 
   // ---------- lists ----------
 

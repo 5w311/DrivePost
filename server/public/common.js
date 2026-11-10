@@ -171,6 +171,119 @@
     return row;
   };
 
+  // Suggestions under a search box while typing. `opts.local()` returns
+  // titles to match on the spot (recently played); the rest come from
+  // YouTube through the server. `opts.onPick(text)` runs when one is chosen.
+  // `opts.max` limits the rows; `opts.reveal` scrolls the box into view on focus.
+  DT.autocomplete = function (input, opts) {
+    var form = input.form || input.parentNode;
+    var box = DT.el('div', { class: 'suggest hidden', role: 'listbox' });
+    form.classList.add('has-suggest');
+    form.appendChild(box);
+    var items = [];
+    var active = -1;
+    var timer = null;
+    var ticket = 0;
+    var remote = [];
+
+    function hide() {
+      clearTimeout(timer);
+      ticket++;
+      items = [];
+      active = -1;
+      box.classList.add('hidden');
+      box.innerHTML = '';
+    }
+
+    function pick(text) {
+      input.value = text;
+      hide();
+      opts.onPick(text);
+    }
+
+    function localMatches(q) {
+      var all = (opts.local && opts.local()) || [];
+      var seen = {};
+      return all.filter(function (t) {
+        var k = t.toLowerCase();
+        if (seen[k] || k.indexOf(q) < 0 || k === q) return false;
+        seen[k] = true;
+        return true;
+      }).slice(0, 2);
+    }
+
+    function render() {
+      var typed = input.value.trim();
+      var q = typed.toLowerCase();
+      var seen = {};
+      items = localMatches(q).concat(remote).filter(function (t) {
+        var k = t.toLowerCase();
+        if (seen[k]) return false;
+        seen[k] = true;
+        return true;
+      }).slice(0, opts.max || 7);
+      active = -1;
+      box.innerHTML = '';
+      box.classList.toggle('hidden', !items.length);
+      items.forEach(function (text, i) {
+        // Show what would be added to the typed words in bold, like YouTube does.
+        var starts = text.toLowerCase().indexOf(q) === 0;
+        var row = DT.el('div', { class: 'suggest-row', role: 'option' }, starts
+          ? [DT.el('span', { text: text.slice(0, typed.length) }), DT.el('b', { text: text.slice(typed.length) })]
+          : [DT.el('span', { text: text })]);
+        // Keep the keyboard focus (and the on-screen keyboard) until the pick lands.
+        row.addEventListener('pointerdown', function (ev) { ev.preventDefault(); });
+        row.addEventListener('click', function () { pick(items[i]); });
+        box.appendChild(row);
+      });
+    }
+
+    function highlight(i) {
+      active = i;
+      Array.prototype.forEach.call(box.children, function (row, n) {
+        row.classList.toggle('active', n === active);
+      });
+    }
+
+    input.addEventListener('input', function () {
+      var q = input.value.trim();
+      clearTimeout(timer);
+      var mine = ++ticket;
+      if (q.length < 2 || /youtu\.?be|youtube\.com|^https?:/i.test(q)) {
+        hide();
+        return;
+      }
+      remote = remote.filter(function (t) { return t.toLowerCase().indexOf(q.toLowerCase()) === 0; });
+      render();
+      timer = setTimeout(function () {
+        DT.api('/api/suggest?q=' + encodeURIComponent(q)).then(function (r) {
+          if (mine !== ticket) return; // typed more since
+          remote = r.suggestions || [];
+          render();
+        }).catch(function () {});
+      }, 180);
+    });
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') return hide();
+      if (!items.length) return;
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); highlight((active + 1) % items.length); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); highlight(active <= 0 ? items.length - 1 : active - 1); }
+      else if (ev.key === 'Enter' && active >= 0) { ev.preventDefault(); pick(items[active]); }
+    });
+    input.addEventListener('blur', function () { setTimeout(hide, 150); });
+    if (opts.reveal) {
+      // On a phone the keyboard covers the lower half of the screen: move the
+      // search box to the top so the suggestions under it stay in view.
+      input.addEventListener('focus', function () {
+        setTimeout(function () {
+          try { form.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { form.scrollIntoView(true); }
+        }, 250);
+      });
+    }
+    form.addEventListener('submit', hide);
+    return { hide: hide };
+  };
+
   DT.iconButton = function (name, label, onclick, cls) {
     var b = DT.el('button', { class: 'icon-btn' + (cls ? ' ' + cls : ''), 'aria-label': label, title: label, onclick: onclick });
     b.appendChild(DT.icon(name));

@@ -113,6 +113,22 @@ export function search(query, count = 20) {
   });
 }
 
+// Search suggestions while typing, from the same service youtube.com uses.
+// Best effort: any failure just means no suggestions.
+const suggestCache = new Cache(10 * 60 * 1000, 500);
+export function suggest(query) {
+  const q = String(query || '').trim().slice(0, 100);
+  if (q.length < 2) return Promise.resolve([]);
+  return suggestCache.get(q.toLowerCase(), async () => {
+    const url = `${config.suggestUrl}?client=firefox&ds=yt&ie=utf8&oe=utf8&q=${encodeURIComponent(q)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) throw new Error(`suggestions returned ${res.status}`);
+    const json = JSON.parse(new TextDecoder('utf-8').decode(await res.arrayBuffer()));
+    const list = Array.isArray(json) && Array.isArray(json[1]) ? json[1] : [];
+    return list.filter((x) => typeof x === 'string' && x.trim()).slice(0, 8);
+  });
+}
+
 // Title and channel for a shared link. oEmbed is fast; yt-dlp is the fallback.
 export function videoMeta(id) {
   if (id === TEST_PATTERN_ID) return Promise.resolve({ ...TEST_PATTERN_ITEM, thumb: '' });

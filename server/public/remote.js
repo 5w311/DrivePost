@@ -187,8 +187,19 @@
     return wrap;
   }
 
+  DT.autocomplete($('#q'), {
+    local: function () { return state ? state.history.map(function (h) { return h.title; }) : []; },
+    onPick: runSearch,
+    max: 5,
+    reveal: true
+  });
+
   $('#searchForm').addEventListener('submit', function (ev) {
     ev.preventDefault();
+    runSearch();
+  });
+
+  function runSearch() {
     var q = $('#q').value.trim();
     if (!q) return;
     $('#q').blur();
@@ -203,7 +214,7 @@
       box.innerHTML = '';
       box.appendChild(el('div', { class: 'empty', text: e.message }));
     });
-  });
+  }
 
   // ---------- queue & recent ----------
 

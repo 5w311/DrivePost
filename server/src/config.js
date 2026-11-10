@@ -37,6 +37,9 @@ export const config = {
     updateCmd: words(env.YTDLP_UPDATE_CMD),
   },
 
+  // Where search suggestions come from (YouTube's own suggestion service).
+  suggestUrl: env.SUGGEST_URL || 'https://suggestqueries.google.com/complete/search',
+
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   maxStreams: int('MAX_STREAMS', 3),
   defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',

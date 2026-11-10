@@ -6,9 +6,10 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 
 ## What it does
 
-- **Car page:** search YouTube or paste a link, with Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
+- **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
+- **Theater:** hides the side panel so the video gets the full width, while search stays on screen.
 - **Fullscreen:** the video fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
-- **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. Search, paste links, reorder Up Next and control playback from your phone.
+- **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
 - **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
 - **Handles bad signal:** the car keeps up to 25 seconds buffered. If it runs out, picture and sound freeze together and carry on without a gap. A dropped connection reconnects at the same spot.
