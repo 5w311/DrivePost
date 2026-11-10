@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DriveTest</title>
+<link rel="icon" href="/static/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="car">
+  <header class="topbar">
+    <div class="brand">Drive<span>Test</span></div>
+    <form id="searchForm" class="search" autocomplete="off">
+      <input id="q" type="search" placeholder="Search YouTube or paste a link" enterkeyhint="search">
+      <button type="submit" class="primary">Search</button>
+    </form>
+    <div class="top-actions">
+      <select id="quality" aria-label="Quality">
+        <option value="360">360p</option>
+        <option value="480">480p</option>
+        <option value="720">720p</option>
+      </select>
+      <button id="phoneBtn" type="button">Phone</button>
+      <button id="theaterBtn" type="button">Theater</button>
+      <span id="conn" class="dot" title="Connection"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage-col">
+      <div id="stage" class="stage">
+        <div id="canvasHost" class="canvas-host"></div>
+        <div id="stageMsg" class="stage-msg"></div>
+        <div id="overlay" class="overlay">
+          <div class="overlay-center">
+            <button class="ctl" id="back10" aria-label="Back 10 seconds"></button>
+            <button class="ctl main" id="playPause" aria-label="Play or pause"></button>
+            <button class="ctl" id="fwd10" aria-label="Forward 10 seconds"></button>
+            <button class="ctl" id="nextBtn" aria-label="Next video"></button>
+          </div>
+          <div class="scrub-row">
+            <span id="tCur">0:00</span>
+            <div id="scrub" class="scrub">
+              <div class="scrub-track">
+                <div id="scrubBuf" class="scrub-buf"></div>
+                <div id="scrubFill" class="scrub-fill"></div>
+                <div id="scrubKnob" class="scrub-knob"></div>
+              </div>
+            </div>
+            <span id="tDur">0:00</span>
+          </div>
+        </div>
+        <div id="tapStart" class="tap-start hidden"><button id="tapStartBtn" class="primary">Tap to play</button></div>
+      </div>
+      <div class="now-meta">
+        <div class="now-text">
+          <div id="nowTitle" class="now-title"></div>
+          <div id="nowSub" class="now-sub"></div>
+        </div>
+      </div>
+      <div class="passenger-note">For passengers while the car is moving.</div>
+    </section>
+
+    <aside class="side">
+      <nav class="tabs">
+        <button data-tab="queue" class="on">Up Next <span id="qCount" class="muted"></span></button>
+        <button data-tab="search">Search</button>
+        <button data-tab="recent">Recent</button>
+      </nav>
+      <div id="panel-queue" class="panel"></div>
+      <div id="panel-search" class="panel hidden"></div>
+      <div id="panel-recent" class="panel hidden"></div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/static/jsmpeg.min.js"></script>
+  <script src="/static/common.js"></script>
+  <script src="/static/drive-player.js"></script>
+  <script src="/static/car.js"></script>
+</body>
+</html>

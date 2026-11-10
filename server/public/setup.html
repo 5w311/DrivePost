@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0d10">
+<title>Setup · DriveTest</title>
+<link rel="icon" href="/static/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="remote setup">
+  <header class="remote-head">
+    <div class="brand">Drive<span>Test</span></div>
+    <a href="/remote" class="muted" style="margin-left:auto">Remote</a>
+  </header>
+  <div class="wrap">
+
+    <section class="card">
+      <div class="card-head"><h2>Share from iPhone</h2></div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0">Make a Shortcut once. After that, tap Share in YouTube, Safari or any app and pick <b>Send to Car</b>.</p>
+        <ol>
+          <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name it <b>Send to Car</b>.</li>
+          <li>Tap the <b>ⓘ</b> button and turn on <b>Show in Share Sheet</b>. Set it to receive <b>URLs</b> and <b>Text</b>.</li>
+          <li>Add the action <b>Get Contents of URL</b> and set it up like this:
+            <div class="kv">
+              <div class="k">URL</div><div class="code" id="shareUrl">…</div>
+              <div class="k">Method</div><div class="code">POST</div>
+              <div class="k">Headers → Authorization</div><div class="code" id="authHeader">…</div>
+              <div class="k">Request Body</div><div class="code">JSON, with a Text field named <b>url</b> set to <b>Shortcut Input</b></div>
+            </div>
+          </li>
+          <li>Add <b>Show Notification</b> and set its text to <b>Contents of URL</b>, so you see what was added.</li>
+        </ol>
+        <p class="muted">If nothing is playing, a shared video starts right away. Otherwise it goes to Up Next.</p>
+        <div class="btn-row">
+          <button id="copyUrl" type="button">Copy URL</button>
+          <button id="copyAuth" type="button">Copy header</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Share from Android</h2></div>
+      <div class="card-body">
+        <ol>
+          <li>Open the <a href="/remote">remote</a> in Chrome.</li>
+          <li>Tap <b>⋮</b> → <b>Add to Home screen</b> → <b>Install</b>.</li>
+          <li>Now <b>DriveTest</b> shows up in the share menu of YouTube and other apps.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Check the server</h2></div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0">The test pattern is made on your server without YouTube. If it plays in the car but YouTube videos don't, the problem is yt-dlp, not the player.</p>
+        <button id="testBtn" class="primary" type="button">Play test pattern in the car</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Security</h2></div>
+      <div class="card-body">
+        <div class="btn-row" style="margin-top:0">
+          <button id="newToken" type="button">New share token</button>
+          <button id="logoutAll" type="button">Sign out everywhere</button>
+        </div>
+        <p class="muted" style="font-size:14px">A new share token breaks the current Shortcut until you paste the new header in. Signing out everywhere signs out the car and every phone.</p>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/common.js"></script>
+  <script src="/static/setup.js"></script>
+</body>
+</html>

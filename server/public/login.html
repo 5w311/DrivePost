@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0d10">
+<title>Sign in · DriveTest</title>
+<link rel="icon" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="center-page">
+    <div class="login-box">
+      <h1>Drive<span style="color:var(--accent)">Test</span></h1>
+      <p id="intro">Enter your passcode. This device stays signed in.</p>
+      <form id="form">
+        <input id="passcode" type="password" autocomplete="current-password" placeholder="Passcode" autofocus>
+        <div id="error" class="error"></div>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var next = params.get('next') || '/';
+      if (next.charAt(0) !== '/' || next.charAt(1) === '/') next = '/';
+      if (params.get('expired')) {
+        document.getElementById('intro').textContent =
+          'That pairing code has expired or was already used. Tap Phone on the car screen for a new one, or enter your passcode.';
+      }
+      document.getElementById('form').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var err = document.getElementById('error');
+        err.textContent = '';
+        fetch('/api/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passcode: document.getElementById('passcode').value })
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+            location.href = next;
+          });
+        }).catch(function (e) {
+          err.textContent = e.message;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

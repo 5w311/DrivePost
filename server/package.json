@@ -1,0 +1,20 @@
+{
+  "name": "drivetest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted YouTube player for the Tesla browser that keeps playing after you leave Park (for passengers).",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

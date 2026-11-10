@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>DriveTest Remote</title>
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="remote">
+  <header class="remote-head">
+    <div class="brand">Drive<span>Test</span></div>
+    <div class="car-status"><span id="carDot" class="dot"></span><span id="carText">Car offline</span></div>
+  </header>
+
+  <div class="wrap">
+    <section class="card" id="npCard">
+      <div class="card-body">
+        <div id="np" class="np"></div>
+        <div class="progress">
+          <div id="rScrub" class="scrub" style="height:28px">
+            <div class="scrub-track">
+              <div id="rFill" class="scrub-fill"></div>
+              <div id="rKnob" class="scrub-knob"></div>
+            </div>
+          </div>
+          <div class="times"><span id="rCur">0:00</span><span id="rDur">0:00</span></div>
+        </div>
+        <div class="controls" id="controls"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Send a video</div>
+      <div class="card-body">
+        <form id="linkForm" class="field-row" autocomplete="off">
+          <input id="link" type="url" inputmode="url" placeholder="Paste a YouTube link">
+        </form>
+        <div class="btn-row">
+          <button id="pasteBtn" type="button">Paste</button>
+          <button id="playNowBtn" type="button" class="primary">Play</button>
+          <button id="queueBtn" type="button">Up Next</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Search</div>
+      <div class="card-body" style="padding-bottom:0">
+        <form id="searchForm" class="field-row" autocomplete="off">
+          <input id="q" type="search" placeholder="Search YouTube" enterkeyhint="search">
+          <button type="submit" class="primary">Go</button>
+        </form>
+      </div>
+      <div id="results" class="list" style="margin-top:12px"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span>Up Next <span id="qCount" class="muted"></span></span><button id="clearQ" class="ghost" type="button">Clear</button></div>
+      <div id="queue" class="list"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Recent</div>
+      <div id="recent" class="list"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Quality</div>
+      <div class="card-body">
+        <div class="seg" id="qualitySeg">
+          <button data-q="360" type="button">360p</button>
+          <button data-q="480" type="button">480p</button>
+          <button data-q="720" type="button">720p</button>
+        </div>
+        <p class="muted" style="font-size:14px;margin:10px 0 0">Higher quality uses more data and more of your server's CPU.</p>
+      </div>
+    </section>
+
+    <p style="text-align:center;margin-top:18px"><a href="/setup" class="muted">Setup &amp; sharing</a></p>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/remote.js"></script>
+</body>
+</html>

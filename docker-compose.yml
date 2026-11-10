@@ -1,0 +1,26 @@
+services:
+  drivetest:
+    build: ./server
+    container_name: drivetest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - drivetest-data:/data
+
+  # Optional: publish the app on your domain through a Cloudflare Tunnel.
+  # Start with: docker compose --profile tunnel up -d
+  # In the tunnel's Public Hostname, point your subdomain at http://drivetest:8080
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - drivetest
+
+volumes:
+  drivetest-data:
