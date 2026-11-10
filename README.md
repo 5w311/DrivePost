@@ -39,10 +39,10 @@ The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that,
    ```sh
    git clone https://github.com/5w311/DriveTest.git && cd DriveTest
    cp .env.example .env
-   nano .env   # set DRIVE_PASSCODE and PUBLIC_URL
+   nano .env   # set DRIVE_PASSCODE and SHARE_TOKEN; PUBLIC_URL and TUNNEL_TOKEN come in step 2
    ```
 
-2. Create a tunnel. In the Cloudflare dashboard, go to Zero Trust → Networks → Tunnels and create a tunnel. Copy its token into `TUNNEL_TOKEN` in `.env`. Add a public hostname such as `drive.figari.dev` pointing at `http://drivetest:8080`.
+2. Create a tunnel. In the Cloudflare dashboard, go to Networking → Tunnels (older dashboards: Zero Trust → Networks → Tunnels) and create one. Copy its token into `TUNNEL_TOKEN` in `.env` and set `PUBLIC_URL`, for example `https://drive.figari.dev`. Then add a published application route for that hostname pointing at `http://drivetest:8080`.
 
 3. Start it:
 
