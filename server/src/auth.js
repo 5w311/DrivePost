@@ -36,9 +36,12 @@ export function clientIp(req) {
   );
 }
 
-function isHttps(req, publicUrl) {
+// Only mark the cookie https-only when this request really came over https
+// (through the tunnel). Testing on the home network over http keeps working.
+function isHttps(req) {
   if ((req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') return true;
-  return publicUrl.startsWith('https://');
+  if (/"scheme"\s*:\s*"https"/.test(req.headers['cf-visitor'] || '')) return true;
+  return !!req.socket.encrypted;
 }
 
 export class Auth {
@@ -83,7 +86,7 @@ export class Auth {
       'SameSite=Lax',
       `Max-Age=${SESSION_DAYS * 86400}`,
     ];
-    if (isHttps(req, this.publicUrl)) parts.push('Secure');
+    if (isHttps(req)) parts.push('Secure');
     res.setHeader('Set-Cookie', parts.join('; '));
   }
 
