@@ -82,6 +82,21 @@ export async function handleStream(ws, { id, startAt, quality }) {
     oldest.close();
   }
 
+  // How fast this machine converts, measured while filling the car's buffer.
+  // Shows in `docker compose logs`: handy for sizing a Pi vs a PC.
+  let firstDataAt = null;
+  let speedLogged = false;
+  function logSpeed(note) {
+    if (speedLogged || firstDataAt === null || lastSentPts === null || chunker.firstPts === null) return;
+    const media = lastSentPts - chunker.firstPts;
+    const wall = (Date.now() - firstDataAt) / 1000;
+    if (media < 5 || wall <= 0) return;
+    speedLogged = true;
+    const x = media / wall;
+    const verdict = x >= 1.5 ? 'OK' : x >= 1.1 ? 'tight' : 'too slow, try a lower quality';
+    console.log(`[stream ${id}] ${quality}p converting at ${x.toFixed(1)}x real time (${verdict})${note ? `, ${note}` : ''}`);
+  }
+
   let baseSent = false;
   const chunker = new TsChunker((pts, data) => {
     if (closed) return;
@@ -89,11 +104,13 @@ export async function handleStream(ws, { id, startAt, quality }) {
       sendJson(ws, { type: 'base', pts: chunker.firstPts });
       baseSent = true;
     }
+    if (firstDataAt === null) firstDataAt = Date.now();
     lastSentPts = pts;
     const frame = Buffer.allocUnsafe(8 + data.length);
     frame.writeDoubleLE(pts, 0);
     data.copy(frame, 8);
     ws.send(frame);
+    if (lastSentPts - chunker.firstPts >= 20) logSpeed();
     checkFlow();
   });
 
@@ -108,6 +125,7 @@ export async function handleStream(ws, { id, startAt, quality }) {
     const a = ahead();
     const backlog = ws.bufferedAmount;
     if (!flowPaused && (a > AHEAD_HIGH || backlog > BACKLOG_HIGH)) {
+      logSpeed(backlog > BACKLOG_HIGH ? "held back by the car's connection, not the CPU" : '');
       ff.stdout.pause();
       flowPaused = true;
     } else if (flowPaused && a < AHEAD_LOW && backlog < BACKLOG_LOW) {
@@ -170,6 +188,7 @@ export async function handleStream(ws, { id, startAt, quality }) {
   ff.on('close', (code) => {
     if (closed || killed) return;
     chunker.flush();
+    logSpeed();
     if (code !== 0) {
       const line = stderr.trim().split('\n').pop() || `ffmpeg exited with ${code}`;
       console.warn(`[stream ${id}] ffmpeg exited ${code}: ${line}`);

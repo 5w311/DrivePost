@@ -64,6 +64,34 @@ yt-dlp updates itself when the container starts and once a day. YouTube changes 
 git pull && docker compose --profile tunnel up -d --build
 ```
 
+## Is the machine fast enough?
+
+Each time a video starts, the log reports how fast the machine converts it:
+
+```sh
+docker compose logs -f drivetest
+# [stream dQw4w9WgXcQ] 480p converting at 2.6x real time (OK)
+```
+
+Anything at 1.5x or above is comfortable. Between 1.1x and 1.5x works but leaves little headroom. Below 1.1x, the car will keep buffering, so drop the quality. If the line ends with "held back by the car's connection", the bottleneck is the network, not the CPU.
+
+## Moving to another machine
+
+Your sign-ins, Up Next, history and resume points live in the `drivetest-data` volume. To move them, say from a Raspberry Pi to a PC:
+
+```sh
+# On the old machine
+docker compose --profile tunnel down
+docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine tar czf /backup/drivetest-data.tgz -C /data .
+
+# Copy drivetest-data.tgz and .env to the new machine's DriveTest folder, then:
+docker volume create drivetest_drivetest-data
+docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine sh -c "tar xzf /backup/drivetest-data.tgz -C /data && chown -R 1000:1000 /data"
+docker compose --profile tunnel up -d --build
+```
+
+Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine first: two machines running the same tunnel would split traffic between them.
+
 ## Troubleshooting
 
 | Symptom | Check |
