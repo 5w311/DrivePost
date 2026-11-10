@@ -21,6 +21,8 @@
   var showStats = false;
   var theater = false;
   var pairing = null; // the QR sheet that's open, if any
+  var pageVersion = null; // version of the app this page was loaded from
+  var reloadWaiting = false;
 
   try {
     var v = parseFloat(localStorage.getItem('dt.volume'));
@@ -141,8 +143,18 @@
   // ---------- control channel ----------
 
   var control = new DT.Control('car', {
+    version: function (msg) {
+      // The server was updated while this page was open: load the new page,
+      // once that won't interrupt a video.
+      if (pageVersion === null) pageVersion = msg.version;
+      else if (msg.version !== pageVersion) reloadWaiting = true;
+    },
     state: function (msg) {
       state = msg.state;
+      if (reloadWaiting && !(state.now && !state.paused && activated)) {
+        location.reload();
+        return;
+      }
       applyFullscreen();
       $('#quality').value = playQuality();
       renderLists();

@@ -81,6 +81,24 @@ yt-dlp updates itself when the container starts and once a day. YouTube changes 
 git pull && docker compose --profile tunnel up -d --build
 ```
 
+### Automatic updates
+
+To have the machine update itself whenever something is pushed to the repo, run this once:
+
+```sh
+./scripts/install-auto-update.sh
+```
+
+It sets up a timer that checks GitHub every 2 minutes. When there are new commits and nobody is watching a video, it pulls them and rebuilds. If a build fails, the version that was running stays up. An open car page reloads itself once the new version is running.
+
+| To do this | Run |
+|---|---|
+| See what it did | `journalctl -u drivetest-update -n 30 --no-pager` |
+| Check right now | `./scripts/auto-update.sh` |
+| Turn it off | `./scripts/install-auto-update.sh --remove` |
+
+Anything pushed to the branch this machine follows gets installed on it, so keep push access to the repo to yourself. Files you changed by hand (other than `.env`, which is never touched) can block an update; the log says which.
+
 ## Is the machine fast enough?
 
 Each time a video starts, the log reports how fast the machine converts it:
@@ -132,6 +150,7 @@ Tesla only lets its browser take over the entire display in Park. While driving,
 ## Project layout
 
 ```
+scripts/         Automatic updates (timer installer and the update script)
 server/src/      Node server: auth, state, yt-dlp, ffmpeg streaming, TS chunker
 server/public/   Car page, phone remote, setup page, JSMpeg
 server/test/     Unit tests (npm test)

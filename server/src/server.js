@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,19 @@ import {
 } from './youtube.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
+
+// Changes whenever the pages or their scripts change, so an open car page
+// can tell it's out of date after an update and reload itself.
+function assetVersion() {
+  const hash = crypto.createHash('sha1');
+  for (const name of fs.readdirSync(PUBLIC_DIR).sort()) {
+    if (!/\.(js|css|html|webmanifest)$/.test(name)) continue;
+    hash.update(name);
+    hash.update(fs.readFileSync(path.join(PUBLIC_DIR, name)));
+  }
+  return hash.digest('hex').slice(0, 12);
+}
+const VERSION = assetVersion();
 
 if (!config.passcode) {
   console.error('DRIVE_PASSCODE is not set. Set it in your .env file and restart.');
@@ -126,6 +140,15 @@ async function route(req, res) {
   const authed = auth.isAuthed(req);
 
   if (req.method === 'GET' && p === '/healthz') return send(res, 200, { ok: true });
+
+  // For the update script on this machine: is a video playing right now?
+  // Only answered from inside the container itself, never through the tunnel.
+  if (req.method === 'GET' && p === '/internal/busy') {
+    const from = req.socket.remoteAddress || '';
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from);
+    if (!local || req.headers['x-forwarded-for'] || req.headers['cf-connecting-ip']) return send(res, 404, { error: 'Not found' });
+    return send(res, 200, { busy: !!store.now && !store.paused && store.carOnline });
+  }
 
   if (req.method === 'GET' && PAGES[p]) {
     if (!authed) return redirect(res, `/login?next=${encodeURIComponent(p + url.search)}`);
@@ -264,6 +287,7 @@ function refreshCarOnline() {
 function handleControl(ws) {
   const client = { ws, role: 'remote' };
   controlClients.add(client);
+  ws.send(JSON.stringify({ type: 'version', version: VERSION }));
   ws.send(JSON.stringify({ type: 'state', state: store.publicState() }));
 
   ws.on('message', (raw) => {
