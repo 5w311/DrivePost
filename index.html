@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive Test</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #0e1013;
+    --panel: #171a1f;
+    --panel-2: #1f232a;
+    --line: #2b3038;
+    --text: #e9ecf1;
+    --muted: #8b93a1;
+    --go: #2fbf71;
+    --go-bg: rgba(47, 191, 113, 0.14);
+    --stop: #ef5350;
+    --stop-bg: rgba(239, 83, 80, 0.14);
+    --idle: #8b93a1;
+    --idle-bg: rgba(139, 147, 161, 0.14);
+    --accent: #4c8dff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 20px 16px 40px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+
+  .steps {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px; margin: 0 0 18px; padding: 0; list-style: none; counter-reset: s;
+  }
+  .steps li {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; counter-increment: s; color: var(--text);
+  }
+  .steps li::before {
+    content: counter(s); display: inline-grid; place-items: center;
+    width: 26px; height: 26px; border-radius: 50%; margin-right: 8px;
+    background: var(--panel-2); color: var(--muted); font-weight: 700; font-size: 14px;
+  }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 18px; }
+  button {
+    font: inherit; font-weight: 650; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 22px; min-height: 56px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .tile-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; }
+  .tile-title { font-weight: 700; font-size: 19px; }
+  .tile-title small { display: block; font-weight: 500; font-size: 14px; color: var(--muted); }
+  .badge {
+    font-weight: 800; font-size: 20px; letter-spacing: 0.04em; padding: 8px 16px; border-radius: 999px;
+    color: var(--idle); background: var(--idle-bg); white-space: nowrap;
+  }
+  .badge.go { color: var(--go); background: var(--go-bg); }
+  .badge.stop { color: var(--stop); background: var(--stop-bg); }
+  .screen { background: #000; aspect-ratio: 16 / 9; display: grid; place-items: center; }
+  .screen video, .screen canvas { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line);
+    border-top: 1px solid var(--line);
+  }
+  .stat { background: var(--panel); padding: 10px 14px; }
+  .stat .k { font-size: 13px; color: var(--muted); }
+  .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; margin-top: 16px; }
+  .panel h2 { font-size: 17px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  #log {
+    margin: 0; padding: 12px 16px; min-height: 120px; max-height: 300px; overflow: auto;
+    font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap;
+  }
+  #log .t { color: var(--muted); }
+  #log .bad { color: var(--stop); }
+  #log .good { color: var(--go); }
+  details { padding: 0 16px 14px; }
+  details summary { cursor: pointer; padding: 14px 0 6px; font-weight: 650; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--muted); width: 38%; padding-right: 12px; }
+  td.yes { color: var(--go); } td.no { color: var(--stop); }
+  .note { color: var(--muted); font-size: 14px; margin: 18px 2px 0; }
+</style>
+</head>
+<body>
+  <h1>Drive Test</h1>
+  <p class="sub">Finds out which way of playing video keeps going after the car leaves Park.</p>
+
+  <ol class="steps">
+    <li>In Park, tap <b>Start</b>. Both tiles should say PLAYING.</li>
+    <li>Foot on the brake, shift into <b>D</b>. You don't need to move.</li>
+    <li>Wait 10 seconds and note which tiles still say PLAYING.</li>
+    <li>Shift back to <b>P</b>. Snap a photo of the log below.</li>
+  </ol>
+
+  <div class="controls">
+    <button id="start" class="primary">Start</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="sound" disabled>Sound: on (B)</button>
+  </div>
+
+  <div class="tiles">
+    <section class="tile">
+      <div class="tile-head">
+        <div class="tile-title">A · Normal video<small>The browser's built-in player (muted)</small></div>
+        <div class="badge" id="badgeA">IDLE</div>
+      </div>
+      <div class="screen">
+        <video id="vidA" src="clip-native.mp4" muted playsinline loop preload="auto"></video>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="k">Frames</div><div class="v" id="framesA">0</div></div>
+        <div class="stat"><div class="k">FPS</div><div class="v" id="fpsA">–</div></div>
+        <div class="stat"><div class="k">Stops</div><div class="v" id="stopsA">0</div></div>
+      </div>
+    </section>
+
+    <section class="tile">
+      <div class="tile-head">
+        <div class="tile-title">B · Canvas (JSMpeg)<small>Decoded in JavaScript, drawn to a canvas</small></div>
+        <div class="badge" id="badgeB">IDLE</div>
+      </div>
+      <div class="screen">
+        <canvas id="canB" width="640" height="360"></canvas>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="k">Frames</div><div class="v" id="framesB">0</div></div>
+        <div class="stat"><div class="k">FPS</div><div class="v" id="fpsB">–</div></div>
+        <div class="stat"><div class="k">Stops</div><div class="v" id="stopsB">0</div></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </section>
+
+  <section class="panel">
+    <details>
+      <summary>Browser details</summary>
+      <table id="diag"></table>
+    </details>
+  </section>
+
+  <p class="note">Test clip is a generated pattern with a soft tick every second. JSMpeg © Dominic Szablewski, MIT license.</p>
+
+<script src="jsmpeg.min.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var t0 = performance.now();
+  var running = false;
+
+  // ---------- log ----------
+  function stamp() {
+    var d = new Date();
+    return d.toTimeString().slice(0, 8);
+  }
+  function log(msg, cls) {
+    var line = document.createElement('div');
+    var t = document.createElement('span');
+    t.className = 't';
+    t.textContent = stamp() + '  ';
+    var m = document.createElement('span');
+    if (cls) m.className = cls;
+    m.textContent = msg;
+    line.appendChild(t); line.appendChild(m);
+    var box = $('log');
+    box.insertBefore(line, box.firstChild);
+    while (box.childNodes.length > 60) box.removeChild(box.lastChild);
+  }
+
+  // ---------- per-player state ----------
+  function makeState(key) {
+    return { key: key, frames: 0, lastFrames: 0, lastAdvance: 0, status: 'idle', stops: 0,
+             fpsWindow: [], badge: $('badge' + key), framesEl: $('frames' + key),
+             fpsEl: $('fps' + key), stopsEl: $('stops' + key) };
+  }
+  var A = makeState('A');
+  var B = makeState('B');
+
+  // ---------- A: native <video> ----------
+  var vid = $('vidA');
+  var hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  var rvfcHandle = null;
+  function onFrameA() {
+    A.frames++;
+    rvfcHandle = running ? vid.requestVideoFrameCallback(onFrameA) : null;
+  }
+  var lastTimeA = 0;
+  function pollA() {
+    // fallback when requestVideoFrameCallback isn't available
+    if (!hasRVFC && vid.currentTime !== lastTimeA) {
+      A.frames += Math.max(1, Math.round((vid.currentTime - lastTimeA) * 30));
+      lastTimeA = vid.currentTime;
+    }
+  }
+  vid.addEventListener('pause', function () {
+    if (!running) return;
+    log('A: browser paused the normal video', 'bad');
+    // see whether the browser lets it start again
+    var p = vid.play();
+    if (p && p.then) {
+      p.then(function () { log('A: play() retry was allowed', 'good'); })
+       .catch(function (e) { log('A: play() retry blocked (' + (e && e.name) + ')', 'bad'); });
+    }
+  });
+  vid.addEventListener('play', function () { if (running) log('A: play event'); });
+  vid.addEventListener('error', function () { log('A: video error ' + (vid.error && vid.error.code), 'bad'); });
+
+  // ---------- B: JSMpeg canvas ----------
+  var player = null;
+  var soundOn = true;
+  function createPlayer() {
+    if (!window.JSMpeg) { log('B: jsmpeg.min.js did not load', 'bad'); return; }
+    player = new JSMpeg.Player('clip-canvas.ts', {
+      canvas: $('canB'),
+      loop: true,
+      autoplay: false,
+      audio: true,
+      progressive: false,
+      pauseWhenHidden: false,
+      onVideoDecode: function () { B.frames++; },
+      onSourceCompleted: function () { log('B: clip loaded'); },
+      onStalled: function () { if (running) log('B: stalled (waiting on data)', 'bad'); },
+      onPause: function () { if (running) log('B: player paused', 'bad'); }
+    });
+  }
+  createPlayer();
+
+  // ---------- status loop ----------
+  function update(s, now) {
+    if (s.frames !== s.lastFrames) {
+      s.fpsWindow.push([now, s.frames]);
+      s.lastFrames = s.frames;
+      s.lastAdvance = now;
+    }
+    while (s.fpsWindow.length && now - s.fpsWindow[0][0] > 2000) s.fpsWindow.shift();
+    var fps = '–';
+    if (s.fpsWindow.length > 1) {
+      var a = s.fpsWindow[0], b = s.fpsWindow[s.fpsWindow.length - 1];
+      if (b[0] > a[0]) fps = Math.round((b[1] - a[1]) / ((b[0] - a[0]) / 1000));
+    }
+    var next = !running ? 'idle' : (now - s.lastAdvance < 1200 ? 'go' : 'stop');
+    if (next !== s.status) {
+      if (running && next === 'stop') { s.stops++; log(s.key + ': frames STOPPED', 'bad'); }
+      if (running && next === 'go' && s.status === 'stop') log(s.key + ': frames moving again', 'good');
+      s.status = next;
+    }
+    s.badge.className = 'badge' + (next === 'idle' ? '' : ' ' + next);
+    s.badge.textContent = next === 'idle' ? 'IDLE' : (next === 'go' ? 'PLAYING' : 'STOPPED');
+    s.framesEl.textContent = s.frames;
+    s.fpsEl.textContent = running ? fps : '–';
+    s.stopsEl.textContent = s.stops;
+  }
+  setInterval(function () {
+    var now = performance.now();
+    pollA();
+    update(A, now);
+    update(B, now);
+  }, 250);
+
+  document.addEventListener('visibilitychange', function () {
+    log('page visibility: ' + document.visibilityState);
+  });
+
+  // ---------- controls ----------
+  $('start').addEventListener('click', function () {
+    running = true;
+    var now = performance.now();
+    A.lastAdvance = B.lastAdvance = now;
+    log('Started (in Park)');
+
+    // A
+    lastTimeA = vid.currentTime;
+    var p = vid.play();
+    if (p && p.catch) p.catch(function (e) { log('A: could not start (' + (e && e.name) + ')', 'bad'); });
+    if (hasRVFC && rvfcHandle === null) rvfcHandle = vid.requestVideoFrameCallback(onFrameA);
+
+    // B
+    if (player) {
+      try { if (player.audioOut && player.audioOut.unlock) player.audioOut.unlock(function () {}); } catch (e) {}
+      player.volume = soundOn ? 1 : 0;
+      player.play();
+    }
+
+    $('start').disabled = true;
+    $('stop').disabled = false;
+    $('sound').disabled = false;
+  });
+
+  $('stop').addEventListener('click', function () {
+    running = false;
+    if (rvfcHandle !== null && vid.cancelVideoFrameCallback) { vid.cancelVideoFrameCallback(rvfcHandle); rvfcHandle = null; }
+    vid.pause();
+    if (player) player.pause();
+    log('Stopped');
+    $('start').disabled = false;
+    $('stop').disabled = true;
+  });
+
+  $('sound').addEventListener('click', function () {
+    soundOn = !soundOn;
+    if (player) player.volume = soundOn ? 1 : 0;
+    $('sound').textContent = soundOn ? 'Sound: on (B)' : 'Sound: off';
+  });
+
+  // ---------- diagnostics ----------
+  function hasWebGL() {
+    try {
+      var c = document.createElement('canvas');
+      return !!(c.getContext('webgl') || c.getContext('experimental-webgl'));
+    } catch (e) { return false; }
+  }
+  var ua = navigator.userAgent;
+  var chrome = (ua.match(/Chrom(e|ium)\/([\d.]+)/) || [])[2] || 'unknown';
+  var rows = [
+    ['Chrome version', chrome, null],
+    ['WebAssembly', !!window.WebAssembly, true],
+    ['WebGL', hasWebGL(), true],
+    ['Web Audio', !!(window.AudioContext || window.webkitAudioContext), true],
+    ['WebCodecs (VideoDecoder)', 'VideoDecoder' in window, true],
+    ['Media Source Extensions', 'MediaSource' in window, true],
+    ['requestVideoFrameCallback', hasRVFC, true],
+    ['OffscreenCanvas', 'OffscreenCanvas' in window, true],
+    ['Screen', screen.width + ' × ' + screen.height + ' @ ' + (window.devicePixelRatio || 1) + 'x', null],
+    ['Viewport', window.innerWidth + ' × ' + window.innerHeight, null],
+    ['User agent', ua, null]
+  ];
+  var tbl = $('diag');
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    var k = document.createElement('td'); k.textContent = r[0];
+    var v = document.createElement('td');
+    if (r[2] === true) { v.textContent = r[1] ? 'Yes' : 'No'; v.className = r[1] ? 'yes' : 'no'; }
+    else v.textContent = r[1];
+    tr.appendChild(k); tr.appendChild(v); tbl.appendChild(tr);
+  });
+
+  log('Ready. Chrome ' + chrome + ', WebCodecs ' + ('VideoDecoder' in window ? 'yes' : 'no'));
+})();
+</script>
+</body>
+</html>
