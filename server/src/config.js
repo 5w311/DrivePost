@@ -2,6 +2,9 @@ import path from 'node:path';
 
 const env = process.env;
 
+// Picture heights the car can ask for.
+export const QUALITIES = ['360', '480', '720', '1080'];
+
 function int(name, fallback) {
   const n = parseInt(env[name], 10);
   return Number.isFinite(n) ? n : fallback;
@@ -36,5 +39,5 @@ export const config = {
 
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   maxStreams: int('MAX_STREAMS', 3),
-  defaultQuality: ['360', '480', '720'].includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',
+  defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',
 };

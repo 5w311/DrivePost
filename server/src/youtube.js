@@ -130,7 +130,7 @@ export function videoMeta(id) {
   });
 }
 
-const HEIGHTS = { 360: 360, 480: 480, 720: 720 };
+const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
 
 function formatFor(height) {
   // Prefer H.264 + AAC: cheap to decode, so a Raspberry Pi keeps up.
@@ -152,11 +152,13 @@ export function streamInfo(id, quality) {
       title: TEST_PATTERN_ITEM.title,
       duration: TEST_PATTERN_ITEM.duration,
       live: false,
+      // Generated at the requested size, so 1080p really exercises 1080p.
       inputs: [
-        { lavfi: `testsrc2=size=1280x720:rate=30:duration=${TEST_PATTERN_ITEM.duration}`, hasVideo: true, hasAudio: false },
-        { lavfi: `sine=frequency=330:beep_factor=2:sample_rate=44100:duration=${TEST_PATTERN_ITEM.duration},volume=0.2`, hasVideo: false, hasAudio: true },
+        { lavfi: `testsrc2=size=${Math.round((height * 16) / 18) * 2}x${height}:rate=30:duration=${TEST_PATTERN_ITEM.duration}`, hasVideo: true, hasAudio: false },
+        { lavfi: `sine=frequency=330:beep_factor=2:sample_rate=48000:duration=${TEST_PATTERN_ITEM.duration},volume=0.2`, hasVideo: false, hasAudio: true },
       ],
       height,
+      fps: 30,
     });
   }
   return streamCache.get(`${id}:${height}`, async () => {
@@ -171,6 +173,7 @@ export function streamInfo(id, quality) {
         headers: f.http_headers || json.http_headers || {},
         hasVideo: !!f.vcodec && f.vcodec !== 'none',
         hasAudio: !!f.acodec && f.acodec !== 'none',
+        fps: typeof f.fps === 'number' ? f.fps : null,
       }));
     if (!inputs.length) throw new Error('No playable format found');
     // A single muxed format may not report codecs; assume it has both.
@@ -184,8 +187,27 @@ export function streamInfo(id, quality) {
       live: json.is_live === true,
       inputs,
       height,
+      fps: (inputs.find((i) => i.hasVideo) || {}).fps || (typeof json.fps === 'number' ? json.fps : null),
     };
   });
+}
+
+// Look a video up ahead of time, so it starts without the usual wait. Used
+// for what's playing and what's next in line. Failures are remembered for a
+// minute so a blocked video isn't retried on every queue change.
+const prewarmFailed = new Map();
+export function prewarm(id, quality) {
+  if (!isValidId(id) || id === TEST_PATTERN_ID) return;
+  const key = `${id}:${quality}`;
+  const failedAt = prewarmFailed.get(key);
+  if (failedAt && Date.now() - failedAt < 60000) return;
+  streamInfo(id, quality).then(
+    () => prewarmFailed.delete(key),
+    () => {
+      prewarmFailed.set(key, Date.now());
+      if (prewarmFailed.size > 200) prewarmFailed.delete(prewarmFailed.keys().next().value);
+    }
+  );
 }
 
 export function forgetStream(id, quality) {

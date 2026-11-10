@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { config } from './config.js';
+import { config, QUALITIES } from './config.js';
 import { Auth, clientIp } from './auth.js';
 import { Store } from './state.js';
 import { handleStream } from './stream.js';
@@ -14,6 +14,7 @@ import {
   extractVideoId,
   isValidId,
   startAutoUpdate,
+  prewarm,
   TEST_PATTERN_ID,
   TEST_PATTERN_ITEM,
 } from './youtube.js';
@@ -240,7 +241,12 @@ function broadcast(msg) {
   for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(data);
 }
 
-store.on('state', (state) => broadcast({ type: 'state', state }));
+store.on('state', (state) => {
+  broadcast({ type: 'state', state });
+  // Look up what's playing and what's next ahead of time, so they start faster.
+  if (store.now) prewarm(store.now.id, store.playQuality());
+  if (store.queue[0]) prewarm(store.queue[0].id, store.settings.quality);
+});
 
 function refreshCarOnline() {
   store.setCarOnline([...controlClients].some((c) => c.role === 'car'));
@@ -270,7 +276,8 @@ function handleControl(ws) {
       else broadcast({ type: 'pos', position: store.position });
     } else if (msg.type === 'ended' && client.role === 'car') {
       store.carEnded(msg.seq);
-    } else if (msg.type === 'carError' && client.role === 'car') {
+    } else if ((msg.type === 'carError' || msg.type === 'carNote') && client.role === 'car') {
+      // Show the car's errors and notices on every screen, phones included.
       broadcast({ type: 'toast', message: String(msg.message || 'Playback error').slice(0, 300) });
     }
   });
@@ -307,8 +314,9 @@ server.on('upgrade', (req, socket, head) => {
     const id = url.searchParams.get('id');
     if (!isValidId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
-    const quality = ['360', '480', '720'].includes(url.searchParams.get('q')) ? url.searchParams.get('q') : store.settings.quality;
-    handleStream(ws, { id, startAt, quality }).catch((err) => {
+    const quality = QUALITIES.includes(url.searchParams.get('q')) ? url.searchParams.get('q') : store.playQuality();
+    const audioRate = parseInt(url.searchParams.get('ar'), 10) || 48000;
+    handleStream(ws, { id, startAt, quality, audioRate }).catch((err) => {
       console.error(err);
       ws.close();
     });

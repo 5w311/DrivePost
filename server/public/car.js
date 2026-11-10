@@ -13,11 +13,16 @@
   var tab = 'queue';
   var overlayTimer = null;
   var volume = 1;
+  var QUALITIES = ['360', '480', '720', '1080'];
+  var stalls = [];
+  var lastStepDown = 0;
+  var showStats = false;
 
   try {
     var v = parseFloat(localStorage.getItem('dt.volume'));
     if (v >= 0 && v <= 1) volume = v;
     if (localStorage.getItem('dt.theater') === '1') document.body.classList.add('theater');
+    showStats = localStorage.getItem('dt.stats') === '1';
   } catch (e) {}
 
   // ---------- player ----------
@@ -46,11 +51,41 @@
     onError: function (s, message) {
       showError(message);
       control.send({ type: 'carError', message: message });
+    },
+    onSlow: function (s) {
+      // Decoding keeps falling behind: this screen can't handle the quality.
+      stepDown("This screen can't keep up with " + s.quality + 'p.');
+    },
+    onStall: function (s) {
+      // Ran out of data. Three times in two minutes means the quality is too
+      // much for the connection (or for the server).
+      var t = Date.now();
+      stalls = stalls.filter(function (x) { return t - x < 120000; });
+      stalls.push(t);
+      if (stalls.length < 3) return;
+      var slowServer = s.stats.serverSpeed !== null && s.stats.serverSpeed < 1.1 && !s.stats.serverLimited;
+      stepDown(slowServer
+        ? "Your server can't convert " + s.quality + 'p fast enough.'
+        : "The connection can't keep up with " + s.quality + 'p.');
     }
   });
   player.setVolume(volume);
   // Handy from the browser console when troubleshooting.
   DT.debug = { player: player, state: function () { return state; } };
+
+  // Drop one quality level for the rest of this video and say why.
+  function stepDown(reason) {
+    var i = QUALITIES.indexOf(playQuality());
+    if (i <= 0 || Date.now() - lastStepDown < 15000) return;
+    lastStepDown = Date.now();
+    stalls = [];
+    control.cmd('stepDown');
+    control.send({ type: 'carNote', message: reason + ' Switched to ' + QUALITIES[i - 1] + 'p for this video.' });
+  }
+
+  function playQuality() {
+    return (state && (state.playQuality || state.settings.quality)) || '480';
+  }
 
   function startStream(now, startAt) {
     errorMsg = null;
@@ -59,7 +94,7 @@
       id: now.id,
       seq: now.seq,
       startAt: startAt,
-      quality: state.settings.quality,
+      quality: playQuality(),
       paused: state.paused
     });
     renderStage();
@@ -100,7 +135,7 @@
   var control = new DT.Control('car', {
     state: function (msg) {
       state = msg.state;
-      $('#quality').value = state.settings.quality;
+      $('#quality').value = playQuality();
       renderLists();
       syncPlayback();
     },
@@ -310,6 +345,51 @@
 
   $('#quality').addEventListener('change', function () {
     control.cmd('quality', { q: this.value });
+  });
+
+  // ---------- stats readout ----------
+
+  var chromeVersion = (navigator.userAgent.match(/Chrom(?:e|ium)\/(\d+)/) || [])[1];
+  var browserLine =
+    (chromeVersion ? 'Chrome ' + chromeVersion : 'Unknown browser') +
+    ' · WebCodecs ' + ('VideoDecoder' in window ? 'yes' : 'no');
+
+  function renderStats() {
+    var box = $('#stats');
+    var s = player.active;
+    var on = showStats && !!s;
+    box.classList.toggle('hidden', !on);
+    $('#statsBtn').classList.toggle('on', showStats);
+    if (!on) return;
+    var i = s.info();
+    var frameMs = 1000 / (i.fps || 30);
+    var rows = [
+      ['Picture',
+        (i.width ? i.width + '×' + i.height : s.quality + 'p') +
+        (i.fps ? ' · ' + Math.round(i.fps * 100) / 100 + ' fps' : '') +
+        (i.kbps ? ' · ' + (i.kbps / 1000).toFixed(1) + ' Mbps' : '')],
+      ['Decoding', i.frames
+        ? i.decodeMs.toFixed(1) + ' ms a frame (' + Math.round((i.decodeMs / frameMs) * 100) + '% of the time available) · peak ' + Math.round(i.decodeMax) + ' ms'
+        : 'waiting'],
+      ['Buffer', i.buffer.toFixed(1) + ' s ahead · ran dry ' + i.stalls + '× · fell behind ' + i.holds + '×'],
+      ['Sound', i.audio + ' · realigned ' + i.resyncs + '×'],
+      ['Server', i.serverSpeed
+        ? 'converting at ' + i.serverSpeed + '× real time' + (i.serverLimited ? ' (held back by the connection)' : '')
+        : 'measuring…'],
+      ['Browser', browserLine]
+    ];
+    box.innerHTML = '';
+    rows.forEach(function (r) {
+      box.appendChild(el('div', { class: 'stats-k', text: r[0] }));
+      box.appendChild(el('div', { class: 'stats-v', text: r[1] }));
+    });
+  }
+  setInterval(renderStats, 500);
+
+  $('#statsBtn').addEventListener('click', function () {
+    showStats = !showStats;
+    try { localStorage.setItem('dt.stats', showStats ? '1' : '0'); } catch (e) {}
+    renderStats();
   });
 
   $('#theaterBtn').addEventListener('click', function () {

@@ -61,7 +61,7 @@
     controls.style.opacity = state.now ? '1' : '0.4';
 
     document.querySelectorAll('#qualitySeg button').forEach(function (b) {
-      b.classList.toggle('on', b.getAttribute('data-q') === state.settings.quality);
+      b.classList.toggle('on', b.getAttribute('data-q') === (state.playQuality || state.settings.quality));
     });
 
     renderQueue();

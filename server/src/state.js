@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
+import { QUALITIES } from './config.js';
 
 const HISTORY_MAX = 40;
 const PROGRESS_MAX = 300;
@@ -39,11 +40,13 @@ export class Store extends EventEmitter {
     this.history = Array.isArray(saved.history) ? saved.history.map(cleanItem).filter(Boolean) : [];
     this.progress = saved.progress && typeof saved.progress === 'object' ? saved.progress : {};
     this.settings = { quality: defaultQuality, ...(saved.settings || {}) };
+    if (!QUALITIES.includes(this.settings.quality)) this.settings.quality = defaultQuality;
     this.seq = saved.seq || 0;
     // Bring back what was playing, but paused so it waits for a tap in the car.
     const now = saved.now ? cleanItem(saved.now) : null;
     this.now = now ? { ...this.keyed(now), seq: ++this.seq, startAt: this.resumePoint(now) } : null;
     this.paused = !!this.now;
+    this.autoCap = null; // lower quality the car fell back to for this video
     this.position = null; // last report from the car: { seq, t, state, at }
     this.carOnline = false;
     this.saveTimer = null;
@@ -51,6 +54,14 @@ export class Store extends EventEmitter {
 
   keyed(item) {
     return item ? { ...item, key: item.key || crypto.randomBytes(6).toString('base64url') } : null;
+  }
+
+  // What actually plays: the chosen quality, unless the car stepped down for
+  // this video because it or the connection couldn't keep up.
+  playQuality() {
+    const chosen = this.settings.quality;
+    if (this.autoCap && QUALITIES.indexOf(this.autoCap) < QUALITIES.indexOf(chosen)) return this.autoCap;
+    return chosen;
   }
 
   resumePoint(item) {
@@ -73,6 +84,7 @@ export class Store extends EventEmitter {
       history: this.history.slice(0, 20),
       progress,
       settings: this.settings,
+      playQuality: this.playQuality(),
       carOnline: this.carOnline,
       position: this.position,
     };
@@ -119,9 +131,11 @@ export class Store extends EventEmitter {
       this.now = null;
       this.paused = false;
       this.position = null;
+      this.autoCap = null;
       return;
     }
     const start = startAt ?? this.resumePoint(item);
+    if (!this.now || this.now.id !== item.id) this.autoCap = null;
     this.now = { ...this.keyed(item), seq: ++this.seq, startAt: start };
     this.paused = false;
     this.position = { seq: this.now.seq, t: start, state: 'loading', at: Date.now() };
@@ -147,6 +161,13 @@ export class Store extends EventEmitter {
     const to = Math.max(0, Math.min(max, t));
     this.now = { ...this.now, seq: ++this.seq, startAt: Math.floor(to) };
     this.position = { seq: this.now.seq, t: to, state: 'loading', at: Date.now() };
+  }
+
+  // Reopen the stream at the same spot (after a quality change).
+  restartStream() {
+    if (!this.now) return;
+    if (!this.now.live) this.seekTo(this.currentTime());
+    else this.now = { ...this.now, seq: ++this.seq };
   }
 
   advance() {
@@ -217,11 +238,19 @@ export class Store extends EventEmitter {
         this.seekTo(0);
         break;
       case 'quality':
-        if (!['360', '480', '720'].includes(String(data.q))) return 'Bad quality';
+        if (!QUALITIES.includes(String(data.q))) return 'Bad quality';
         this.settings = { ...this.settings, quality: String(data.q) };
-        if (this.now && !this.now.live) this.seekTo(this.currentTime());
-        else if (this.now) this.now = { ...this.now, seq: ++this.seq };
+        this.autoCap = null;
+        this.restartStream();
         break;
+      case 'stepDown': {
+        // From the car: drop one level for the rest of this video.
+        const i = QUALITIES.indexOf(this.playQuality());
+        if (i <= 0 || !this.now) return null;
+        this.autoCap = QUALITIES[i - 1];
+        this.restartStream();
+        break;
+      }
       case 'clearHistory':
         this.history = [];
         break;

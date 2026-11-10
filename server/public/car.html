@@ -20,6 +20,7 @@
         <option value="360">360p</option>
         <option value="480">480p</option>
         <option value="720">720p</option>
+        <option value="1080">1080p</option>
       </select>
       <button id="phoneBtn" type="button">Phone</button>
       <button id="theaterBtn" type="button">Theater</button>
@@ -32,6 +33,7 @@
       <div id="stage" class="stage">
         <div id="canvasHost" class="canvas-host"></div>
         <div id="stageMsg" class="stage-msg"></div>
+        <div id="stats" class="stats hidden"></div>
         <div id="overlay" class="overlay">
           <div class="overlay-center">
             <button class="ctl" id="back10" aria-label="Back 10 seconds"></button>
@@ -58,6 +60,7 @@
           <div id="nowTitle" class="now-title"></div>
           <div id="nowSub" class="now-sub"></div>
         </div>
+        <button id="statsBtn" class="ghost" type="button">Stats</button>
       </div>
       <div class="passenger-note">For passengers while the car is moving.</div>
     </section>

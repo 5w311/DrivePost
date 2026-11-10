@@ -6,10 +6,13 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 
 ## What it does
 
-- **Car page:** search YouTube or paste a link, with Up Next, Recent, resume where you left off, ±10 s, a seek bar, 360p/480p/720p quality and a Theater layout.
+- **Car page:** search YouTube or paste a link, with Up Next, Recent, resume where you left off, ±10 s, a seek bar, 360p to 1080p quality and a Theater layout.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. Search, paste links, reorder Up Next and control playback from your phone.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
-- **Handles bad signal:** the car keeps a few seconds buffered and feeds the decoder at real-time speed. Weak LTE causes a short buffering pause, not stutter, and a dropped connection reconnects at the same spot.
+- **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
+- **Handles bad signal:** the car keeps up to 25 seconds buffered. If it runs out, picture and sound freeze together and carry on without a gap. A dropped connection reconnects at the same spot.
+- **Steps down by itself:** if the screen can't decode fast enough, or the connection keeps running dry, the car drops one quality level for that video and says why. The next video starts at your chosen quality again.
+- **Stats readout:** tap **Stats** under the video to see resolution, decode time, buffer, data rate and how fast your server is converting.
 - **Private:** one passcode, devices stay signed in, and the iPhone Shortcut uses its own revocable token.
 
 ## How it works
@@ -17,19 +20,31 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 ```
 Phone ──share/remote──┐
                       ▼
-YouTube ─► yt-dlp ─► ffmpeg (MPEG-1 + MP2 in MPEG-TS) ─► server tags each ~0.2 s chunk
-                                                          with its timestamp
+YouTube ─► yt-dlp ─► ffmpeg (MPEG-1 + MP2 in MPEG-TS) ─► server splits it into single video
+                                                          frames and short audio runs, each
+                                                          tagged with its timestamp
                                                               │ WebSocket
                                                               ▼
-                       Tesla browser: buffer ─► paced feed ─► JSMpeg ─► canvas + Web Audio
+              Tesla browser: buffer ─► own clock ─► JSMpeg decode ─► canvas + Web Audio
 ```
 
-The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that, so it never converts more than the car will use. Seeking restarts ffmpeg at the new spot. YouTube supports fast seeking, so that takes a couple of seconds.
+The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that, so it never converts more than the car will use. Seeking restarts ffmpeg at the new spot. YouTube supports fast seeking, so that takes a couple of seconds. The video that's next in line is looked up ahead of time, so it starts faster.
+
+In the car, JSMpeg only decodes and draws. The page decides when: a frame is decoded just before its timestamp comes up, and audio is queued on the sound card half a second ahead at the matching time. That keeps playback even when data arrives in bursts or the browser repaints slowly.
 
 ## Requirements
 
 - An always-on machine on your **home internet** with Docker: a Raspberry Pi 4/5 (64-bit OS), mini PC, NAS or PC. It has to be at home because YouTube blocks most cloud servers.
-- About 0.85 / 1.4 / 2.7 Mbps of upload per car at 360p / 480p / 720p. The car uses the same amount of data: roughly 0.65 GB per hour at 480p.
+- Enough upload at home, and data in the car, for the quality you pick:
+
+  | Quality | Data rate | Data per hour |
+  |---|---|---|
+  | 360p | 1.0 Mbps | 0.4 GB |
+  | 480p | 1.5 Mbps | 0.7 GB |
+  | 720p | 3.0 Mbps | 1.3 GB |
+  | 1080p | 5.5 Mbps | 2.5 GB |
+
+  MPEG-1 is an old format, so these are higher than YouTube's own rates for the same picture. 1080p also needs a fast screen: the car decodes it in JavaScript.
 - A way to reach it from the car over HTTPS. A Cloudflare Tunnel on your own domain is built in.
 
 ## Setup
@@ -73,7 +88,7 @@ docker compose logs -f drivetest
 # [stream dQw4w9WgXcQ] 480p converting at 2.6x real time (OK)
 ```
 
-Anything at 1.5x or above is comfortable. Between 1.1x and 1.5x works but leaves little headroom. Below 1.1x, the car will keep buffering, so drop the quality. If the line ends with "held back by the car's connection", the bottleneck is the network, not the CPU.
+Anything at 1.5x or above is comfortable. Between 1.1x and 1.5x works but leaves little headroom. Below 1.1x, the car will keep buffering, so drop the quality. If the line ends with "held back by the car's connection", the bottleneck is the network, not the CPU. The same number shows in the car's **Stats** readout, next to how long the car takes to decode each frame.
 
 ## Moving to another machine
 
@@ -97,7 +112,8 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | Symptom | Check |
 |---|---|
 | Test pattern plays, YouTube doesn't | Run `docker compose logs drivetest`. Usually yt-dlp needs updating (restart the container) or YouTube is blocking the request. Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
-| Frequent buffering | Lower the quality, check the machine's upload speed, and check CPU use with `docker stats`. A Pi 4 should stay at 480p. |
+| Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine is too slow for that quality, otherwise it's the connection. A Pi 4 should stay at 480p. |
+| Choppy picture at 1080p | Tap **Stats**. If decoding takes more than about half of the time available per frame, the screen is the limit; use 720p. |
 | No sound | Tap the screen once. Browsers only allow sound after a tap. |
 | Phone says "Car offline" | The car page isn't open, or the car is offline. |
 

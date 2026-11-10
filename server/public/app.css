@@ -175,6 +175,16 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 }
 .live-badge { background: var(--stop); color: #fff; font-weight: 800; font-size: 13px; padding: 3px 8px; border-radius: 6px; }
 
+.stats {
+  position: absolute; left: 12px; top: 12px; z-index: 2; pointer-events: none;
+  display: grid; grid-template-columns: auto 1fr; gap: 3px 14px;
+  background: rgba(0, 0, 0, 0.72); border-radius: 10px; padding: 10px 14px;
+  font-size: 14px; line-height: 1.35; font-variant-numeric: tabular-nums; max-width: calc(100% - 24px);
+}
+.stats-k { color: var(--muted); }
+.stats-v { color: #fff; }
+button.ghost.on { color: var(--accent); }
+
 .tap-start {
   position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.6); z-index: 3;
 }
