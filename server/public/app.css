@@ -209,6 +209,14 @@ body.remote .suggest-row { min-height: 48px; }
 .stats-v { color: #fff; }
 button.ghost.on { color: var(--accent); background: rgba(62, 139, 255, 0.14); }
 
+/* Shown while paused once the controls have gone away. */
+.paused-tag {
+  position: absolute; right: 14px; top: 14px; z-index: 2; pointer-events: none;
+  background: rgba(0, 0, 0, 0.72); color: #fff; font-weight: 650; font-size: 15px;
+  padding: 6px 12px; border-radius: 999px;
+}
+.overlay.show ~ .paused-tag { display: none; }
+
 .tap-start {
   position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.6); z-index: 3;
 }

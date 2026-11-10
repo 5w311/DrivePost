@@ -12,6 +12,8 @@
   var searching = false;
   var tab = 'queue';
   var overlayTimer = null;
+  var OVERLAY_MS = 3000; // controls hide this long after the last touch
+  var wasPaused = null;
   var volume = 1;
   var QUALITIES = ['360', '480', '720', '1080'];
   var stalls = [];
@@ -201,6 +203,7 @@
     var msg = $('#stageMsg');
     msg.innerHTML = '';
     $('#tapStart').classList.add('hidden');
+    $('#pausedTag').classList.add('hidden');
 
     if (!now) {
       msg.appendChild(el('div', {}, [
@@ -209,6 +212,7 @@
       ]));
       $('#nowTitle').textContent = '';
       $('#nowSub').textContent = '';
+      wasPaused = null;
       showOverlay(false);
       return;
     }
@@ -243,21 +247,27 @@
       msg.appendChild(el('div', {}, [el('div', { class: 'spinner' }), el('div', { style: 'margin-top:12px', text: s.frames ? 'Buffering…' : 'Loading…' })]));
     }
     setIcon($('#playPause'), state.paused ? 'play' : 'pause');
-    if (state.paused) showOverlay(true, true);
+    // Pausing (from the car or the phone) shows the controls for a moment.
+    // After that a small "Paused" tag explains the still picture.
+    if (state.paused && wasPaused !== true) showOverlay(true);
+    wasPaused = !!state.paused;
+    $('#pausedTag').classList.toggle('hidden', !state.paused);
   }
 
   $('#tapStartBtn').addEventListener('click', function () {
     activate();
   });
 
-  function showOverlay(show, sticky) {
+  // The controls go away by themselves once nobody has touched them for a
+  // few seconds, playing or paused. Every touch starts the wait over.
+  function showOverlay(show) {
     var o = $('#overlay');
     clearTimeout(overlayTimer);
     o.classList.toggle('show', !!show);
-    if (show && !sticky) {
+    if (show) {
       overlayTimer = setTimeout(function () {
-        if (state && !state.paused) o.classList.remove('show');
-      }, 4000);
+        o.classList.remove('show');
+      }, OVERLAY_MS);
     }
   }
 
@@ -289,6 +299,7 @@
   $('#nextBtn').addEventListener('click', function (e) {
     e.stopPropagation();
     control.cmd('next');
+    bump();
   });
 
   function currentTime() {
@@ -332,6 +343,12 @@
       var to = frac(ev) * duration();
       preview = null;
       control.cmd('seek', { to: to });
+      bump();
+    });
+    scrub.addEventListener('pointercancel', function () {
+      if (!dragging) return;
+      dragging = false;
+      preview = null;
       bump();
     });
     scrub.addEventListener('click', function (ev) {
