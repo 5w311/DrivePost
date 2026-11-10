@@ -121,7 +121,10 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 }
 .brand { font-weight: 800; letter-spacing: -0.02em; font-size: 20px; white-space: nowrap; }
 .brand span { color: var(--accent); }
-.search { flex: 1; display: flex; gap: 8px; max-width: 640px; }
+.search { flex: 1; display: flex; gap: 8px; max-width: 640px; min-width: 0; }
+.search input { min-width: 0; }
+.search-btn { flex: none; }
+.search-btn .icon { display: none; }
 
 /* Search suggestions */
 .has-suggest { position: relative; }
@@ -275,16 +278,42 @@ body.theater .layout { grid-template-columns: 1fr; }
 body.theater .stage { max-height: calc(100vh - 150px); width: min(100%, calc((100vh - 150px) * 16 / 9)); }
 
 @media (max-width: 900px) {
+  /* One column (this is what the car's browser gets): video on top, lists
+     below, and the page scrolls. */
   body.car { height: auto; overflow: auto; }
   body.car.fullscreen.has-now { overflow: hidden; }
-  /* Narrow windows: search gets its own row; Theater has nothing to hide. */
-  .topbar { flex-wrap: wrap; }
-  body.car .search { order: 2; flex-basis: 100%; max-width: none; }
-  #theaterBtn { display: none; }
   .layout { grid-template-columns: 1fr; }
-  .side { border-left: 0; border-top: 1px solid var(--line); min-height: 60vh; }
-  .stage, body.theater .stage { max-height: none; width: 100%; }
+  /* Tall enough to scroll right up under the top bar. */
+  .side { border-left: 0; border-top: 1px solid var(--line); min-height: calc(100vh - 69px); scroll-margin-top: 69px; }
+  /* As wide as fits, but short enough that the title under it stays in view. */
+  .stage, body.theater .stage {
+    max-height: calc(100vh - 170px);
+    width: min(100%, calc((100vh - 170px) * 16 / 9));
+  }
   body.car .brand { display: none; }
+
+  /* The top bar stays on one row and stays put while the lists scroll:
+     search takes what's left, the Search button becomes an icon, and the
+     buttons are a little tighter. */
+  .topbar { position: sticky; top: 0; z-index: 25; gap: 8px; padding: 10px 12px; }
+  body.car .search { max-width: none; }
+  .search-btn { padding: 0; width: 48px; display: inline-grid; place-items: center; }
+  .search-btn .icon { display: inline-grid; }
+  .search-btn .label { display: none; }
+  .top-actions { gap: 6px; margin-left: 0; }
+  .top-actions button { padding: 0 13px; }
+  .top-actions select { padding: 0 8px; }
+  /* Suggestions may be wider than the short search box. */
+  body.car .suggest { right: auto; width: max(100%, 440px); max-width: calc(100vw - 24px); }
+}
+
+@media (max-width: 640px) {
+  /* Phone-sized windows: not enough room for one row, so search gets its
+     own; Theater is left out. */
+  .topbar { flex-wrap: wrap; }
+  body.car .search { order: 2; flex-basis: 100%; }
+  .top-actions { margin-left: auto; }
+  #theaterBtn { display: none; }
 }
 
 .qr { background: #fff; border-radius: 12px; padding: 12px; width: 260px; height: 260px; margin: 0 auto; }

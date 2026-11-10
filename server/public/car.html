@@ -12,8 +12,11 @@
   <header class="topbar">
     <div class="brand">Drive<span>Test</span></div>
     <form id="searchForm" class="search" autocomplete="off">
-      <input id="q" type="search" placeholder="Search YouTube or paste a link" enterkeyhint="search">
-      <button type="submit" class="primary">Search</button>
+      <input id="q" type="search" placeholder="Search or paste a link" enterkeyhint="search">
+      <button type="submit" class="primary search-btn" aria-label="Search">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15.2 15.2 20 20"/></svg></span>
+        <span class="label">Search</span>
+      </button>
     </form>
     <div class="top-actions">
       <select id="quality" aria-label="Quality">

@@ -542,11 +542,31 @@
     runSearch();
   });
 
+  // In the one-column layout (the car's browser) the lists sit below the video.
+  function oneColumn() {
+    return window.matchMedia('(max-width: 900px)').matches;
+  }
+  function scrollToLists() {
+    if (!oneColumn()) return;
+    try { $('.side').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { $('.side').scrollIntoView(true); }
+  }
+  function scrollToVideo() {
+    if (!oneColumn()) return;
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); }
+  }
+
   function runSearch() {
     var q = $('#q').value.trim();
     if (!q) return;
     $('#q').blur();
+    // Theater hides the lists, and the results are one of them.
+    if (theater) {
+      theater = false;
+      try { localStorage.setItem('dt.theater', '0'); } catch (e) {}
+      applyTheater();
+    }
     setTab('search');
+    scrollToLists();
     searching = true;
     searchResults = null;
     renderLists();
@@ -600,8 +620,8 @@
     var buttons = [];
     if (extra) buttons = buttons.concat(extra(act));
     else {
-      buttons.push(act(progress ? 'Resume from ' + DT.fmt(progress) : 'Play now', function () { control.cmd('play', { item: item }); }, true));
-      if (progress) buttons.push(act('Play from start', function () { control.cmd('play', { item: item, fromStart: true }); }));
+      buttons.push(act(progress ? 'Resume from ' + DT.fmt(progress) : 'Play now', function () { control.cmd('play', { item: item }); scrollToVideo(); }, true));
+      if (progress) buttons.push(act('Play from start', function () { control.cmd('play', { item: item, fromStart: true }); scrollToVideo(); }));
       buttons.push(act('Play next', function () { control.cmd('playNext', { item: item }); DT.toast('Playing next'); }));
       buttons.push(act('Add to Up Next', function () { control.cmd('enqueue', { item: item }); DT.toast('Added to Up Next'); }));
     }
@@ -629,7 +649,7 @@
           onclick: function () {
             itemSheet(item, function (act) {
               return [
-                act('Play now', function () { control.cmd('playFromQueue', { key: item.key }); }, true),
+                act('Play now', function () { control.cmd('playFromQueue', { key: item.key }); scrollToVideo(); }, true),
                 act('Remove', function () { control.cmd('remove', { key: item.key }); })
               ];
             });
