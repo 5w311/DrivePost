@@ -443,11 +443,13 @@
   }
 
   // ---------- theater ----------
-  // Hides the side panel so the video gets the full width; search stays.
+  // The Theater button shows or hides the lists (Up Next, Search, Recent).
+  // Blue means they're showing; off leaves just the video. `theater` is true
+  // while they're hidden.
 
   function applyTheater() {
     document.body.classList.toggle('theater', theater);
-    pressed($('#theaterBtn'), theater);
+    pressed($('#theaterBtn'), !theater);
   }
   applyTheater();
   $('#theaterBtn').addEventListener('click', function () {
@@ -571,7 +573,7 @@
     var q = $('#q').value.trim();
     if (!q) return;
     $('#q').blur();
-    // Theater hides the lists, and the results are one of them.
+    // The results are one of the lists: show them if they're hidden.
     if (theater) {
       theater = false;
       try { localStorage.setItem('dt.theater', '0'); } catch (e) {}

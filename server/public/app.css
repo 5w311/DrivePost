@@ -272,7 +272,7 @@ body.fullscreen.has-now .ctl.small.text { display: block; }
 /* Toggles that are switched on look pressed. */
 .top-actions button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
-/* Theater: hide the side panel so the video gets the full width. */
+/* body.theater = lists hidden (the Theater button is off): the video gets the full width. */
 body.theater .side { display: none; }
 body.theater .layout { grid-template-columns: 1fr; }
 body.theater .stage { max-height: calc(100vh - 150px); width: min(100%, calc((100vh - 150px) * 16 / 9)); }
