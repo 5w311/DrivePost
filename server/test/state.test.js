@@ -57,3 +57,18 @@ test('queue advances and keeps resume points', () => {
   s.command('play', { item: A, fromStart: true });
   assert.equal(s.now.startAt, 0);
 });
+
+test('screen settings are shared and saved', () => {
+  const s = makeStore('480');
+  assert.equal(!!s.publicState().settings.fullscreen, false);
+  s.command('fullscreen', { on: true });
+  s.command('fill', { on: 1 });
+  assert.equal(s.publicState().settings.fullscreen, true);
+  assert.equal(s.publicState().settings.fill, true);
+  assert.equal(s.settings.quality, '480', 'other settings are kept');
+  s.saveNow();
+  const again = new Store({ dataDir: path.dirname(s.file), defaultQuality: '480' });
+  assert.equal(again.settings.fullscreen, true, 'survives a restart');
+  s.command('fullscreen', { on: false });
+  assert.equal(s.settings.fullscreen, false);
+});

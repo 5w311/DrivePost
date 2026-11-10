@@ -64,6 +64,10 @@
       b.classList.toggle('on', b.getAttribute('data-q') === (state.playQuality || state.settings.quality));
     });
 
+    document.querySelectorAll('#screenSeg button').forEach(function (b) {
+      b.classList.toggle('on', (b.getAttribute('data-fs') === '1') === !!state.settings.fullscreen);
+    });
+
     renderQueue();
     renderRecent();
     paintTime();
@@ -245,5 +249,8 @@
 
   document.querySelectorAll('#qualitySeg button').forEach(function (b) {
     b.addEventListener('click', function () { control.cmd('quality', { q: b.getAttribute('data-q') }); });
+  });
+  document.querySelectorAll('#screenSeg button').forEach(function (b) {
+    b.addEventListener('click', function () { control.cmd('fullscreen', { on: b.getAttribute('data-fs') === '1' }); });
   });
 })();

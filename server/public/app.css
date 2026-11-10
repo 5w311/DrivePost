@@ -206,12 +206,39 @@ button.ghost.on { color: var(--accent); }
 .panel { flex: 1; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; color: var(--muted); font-size: 14px; }
 
-body.theater .side { display: none; }
-body.theater .layout { grid-template-columns: 1fr; }
-body.theater .stage { max-height: calc(100vh - 150px); }
+/* Fullscreen: while something is playing, the video covers the whole
+   browser window. With nothing playing, the normal page comes back so you
+   can search. */
+body.fullscreen.has-now { overflow: hidden; }
+body.fullscreen.has-now .stage {
+  position: fixed; top: 0; left: 0; z-index: 30;
+  width: 100%; height: 100%; max-height: none; aspect-ratio: auto; border-radius: 0;
+  align-self: auto; margin: 0;
+}
+body.fullscreen.has-now .overlay {
+  background: linear-gradient(rgba(0,0,0,0.65), transparent 24%, transparent 55%, rgba(0,0,0,0.75));
+}
+body.fullscreen.has-now .stats { top: 64px; }
+.overlay-top { display: none; position: absolute; top: 0; left: 0; right: 0; padding: 16px 20px; }
+body.fullscreen.has-now .overlay-top { display: block; }
+.overlay-title {
+  font-size: 20px; font-weight: 700; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Fill: zoom the picture so it covers the window, cropping the edges. */
+body.fullscreen.has-now.fill .video-canvas { object-fit: cover; }
+.ctl.small.text {
+  display: none; width: auto; padding: 0 18px; border-radius: 26px;
+  font-size: 16px; font-weight: 650;
+}
+body.fullscreen.has-now .ctl.small.text { display: block; }
+.ctl.small { width: 52px; height: 52px; flex: none; }
+.ctl.small .icon { width: 28px; height: 28px; }
+.top-actions button.on { border-color: var(--accent); color: var(--accent); }
 
 @media (max-width: 900px) {
   body.car { height: auto; overflow: auto; }
+  body.car.fullscreen.has-now { overflow: hidden; }
   .layout { grid-template-columns: 1fr; }
   .side { border-left: 0; border-top: 1px solid var(--line); min-height: 60vh; }
   .stage { max-height: none; }

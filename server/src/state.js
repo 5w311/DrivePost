@@ -251,6 +251,14 @@ export class Store extends EventEmitter {
         this.restartStream();
         break;
       }
+      case 'fullscreen':
+        // Whether the car shows the video across its whole window.
+        this.settings = { ...this.settings, fullscreen: !!data.on };
+        break;
+      case 'fill':
+        // In fullscreen: zoom the picture to cover the window instead of fitting it.
+        this.settings = { ...this.settings, fill: !!data.on };
+        break;
       case 'clearHistory':
         this.history = [];
         break;

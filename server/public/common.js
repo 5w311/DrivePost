@@ -129,7 +129,9 @@
     down: '<path d="M12 18l6-6h-4V6h-4v6H6z"/>',
     x: '<path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/>',
     stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
-    restart: '<path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/>'
+    restart: '<path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/>',
+    expand: '<path d="M5 5h5v2H7v3H5zM14 5h5v5h-2V7h-3zM5 14h2v3h3v2H5zM17 14h2v5h-5v-2h3z"/>',
+    compress: '<path d="M8 5h2v5H5V8h3zM14 5h2v3h3v2h-5zM5 14h5v5H8v-3H5zM14 14h5v2h-3v3h-2z"/>'
   };
   DT.icon = function (name, cls) {
     var span = document.createElement('span');

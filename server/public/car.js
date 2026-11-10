@@ -21,7 +21,6 @@
   try {
     var v = parseFloat(localStorage.getItem('dt.volume'));
     if (v >= 0 && v <= 1) volume = v;
-    if (localStorage.getItem('dt.theater') === '1') document.body.classList.add('theater');
     showStats = localStorage.getItem('dt.stats') === '1';
   } catch (e) {}
 
@@ -135,6 +134,7 @@
   var control = new DT.Control('car', {
     state: function (msg) {
       state = msg.state;
+      applyFullscreen();
       $('#quality').value = playQuality();
       renderLists();
       syncPlayback();
@@ -200,6 +200,7 @@
     }
 
     $('#nowTitle').textContent = now.title;
+    $('#fsTitle').textContent = now.title;
     $('#nowSub').textContent = [now.channel, now.live ? 'Live' : null].filter(Boolean).join(' · ');
 
     if (errorMsg) {
@@ -392,9 +393,74 @@
     renderStats();
   });
 
-  $('#theaterBtn').addEventListener('click', function () {
-    var on = document.body.classList.toggle('theater');
-    try { localStorage.setItem('dt.theater', on ? '1' : '0'); } catch (e) {}
+  // ---------- fullscreen ----------
+  // The setting lives on the server, so the phone can flip it too and it
+  // survives a reload. It only takes effect while something is playing.
+
+  function isFullscreen() {
+    return !!(state && state.settings && state.settings.fullscreen);
+  }
+
+  function applyFullscreen() {
+    var on = isFullscreen();
+    document.body.classList.toggle('fullscreen', on);
+    document.body.classList.toggle('has-now', !!(state && state.now));
+    setIcon($('#fsToggle'), on ? 'compress' : 'expand');
+    $('#fsToggle').setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
+    $('#fullscreenBtn').classList.toggle('on', on);
+    // Fill zooms the picture to cover the window (edges are cropped); Fit
+    // shows all of it with black bars.
+    var fill = !!(state && state.settings && state.settings.fill);
+    document.body.classList.toggle('fill', fill);
+    $('#fillToggle').textContent = fill ? 'Fit' : 'Fill';
+  }
+
+  // Where the browser allows it, also hide the browser's own bars. Tesla only
+  // allows that in Park, so this is a bonus, not something we rely on.
+  function browserFullscreen(on) {
+    try {
+      var root = document.documentElement;
+      var active = document.fullscreenElement || document.webkitFullscreenElement;
+      if (on && !active) {
+        var enter = root.requestFullscreen || root.webkitRequestFullscreen;
+        var p = enter && enter.call(root);
+        if (p && p.catch) p.catch(function () {});
+      } else if (!on && active) {
+        var leave = document.exitFullscreen || document.webkitExitFullscreen;
+        var q = leave && leave.call(document);
+        if (q && q.catch) q.catch(function () {});
+      }
+    } catch (e) {}
+  }
+
+  function setFullscreen(on) {
+    if (!state) return;
+    state.settings.fullscreen = on; // show it at once; the server confirms
+    applyFullscreen();
+    control.cmd('fullscreen', { on: on });
+    browserFullscreen(on);
+    if (on && state.now) showOverlay(true); // show where the exit button is
+  }
+
+  $('#fullscreenBtn').addEventListener('click', function () {
+    setFullscreen(!isFullscreen());
+  });
+  $('#fsToggle').addEventListener('click', function (e) {
+    e.stopPropagation();
+    setFullscreen(!isFullscreen());
+  });
+  $('#fillToggle').addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (!state) return;
+    state.settings.fill = !state.settings.fill;
+    applyFullscreen();
+    control.cmd('fill', { on: state.settings.fill });
+    showOverlay(true);
+  });
+  document.addEventListener('keydown', function (ev) {
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target && ev.target.tagName) || '');
+    if (ev.key === 'Escape' && isFullscreen()) setFullscreen(false);
+    else if ((ev.key === 'f' || ev.key === 'F') && !typing && !ev.ctrlKey && !ev.metaKey && !ev.altKey) setFullscreen(!isFullscreen());
   });
 
   $('#phoneBtn').addEventListener('click', function () {
