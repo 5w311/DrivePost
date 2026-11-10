@@ -346,7 +346,15 @@ body.remote { padding-bottom: 40px; }
 .controls .play-btn .icon { width: 36px; height: 36px; }
 .field-row { display: flex; gap: 8px; }
 .btn-row { display: flex; gap: 8px; margin-top: 10px; }
-.btn-row button { flex: 1; }
+.btn-row button, .btn-row .btn { flex: 1; }
+a.btn {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  min-height: 48px; padding: 0 18px; font-weight: 650; color: inherit; text-decoration: none;
+  touch-action: manipulation;
+}
+a.btn:active { transform: scale(0.98); }
+a.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .seg { display: flex; gap: 6px; }
 .seg button { flex: 1; min-height: 44px; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -367,4 +375,7 @@ body.remote { padding-bottom: 40px; }
   word-break: break-all; user-select: all;
 }
 .kv { display: grid; gap: 6px; margin: 10px 0; }
+.more { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 4px; }
+.more summary { cursor: pointer; color: var(--muted); font-weight: 650; min-height: 44px; display: flex; align-items: center; }
+.more[open] summary { margin-bottom: 6px; }
 .kv .k { color: var(--muted); font-size: 14px; }

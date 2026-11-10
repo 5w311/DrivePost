@@ -103,10 +103,13 @@ export class Auth {
     return safeEqual(sig, this.sign(exp));
   }
 
-  hasShareToken(req) {
+  // The share token arrives either as an "Authorization: Bearer" header or as
+  // ?key= in the address (the one-paste link the iPhone Shortcut uses).
+  hasShareToken(req, key) {
     const header = req.headers.authorization || '';
     const m = header.match(/^Bearer\s+(.+)$/i);
-    return !!m && safeEqual(m[1].trim(), this.secrets.shareToken);
+    if (m && safeEqual(m[1].trim(), this.secrets.shareToken)) return true;
+    return typeof key === 'string' && key.length > 0 && safeEqual(key, this.secrets.shareToken);
   }
 
   // Signing out everywhere: every existing cookie stops verifying.

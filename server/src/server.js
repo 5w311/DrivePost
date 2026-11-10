@@ -132,6 +132,22 @@ async function shareText(text) {
 
 const PAGES = { '/': 'car.html', '/remote': 'remote.html', '/setup': 'setup.html' };
 
+// The ready-made iPhone Shortcut, if this copy of DriveTest ships one. iPhones
+// only open Shortcut files signed through Apple, which start with "AEA1".
+const SHORTCUT_NAME = 'Send to Car';
+let shortcutFile;
+function signedShortcut() {
+  if (shortcutFile === undefined) {
+    try {
+      const data = fs.readFileSync(path.join(PUBLIC_DIR, 'send-to-car.shortcut'));
+      shortcutFile = data.subarray(0, 4).toString('latin1') === 'AEA1' ? data : null;
+    } catch {
+      shortcutFile = null;
+    }
+  }
+  return shortcutFile;
+}
+
 // ---------- routes ----------
 
 async function route(req, res) {
@@ -187,9 +203,27 @@ async function route(req, res) {
     return send(res, 200, { ok: true });
   }
 
-  // iPhone Shortcut (Bearer token) or a signed-in browser.
+  // The ready-made iPhone Shortcut. It's the same file for everyone and holds
+  // no address or token (the phone asks for the personal link when adding
+  // it), so it needs no sign-in: Safari's downloader can just fetch it.
+  if (req.method === 'GET' && p.startsWith('/shortcut/') && p.endsWith('.shortcut')) {
+    const file = signedShortcut();
+    if (!file) return send(res, 404, { error: 'Not found' });
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${SHORTCUT_NAME}.shortcut"`,
+      'Content-Length': file.length,
+      'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(file);
+  }
+
+  // iPhone Shortcut (share token) or a signed-in browser.
   if (req.method === 'POST' && p === '/api/share') {
-    if (!authed && !auth.hasShareToken(req)) return send(res, 401, 'Not signed in or wrong share token.', 'text/plain; charset=utf-8');
+    if (!authed && !auth.hasShareToken(req, url.searchParams.get('key'))) {
+      return send(res, 401, 'Wrong or old DriveTest link. Copy a fresh one from Setup & sharing.', 'text/plain; charset=utf-8');
+    }
     const body = await readJson(req);
     const result = await shareText(body.url || body.text || body.input || '');
     return send(res, result.ok ? 200 : 400, result.message, 'text/plain; charset=utf-8');
@@ -245,6 +279,10 @@ async function route(req, res) {
       return send(res, 200, {
         shareUrl: `${baseUrl(req)}/api/share`,
         shareToken: auth.shareToken,
+        // One address with the token in it: all the iPhone Shortcut needs.
+        shareLink: `${baseUrl(req)}/api/share?key=${encodeURIComponent(auth.shareToken)}`,
+        // Where to get the ready-made Shortcut, when this copy of DriveTest has one.
+        shortcutUrl: signedShortcut() ? `/shortcut/${encodeURIComponent(SHORTCUT_NAME)}.shortcut` : null,
         testItem: TEST_PATTERN_ITEM,
       });
     }

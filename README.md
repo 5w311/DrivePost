@@ -15,7 +15,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Handles bad signal:** the car keeps up to 25 seconds buffered. If it runs out, picture and sound freeze together and carry on without a gap. A dropped connection reconnects at the same spot.
 - **Steps down by itself:** if the screen can't decode fast enough, or the connection keeps running dry, the car drops one quality level for that video and says why. The next video starts at your chosen quality again.
 - **Stats readout:** tap **Stats** under the video to see resolution, decode time, buffer, data rate and how fast your server is converting.
-- **Private:** one passcode, devices stay signed in, and the iPhone Shortcut uses its own revocable token.
+- **Private:** one passcode, devices stay signed in, and the iPhone Shortcut uses its own share token, which can only add videos and can be replaced at any time.
 
 ## How it works
 
@@ -71,7 +71,26 @@ In the car, JSMpeg only decodes and draws. The page decides when: a frame is dec
 
 4. In the car, open `https://drive.figari.dev`, enter the passcode, open **Recent** and tap **Play test pattern**. The pattern is generated on your server, so if it plays in Drive, the whole pipeline works without involving YouTube.
 
-5. On your phone, tap **Phone** on the car screen and scan the code. Open **Setup & sharing** at the bottom of the remote to make the iPhone Shortcut.
+5. On your phone, tap **Phone** on the car screen and scan the code. Open **Setup & sharing** at the bottom of the remote to set up sharing from your phone.
+
+## Sharing from an iPhone
+
+iPhones don't let a web app appear in the share sheet, so sharing goes through a Shortcut called **Send to Car**. After that, tap Share in YouTube, Safari or any app and pick it. If nothing is playing, the video starts in the car. Otherwise it goes to Up Next.
+
+**Setup & sharing** in the remote shows your **personal link**: your server's address with your share token in it. That link is all the Shortcut needs. The Shortcut sends what you shared to the link and shows the server's answer as a notification. It only uses actions that have been in Shortcuts since iOS 15.
+
+- **By hand:** the Setup page lists the steps. It's one action with three fields, plus a notification.
+- **Ready-made:** if `server/public/send-to-car.shortcut` exists, the Setup page offers it as a download instead. Adding it asks for your personal link, which the button has already copied. The file is the same for everyone and has no address or token in it.
+
+iPhones only open Shortcut files that carry Apple's signature, and that signature has to be made on a Mac signed in to iCloud. To make the ready-made file:
+
+```bash
+node scripts/make-shortcut.mjs --sign   # on a Mac; writes server/public/send-to-car.shortcut
+```
+
+`shortcut/send-to-car.unsigned.plist` is the same Shortcut unsigned, so you can read exactly what it does.
+
+Making a new share token (Setup page, under Security) changes your personal link. Open Send to Car in Shortcuts and paste the new link over the old one.
 
 ## Updating
 
@@ -150,7 +169,8 @@ Tesla only lets its browser take over the entire display in Park. While driving,
 ## Project layout
 
 ```
-scripts/         Automatic updates (timer installer and the update script)
+scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder
+shortcut/        The iPhone Shortcut, unsigned, for reading
 server/src/      Node server: auth, state, yt-dlp, ffmpeg streaming, TS chunker
 server/public/   Car page, phone remote, setup page, JSMpeg
 server/test/     Unit tests (npm test)

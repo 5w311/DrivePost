@@ -19,25 +19,41 @@
     <section class="card">
       <div class="card-head"><h2>Share from iPhone</h2></div>
       <div class="card-body">
-        <p class="muted" style="margin-top:0">Make a Shortcut once. After that, tap Share in YouTube, Safari or any app and pick <b>Send to Car</b>.</p>
-        <ol>
-          <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name it <b>Send to Car</b>.</li>
-          <li>Tap the <b>ⓘ</b> button and turn on <b>Show in Share Sheet</b>. Set it to receive <b>URLs</b> and <b>Text</b>.</li>
-          <li>Add the action <b>Get Contents of URL</b> and set it up like this:
-            <div class="kv">
-              <div class="k">URL</div><div class="code" id="shareUrl">…</div>
-              <div class="k">Method</div><div class="code">POST</div>
-              <div class="k">Headers → Authorization</div><div class="code" id="authHeader">…</div>
-              <div class="k">Request Body</div><div class="code">JSON, with a Text field named <b>url</b> set to <b>Shortcut Input</b></div>
-            </div>
-          </li>
-          <li>Add <b>Show Notification</b> and set its text to <b>Contents of URL</b>, so you see what was added.</li>
-        </ol>
-        <p class="muted">If nothing is playing, a shared video starts right away. Otherwise it goes to Up Next.</p>
-        <div class="btn-row">
-          <button id="copyUrl" type="button">Copy URL</button>
-          <button id="copyAuth" type="button">Copy header</button>
+        <p class="muted" style="margin-top:0">Add the <b>Send to Car</b> Shortcut once. After that, tap Share in YouTube, Safari or any app and pick <b>Send to Car</b>.</p>
+
+        <div id="quickShortcut" class="hidden">
+          <ol>
+            <li>Tap <b>Get the Shortcut</b>. Your personal link is copied, and Safari asks to download a file. Tap <b>Download</b>.</li>
+            <li>Open the download: tap the download arrow by Safari's address bar, then <b>Send to Car</b>. It's also in the Files app, under Downloads.</li>
+            <li>Shortcuts asks for your DriveTest link. Tap the box, tap <b>Paste</b>, then <b>Add Shortcut</b>.</li>
+          </ol>
+          <div class="btn-row">
+            <a id="getShortcut" class="btn primary" href="#" download="Send to Car.shortcut">Get the Shortcut</a>
+            <button id="copyLink" type="button">Copy my link</button>
+          </div>
+          <p id="standaloneHint" class="muted hidden">This page is open from your Home Screen. If no download starts, open it in Safari instead and tap the button there.</p>
         </div>
+
+        <details id="manualShortcut" class="more">
+          <summary>Make it by hand instead</summary>
+          <ol>
+            <li>Open <b>Shortcuts</b>, make a new Shortcut, and name it <b>Send to Car</b>.</li>
+            <li>Tap the <b>ⓘ</b> button and turn on <b>Show in Share Sheet</b>. Set it to receive <b>URLs</b> and <b>Text</b>.</li>
+            <li>Add the action <b>Get Contents of URL</b> and set it up like this:
+              <div class="kv">
+                <div class="k">URL (your personal link)</div><div class="code" id="shareLink">…</div>
+                <div class="k">Method</div><div class="code">POST</div>
+                <div class="k">Request Body</div><div class="code">JSON, with a Text field named <b>url</b> set to <b>Shortcut Input</b></div>
+              </div>
+            </li>
+            <li>Add <b>Show Notification</b> and set its text to <b>Contents of URL</b>, so you see what was added.</li>
+          </ol>
+          <div class="btn-row">
+            <button id="copyLink2" type="button">Copy my link</button>
+          </div>
+        </details>
+
+        <p class="muted">The first time you share, iOS asks whether the Shortcut may connect to your server: tap <b>Always Allow</b>. In the YouTube app, tap <b>Share</b> and then <b>More</b> to find Send to Car. If nothing is playing, a shared video starts right away. Otherwise it goes to Up Next.</p>
       </div>
     </section>
 
@@ -67,7 +83,7 @@
           <button id="newToken" type="button">New share token</button>
           <button id="logoutAll" type="button">Sign out everywhere</button>
         </div>
-        <p class="muted" style="font-size:14px">A new share token breaks the current Shortcut until you paste the new header in. Signing out everywhere signs out the car and every phone.</p>
+        <p class="muted" style="font-size:14px">A new share token changes your personal link, so the Shortcut stops working until you paste the new link into it (open Send to Car in Shortcuts and replace the address). Signing out everywhere signs out the car and every phone.</p>
       </div>
     </section>
   </div>
