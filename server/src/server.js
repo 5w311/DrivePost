@@ -339,6 +339,9 @@ function handleControl(ws) {
       client.role = msg.role === 'car' ? 'car' : 'remote';
       refreshCarOnline();
     } else if (msg.type === 'cmd') {
+      // Choosing a format is also a request to try it again, so tell the car
+      // before the stream restarts.
+      if (msg.action === 'format' && (msg.v === 'auto' || msg.v === 'mpeg1')) broadcast({ type: 'format', v: msg.v });
       const error = store.command(String(msg.action), msg);
       if (error) ws.send(JSON.stringify({ type: 'toast', message: error }));
     } else if (msg.type === 'pos' && client.role === 'car') {
@@ -348,8 +351,11 @@ function handleControl(ws) {
     } else if (msg.type === 'ended' && client.role === 'car') {
       store.carEnded(msg.seq);
     } else if ((msg.type === 'carError' || msg.type === 'carNote') && client.role === 'car') {
-      // Show the car's errors and notices on every screen, phones included.
-      broadcast({ type: 'toast', message: String(msg.message || 'Playback error').slice(0, 300) });
+      // Show the car's errors and notices on every screen, phones included,
+      // and keep them in the log for troubleshooting.
+      const message = String(msg.message || 'Playback error').slice(0, 300);
+      console.log(`[car] ${message}`);
+      broadcast({ type: 'toast', message });
     }
   });
 
@@ -387,7 +393,8 @@ server.on('upgrade', (req, socket, head) => {
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
     const quality = QUALITIES.includes(url.searchParams.get('q')) ? url.searchParams.get('q') : store.playQuality();
     const audioRate = parseInt(url.searchParams.get('ar'), 10) || 48000;
-    handleStream(ws, { id, startAt, quality, audioRate }).catch((err) => {
+    const want = url.searchParams.get('v') === 'h264' ? 'h264' : 'mpeg1';
+    handleStream(ws, { id, startAt, quality, audioRate, want }).catch((err) => {
       console.error(err);
       ws.close();
     });

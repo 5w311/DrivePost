@@ -356,7 +356,7 @@ a.btn {
 a.btn:active { transform: scale(0.98); }
 a.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .seg { display: flex; gap: 6px; }
-.seg button { flex: 1; min-height: 44px; }
+.seg button { flex: 1; min-height: 44px; min-width: 0; padding: 0 8px; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* ---------- login / setup ---------- */

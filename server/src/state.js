@@ -41,6 +41,7 @@ export class Store extends EventEmitter {
     this.progress = saved.progress && typeof saved.progress === 'object' ? saved.progress : {};
     this.settings = { quality: defaultQuality, ...(saved.settings || {}) };
     if (!QUALITIES.includes(this.settings.quality)) this.settings.quality = defaultQuality;
+    if (!['auto', 'mpeg1'].includes(this.settings.format)) this.settings.format = 'auto';
     this.seq = saved.seq || 0;
     // Bring back what was playing, but paused so it waits for a tap in the car.
     const now = saved.now ? cleanItem(saved.now) : null;
@@ -254,6 +255,12 @@ export class Store extends EventEmitter {
       case 'fullscreen':
         // Whether the car shows the video across its whole window.
         this.settings = { ...this.settings, fullscreen: !!data.on };
+        break;
+      case 'format':
+        // 'auto' = H.264 when the car can play it; 'mpeg1' = always the compatible player.
+        if (!['auto', 'mpeg1'].includes(data.v)) return 'Bad format';
+        this.settings = { ...this.settings, format: data.v };
+        this.restartStream();
         break;
       case 'fill':
         // In fullscreen: zoom the picture to cover the window instead of fitting it.

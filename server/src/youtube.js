@@ -175,6 +175,8 @@ export function streamInfo(id, quality) {
       ],
       height,
       fps: 30,
+      vcodec: 'generated',
+      tbr: null,
     });
   }
   return streamCache.get(`${id}:${height}`, async () => {
@@ -190,6 +192,8 @@ export function streamInfo(id, quality) {
         hasVideo: !!f.vcodec && f.vcodec !== 'none',
         hasAudio: !!f.acodec && f.acodec !== 'none',
         fps: typeof f.fps === 'number' ? f.fps : null,
+        vcodec: typeof f.vcodec === 'string' ? f.vcodec : '',
+        tbr: typeof f.vbr === 'number' && f.vbr > 0 ? f.vbr : typeof f.tbr === 'number' ? f.tbr : null,
       }));
     if (!inputs.length) throw new Error('No playable format found');
     // A single muxed format may not report codecs; assume it has both.
@@ -204,6 +208,9 @@ export function streamInfo(id, quality) {
       inputs,
       height,
       fps: (inputs.find((i) => i.hasVideo) || {}).fps || (typeof json.fps === 'number' ? json.fps : null),
+      // What YouTube encoded the picture with (avc1 = H.264) and at what rate.
+      vcodec: (inputs.find((i) => i.hasVideo) || {}).vcodec || (typeof json.vcodec === 'string' ? json.vcodec : ''),
+      tbr: (inputs.find((i) => i.hasVideo) || {}).tbr || null,
     };
   });
 }

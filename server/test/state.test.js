@@ -72,3 +72,31 @@ test('screen settings are shared and saved', () => {
   s.command('fullscreen', { on: false });
   assert.equal(s.settings.fullscreen, false);
 });
+
+test('the video format is a shared setting and changing it restarts the stream', () => {
+  const s = makeStore('720');
+  assert.equal(s.publicState().settings.format, 'auto', 'H.264 when possible, by default');
+  s.command('play', { item: A });
+  s.carPosition({ seq: s.now.seq, t: 42, state: 'playing' });
+  const seq = s.now.seq;
+
+  assert.equal(s.command('format', { v: 'mpeg1' }), null);
+  assert.equal(s.settings.format, 'mpeg1');
+  assert.ok(s.now.seq > seq, 'the car reopens the stream');
+  assert.ok(Math.abs(s.now.startAt - 42) <= 1, 'at the same spot');
+  assert.equal(s.settings.quality, '720', 'other settings are kept');
+
+  assert.equal(s.command('format', { v: 'vp9' }), 'Bad format');
+  assert.equal(s.settings.format, 'mpeg1');
+
+  s.saveNow();
+  const again = new Store({ dataDir: path.dirname(s.file), defaultQuality: '720' });
+  assert.equal(again.settings.format, 'mpeg1', 'survives a restart');
+});
+
+test('a saved format this version does not know falls back to automatic', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivetest-'));
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ settings: { quality: '480', format: 'theora' } }));
+  const s = new Store({ dataDir, defaultQuality: '480' });
+  assert.equal(s.settings.format, 'auto');
+});

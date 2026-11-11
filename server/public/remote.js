@@ -68,6 +68,10 @@
       b.classList.toggle('on', (b.getAttribute('data-fs') === '1') === !!state.settings.fullscreen);
     });
 
+    document.querySelectorAll('#formatSeg button').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-v') === (state.settings.format || 'auto'));
+    });
+
     renderQueue();
     renderRecent();
     paintTime();
@@ -263,5 +267,8 @@
   });
   document.querySelectorAll('#screenSeg button').forEach(function (b) {
     b.addEventListener('click', function () { control.cmd('fullscreen', { on: b.getAttribute('data-fs') === '1' }); });
+  });
+  document.querySelectorAll('#formatSeg button').forEach(function (b) {
+    b.addEventListener('click', function () { control.cmd('format', { v: b.getAttribute('data-v') }); });
   });
 })();

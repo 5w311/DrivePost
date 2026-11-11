@@ -79,7 +79,18 @@
           <button data-q="720" type="button">720p</button>
           <button data-q="1080" type="button">1080p</button>
         </div>
-        <p class="muted" style="font-size:14px;margin:10px 0 0">Higher quality uses more data and more of your server's CPU. If the car can't keep up, it steps down by itself for that video.</p>
+        <p class="muted" style="font-size:14px;margin:10px 0 0">Higher quality uses more data. If the car can't keep up, it steps down by itself for that video.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Video format</div>
+      <div class="card-body">
+        <div class="seg" id="formatSeg">
+          <button data-v="auto" type="button">H.264</button>
+          <button data-v="mpeg1" type="button">MPEG-1</button>
+        </div>
+        <p class="muted" style="font-size:14px;margin:10px 0 0"><b>H.264</b> plays YouTube's own video: sharper, usually less data, and almost no work for your server. If the car can't play it, or a video has no H.264 version, DriveTest uses MPEG-1 by itself. <b>MPEG-1</b> always converts on your server, which works in any browser.</p>
       </div>
     </section>
 

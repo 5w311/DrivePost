@@ -56,6 +56,36 @@ export function streamPlan(info, quality) {
   };
 }
 
+// Which picture format to send.
+//   h264:  YouTube's own H.264 video passed through untouched. Sharper, about
+//          half the data, and almost no work for this machine. Needs a car
+//          browser that can decode it (WebCodecs) and a video YouTube has in
+//          H.264, which is nearly all of them up to 1080p.
+//   mpeg1: converted here and decoded by JSMpeg in the car. Works everywhere.
+// Live streams are always converted: their timestamps can jump, and
+// converting smooths that out.
+export function chooseCodec(want, info, canEncodeH264 = true) {
+  if (want !== 'h264' || info.live) return 'mpeg1';
+  if (info.inputs.some((i) => i.lavfi)) return canEncodeH264 ? 'h264' : 'mpeg1'; // the test pattern
+  return /^avc1/i.test(info.vcodec || '') ? 'h264' : 'mpeg1';
+}
+
+// The test pattern has no H.264 original to pass through, so it's encoded
+// here. Check once whether this ffmpeg can do that.
+let x264Check = null;
+export function canEncodeH264() {
+  if (!x264Check) {
+    x264Check = new Promise((resolve) => {
+      let out = '';
+      const p = spawn(config.ffmpegBin, ['-hide_banner', '-h', 'encoder=libx264'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      p.stdout.on('data', (d) => (out += d));
+      p.on('error', () => resolve(false));
+      p.on('close', () => resolve(/Encoder libx264/.test(out)));
+    });
+  }
+  return x264Check;
+}
+
 function inputArgs(input, startAt, live) {
   const a = [];
   if (input.lavfi) {
@@ -75,7 +105,7 @@ function inputArgs(input, startAt, live) {
   return a;
 }
 
-export function ffmpegArgs(info, startAt, quality, audioRate = 48000) {
+export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'mpeg1') {
   const plan = streamPlan(info, quality);
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
   info.inputs.forEach((input) => args.push(...inputArgs(input, startAt, info.live)));
@@ -87,11 +117,23 @@ export function ffmpegArgs(info, startAt, quality, audioRate = 48000) {
   if (a >= 0) args.push('-map', `${a}:a:0`);
 
   const max = Math.round(plan.kbps * 1.3);
-  args.push(
-    '-vf', `scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
-    '-c:v', 'mpeg1video', '-b:v', `${plan.kbps}k`, '-maxrate', `${max}k`, '-bufsize', `${max}k`,
-    '-bf', '0', '-g', String(Math.round(plan.rate.fps * 2))
-  );
+  if (codec === 'h264' && info.inputs[v].lavfi) {
+    // Test pattern: encode it the way YouTube's files are (with B-frames).
+    args.push(
+      '-vf', 'format=yuv420p',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '2', '-g', '60', '-crf', '23',
+      '-maxrate', `${plan.kbps}k`, '-bufsize', `${plan.kbps * 2}k`
+    );
+  } else if (codec === 'h264') {
+    // Pass YouTube's H.264 through as it is; only the container changes.
+    args.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
+  } else {
+    args.push(
+      '-vf', `scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
+      '-c:v', 'mpeg1video', '-b:v', `${plan.kbps}k`, '-maxrate', `${max}k`, '-bufsize', `${max}k`,
+      '-bf', '0', '-g', String(Math.round(plan.rate.fps * 2))
+    );
+  }
   if (a >= 0) args.push('-c:a', 'mp2', '-b:a', `${plan.audioKbps}k`, '-ar', String(audioRate), '-ac', '2');
   else args.push('-an');
   // The tiny muxdelay also makes ffmpeg write each audio frame as its own
@@ -105,7 +147,7 @@ function sendJson(ws, msg) {
 }
 
 // One car connection = one ffmpeg process.
-export async function handleStream(ws, { id, startAt, quality, audioRate }) {
+export async function handleStream(ws, { id, startAt, quality, audioRate, want }) {
   if (!AUDIO_RATES.includes(audioRate)) audioRate = 48000;
   let ff = null;
   let closed = false;
@@ -114,6 +156,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate }) {
   let clientClock = null;
   let lastSentPts = null;
   let stderr = '';
+  let codec = 'mpeg1';
+  let passthrough = false;
 
   const entry = { close: () => ws.close(4000, 'replaced') };
   active.add(entry);
@@ -135,7 +179,10 @@ export async function handleStream(ws, { id, startAt, quality, audioRate }) {
     speedLogged = true;
     const x = media / wall;
     const verdict = x >= 1.5 ? 'OK' : x >= 1.1 ? 'tight' : 'too slow, try a lower quality';
-    console.log(`[stream ${id}] ${quality}p converting at ${x.toFixed(1)}x real time (${verdict})${note ? `, ${note}` : ''}`);
+    const doing = passthrough ? 'passing H.264 through' : codec === 'h264' ? 'making H.264' : 'converting';
+    // Passing through runs far ahead of the car, so being held back means nothing there.
+    const shown = note && !(passthrough && x >= 1.5) ? `, ${note}` : '';
+    console.log(`[stream ${id}] ${quality}p ${doing} at ${x.toFixed(1)}x real time (${verdict})${shown}`);
     sendJson(ws, { type: 'speed', x: Math.round(x * 10) / 10, limitedByNetwork: !!note });
   }
 
@@ -149,13 +196,14 @@ export async function handleStream(ws, { id, startAt, quality, audioRate }) {
           baseSent = true;
         }
         if (firstDataAt === null) firstDataAt = Date.now();
-        lastSentPts = pts;
+        // H.264 frames aren't sent in display order, so keep the furthest one.
+        lastSentPts = lastSentPts === null ? pts : Math.max(lastSentPts, pts);
       }
       frame.writeDoubleLE(pts, 0);
       frame.writeUInt8(kind, 8);
       ws.send(frame);
       if (kind === KIND_VIDEO) {
-        if (pts - splitter.firstVideoPts >= 20) logSpeed();
+        if (lastSentPts - splitter.firstVideoPts >= 20) logSpeed();
         checkFlow();
       }
     },
@@ -214,18 +262,24 @@ export async function handleStream(ws, { id, startAt, quality, audioRate }) {
   if (closed) return;
 
   const plan = streamPlan(info, quality);
+  codec = chooseCodec(want, info, await canEncodeH264());
+  if (closed) return;
+  passthrough = codec === 'h264' && !info.inputs.some((i) => i.lavfi);
   sendJson(ws, {
     type: 'meta',
     duration: info.duration,
     live: info.live,
     startAt: info.live ? 0 : startAt,
-    fps: plan.rate.fps,
-    kbps: plan.kbps,
+    codec,
+    audio: info.inputs.some((i) => i.hasAudio),
+    // Passed-through video keeps YouTube's own frame rate and bitrate.
+    fps: passthrough ? info.fps || null : codec === 'h264' ? 30 : plan.rate.fps,
+    kbps: passthrough ? (info.tbr ? Math.round(info.tbr) : null) : plan.kbps,
   });
 
   let args;
   try {
-    args = ffmpegArgs(info, startAt, quality, audioRate);
+    args = ffmpegArgs(info, startAt, quality, audioRate, codec);
   } catch (err) {
     sendJson(ws, { type: 'error', message: err.message });
     ws.close();

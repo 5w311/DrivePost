@@ -2,7 +2,7 @@
 
 A self-hosted YouTube player for the Tesla browser that keeps playing after you shift out of Park, for passengers.
 
-Tesla's browser pauses its built-in video player when the car leaves Park. DriveTest never uses that player. A small server at home converts the video to MPEG-1 as it plays, and the car page decodes it with [JSMpeg](https://github.com/phoboslab/jsmpeg) and draws it on a `<canvas>`, with sound through Web Audio. The [proof of concept](test/) confirmed that canvas playback keeps going in Drive.
+Tesla's browser pauses its built-in video player when the car leaves Park. DriveTest never uses that player. A small server at home fetches the video, and the car page decodes it itself and draws it on a `<canvas>`, with sound through Web Audio. The [proof of concept](test/) confirmed that canvas playback keeps going in Drive.
 
 ## What it does
 
@@ -11,10 +11,11 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Fullscreen:** the video fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
+- **Two video formats:** **H.264** passes YouTube's own video straight through, and the browser decodes it (WebCodecs). It's sharper, usually uses less data, and is almost no work for the server. **MPEG-1** is converted on the server and decoded in the page by [JSMpeg](https://github.com/phoboslab/jsmpeg), which works in any browser. The car uses H.264 when it can and switches to MPEG-1 by itself when it can't.
 - **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
 - **Handles bad signal:** the car keeps up to 25 seconds buffered. If it runs out, picture and sound freeze together and carry on without a gap. A dropped connection reconnects at the same spot.
-- **Steps down by itself:** if the screen can't decode fast enough, or the connection keeps running dry, the car drops one quality level for that video and says why. The next video starts at your chosen quality again.
-- **Stats readout:** tap **Stats** under the video to see resolution, decode time, buffer, data rate and how fast your server is converting.
+- **Steps down by itself:** if the screen can't keep up, or the connection keeps running dry, the car drops one quality level for that video and says why. The next video starts at your chosen quality again.
+- **Stats readout:** tap **Stats** under the video to see resolution, format, decoding, buffer, data rate, how fast your server is working and what the browser can decode.
 - **Private:** one passcode, devices stay signed in, and the iPhone Shortcut uses its own share token, which can only add videos and can be replaced at any time.
 
 ## How it works
@@ -22,31 +23,39 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 ```
 Phone ──share/remote──┐
                       ▼
-YouTube ─► yt-dlp ─► ffmpeg (MPEG-1 + MP2 in MPEG-TS) ─► server splits it into single video
-                                                          frames and short audio runs, each
-                                                          tagged with its timestamp
-                                                              │ WebSocket
-                                                              ▼
-              Tesla browser: buffer ─► own clock ─► JSMpeg decode ─► canvas + Web Audio
+YouTube ─► yt-dlp ─► ffmpeg ─► MPEG-TS ─► server splits it into single video frames and
+             H.264: picture copied as is     short audio runs, each tagged with its timestamp
+             MPEG-1: picture converted                        │ WebSocket
+             sound: converted to MP2                          ▼
+     Tesla browser: buffer ─► own clock ─► decode (WebCodecs or JSMpeg) ─► canvas + Web Audio
 ```
 
-The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that, so it never converts more than the car will use. Seeking restarts ffmpeg at the new spot. YouTube supports fast seeking, so that takes a couple of seconds. The video that's next in line is looked up ahead of time, so it starts faster.
+The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that, so it never fetches or converts more than the car will use. Seeking restarts ffmpeg at the new spot. YouTube supports fast seeking, so that takes a couple of seconds. The video that's next in line is looked up ahead of time, so it starts faster.
 
-In the car, JSMpeg only decodes and draws. The page decides when: a frame is decoded just before its timestamp comes up, and audio is queued on the sound card half a second ahead at the matching time. That keeps playback even when data arrives in bursts or the browser repaints slowly.
+In the car, the decoders only decode. The page decides when each picture shows: every frame goes on screen at its timestamp, and audio is queued on the sound card half a second ahead at the matching time. That keeps playback even when data arrives in bursts or the browser repaints slowly.
+
+### H.264 and MPEG-1
+
+The car asks for H.264 when its browser can decode it. That needs WebCodecs, which browsers only offer on https pages. The server passes H.264 through when YouTube has the video in H.264 at the chosen quality, which is nearly always the case up to 1080p. Otherwise the picture is converted to MPEG-1, as before. Live streams are always converted. The sound is converted to MP2 either way.
+
+A copied H.264 stream can only begin on a keyframe, which may be several seconds before the spot you seek to. The car decodes that lead-in without showing it, so playback still starts exactly where you asked.
+
+If the browser's H.264 decoder reports an error, stops returning pictures, or can't keep up even at 360p, the car carries on from the same spot in MPEG-1 and says so. It stays on MPEG-1 for two hours, so a browser that blocks its own decoder in some situations doesn't interrupt every video. Choosing **H.264** under **Video format** on the phone remote tries it again right away, and choosing **MPEG-1** there turns H.264 off. **Stats** shows which format is playing, and why when it isn't H.264.
 
 ## Requirements
 
 - An always-on machine on your **home internet** with Docker: a Raspberry Pi 4/5 (64-bit OS), mini PC, NAS or PC. It has to be at home because YouTube blocks most cloud servers.
 - Enough upload at home, and data in the car, for the quality you pick:
 
-  | Quality | Data rate | Data per hour |
-  |---|---|---|
-  | 360p | 1.0 Mbps | 0.4 GB |
-  | 480p | 1.5 Mbps | 0.7 GB |
-  | 720p | 3.0 Mbps | 1.3 GB |
-  | 1080p | 5.5 Mbps | 2.5 GB |
+  | Quality | H.264, typical | MPEG-1 | MPEG-1 per hour |
+  |---|---|---|---|
+  | 360p | 0.5 to 0.8 Mbps | 1.0 Mbps | 0.4 GB |
+  | 480p | 0.7 to 1.3 Mbps | 1.5 Mbps | 0.7 GB |
+  | 720p | 1.3 to 2.7 Mbps | 3.0 Mbps | 1.3 GB |
+  | 1080p | 2.7 to 4.7 Mbps | 5.5 Mbps | 2.5 GB |
 
-  MPEG-1 is an old format, so these are higher than YouTube's own rates for the same picture. 1080p also needs a fast screen: the car decodes it in JavaScript.
+  The MPEG-1 figures are measured. The H.264 figures are what YouTube usually uses for 30 fps video plus the sound, and they vary from video to video; 60 fps videos use about half as much again. **Stats** shows the real rate of what's playing.
+- A machine fast enough for the format. Passing H.264 through takes almost no CPU, so a Pi 4 should handle 1080p. Converting to MPEG-1 is real work: a Pi 4 should stay at 480p for that, and 1080p also needs a fast screen in the car, because MPEG-1 is decoded in JavaScript.
 - A way to reach it from the car over HTTPS. A Cloudflare Tunnel on your own domain is built in.
 
 ## Setup
@@ -120,14 +129,17 @@ Anything pushed to the branch this machine follows gets installed on it, so keep
 
 ## Is the machine fast enough?
 
-Each time a video starts, the log reports how fast the machine converts it:
+Each time a video starts, the log reports how fast the machine gets it ready:
 
 ```sh
 docker compose logs -f drivetest
+# [stream dQw4w9WgXcQ] 1080p passing H.264 through at 31.0x real time (OK)
 # [stream dQw4w9WgXcQ] 480p converting at 2.6x real time (OK)
 ```
 
-Anything at 1.5x or above is comfortable. Between 1.1x and 1.5x works but leaves little headroom. Below 1.1x, the car will keep buffering, so drop the quality. If the line ends with "held back by the car's connection", the bottleneck is the network, not the CPU. The same number shows in the car's **Stats** readout, next to how long the car takes to decode each frame.
+Passing H.264 through is limited only by your internet connection, so it's usually many times real time. For converting to MPEG-1, anything at 1.5x or above is comfortable. Between 1.1x and 1.5x works but leaves little headroom. Below 1.1x, the car will keep buffering, so drop the quality. If the line ends with "held back by the car's connection", the bottleneck is the network, not the CPU. The same number shows in the car's **Stats** readout.
+
+Notices from the car, such as a quality step-down or a switch to MPEG-1, show up in the same log on lines starting with `[car]`.
 
 ## Moving to another machine
 
@@ -151,8 +163,10 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | Symptom | Check |
 |---|---|
 | Test pattern plays, YouTube doesn't | Run `docker compose logs drivetest`. Usually yt-dlp needs updating (restart the container) or YouTube is blocking the request. Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
-| Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine is too slow for that quality, otherwise it's the connection. A Pi 4 should stay at 480p. |
-| Choppy picture at 1080p | Tap **Stats**. If decoding takes more than about half of the time available per frame, the screen is the limit; use 720p. |
+| Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
+| Choppy picture at 1080p | Tap **Stats**. In MPEG-1, if decoding takes more than about half of the time available per frame, the screen is the limit. In H.264, a climbing "skipped" count means the same. Use 720p. |
+| It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |
+| H.264 misbehaves in the car | On the phone remote, set **Video format** to **MPEG-1**. Everything then works as it did before H.264 was added. |
 | No sound | Tap the screen once. Browsers only allow sound after a tap. |
 | Phone says "Car offline" | The car page isn't open, or the car is offline. |
 

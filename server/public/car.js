@@ -60,7 +60,20 @@
     },
     onSlow: function (s) {
       // Decoding keeps falling behind: this screen can't handle the quality.
+      if (s.codec === 'h264' && QUALITIES.indexOf(playQuality()) <= 0) {
+        // Already at the lowest quality: this browser's H.264 decoder isn't
+        // up to it, so use the built-in player instead.
+        s.video.fail("it can't keep up even at " + s.quality + 'p');
+        return;
+      }
       stepDown("This screen can't keep up with " + s.quality + 'p.');
+    },
+    onVideoFail: function (s, info) {
+      // The browser's own H.264 decoder gave up. Carry on from the same spot
+      // with the built-in player; the page stays on it for a couple of hours.
+      var message = "This browser couldn't play the H.264 video (" + info.reason + '). Switched to the built-in player.';
+      control.send({ type: 'carNote', message: message }); // shown on every screen, this one included
+      if (state && state.now && state.now.seq === s.seq) startStream(state.now, info.position);
     },
     onStall: function (s) {
       // Ran out of data. Three times in two minutes means the quality is too
@@ -71,7 +84,7 @@
       if (stalls.length < 3) return;
       var slowServer = s.stats.serverSpeed !== null && s.stats.serverSpeed < 1.1 && !s.stats.serverLimited;
       stepDown(slowServer
-        ? "Your server can't convert " + s.quality + 'p fast enough.'
+        ? 'Your server can\'t ' + (s.codec === 'h264' ? 'fetch ' : 'convert ') + s.quality + 'p fast enough.'
         : "The connection can't keep up with " + s.quality + 'p.');
     }
   });
@@ -105,6 +118,7 @@
       seq: now.seq,
       startAt: startAt,
       quality: playQuality(),
+      format: state.settings.format,
       paused: state.paused
     });
     renderStage();
@@ -161,6 +175,10 @@
       syncPlayback();
     },
     pos: function () {},
+    format: function (msg) {
+      // Someone chose H.264 on the phone: try it now, even if it failed earlier.
+      if (msg.v === 'auto') DrivePlayer.retryH264();
+    },
     toast: function (msg) {
       DT.toast(msg.message);
     },
@@ -394,9 +412,45 @@
   // ---------- stats readout ----------
 
   var chromeVersion = (navigator.userAgent.match(/Chrom(?:e|ium)\/(\d+)/) || [])[1];
-  var browserLine =
-    (chromeVersion ? 'Chrome ' + chromeVersion : 'Unknown browser') +
-    ' · WebCodecs ' + ('VideoDecoder' in window ? 'yes' : 'no');
+  // Which kinds of video this browser can decode by itself (shown in Stats).
+  var decoders = { 'H.264': 'avc1.640028', VP9: 'vp09.00.40.08', AV1: 'av01.0.08M.08' };
+  var canDecode = {};
+  if ('VideoDecoder' in window) {
+    Object.keys(decoders).forEach(function (name) {
+      try {
+        VideoDecoder.isConfigSupported({ codec: decoders[name], codedWidth: 1920, codedHeight: 1080 }).then(
+          function (r) { canDecode[name] = !!(r && r.supported); },
+          function () { canDecode[name] = false; }
+        );
+      } catch (e) {
+        canDecode[name] = false;
+      }
+    });
+  }
+  function browserLine() {
+    var line = chromeVersion ? 'Chrome ' + chromeVersion : 'Unknown browser';
+    if (!('VideoDecoder' in window)) return line + ' · no WebCodecs' + (window.isSecureContext ? '' : ' (needs https)');
+    return line + ' · decodes ' + Object.keys(decoders).map(function (name) {
+      return name + ' ' + (canDecode[name] === undefined ? '…' : canDecode[name] ? 'yes' : 'no');
+    }).join(', ');
+  }
+
+  // Which format is playing, and why it isn't H.264 when it isn't.
+  function formatLine(s, i) {
+    if (!i.codec) return 'waiting';
+    if (i.codec === 'h264') return "H.264 · YouTube's own video, decoded by this browser";
+    var line = 'MPEG-1 · converted by your server';
+    var h = DrivePlayer.h264();
+    if (state && state.settings.format === 'mpeg1') return line + ' (H.264 is switched off on the phone remote)';
+    if (i.asked === 'h264') return line + (s.live ? ' (live videos are always converted)' : ' (no H.264 version of this video)');
+    if (h.supported === false) return line + " (this browser can't decode H.264)";
+    if (h.failedAt && !h.usable) {
+      var at = new Date(h.retryAt);
+      return line + ' (H.264 failed here: ' + h.reason + '. Trying again after ' +
+        at.getHours() + ':' + ('0' + at.getMinutes()).slice(-2) + ')';
+    }
+    return line;
+  }
 
   function renderStats() {
     var box = $('#stats');
@@ -407,20 +461,25 @@
     if (!on) return;
     var i = s.info();
     var frameMs = 1000 / (i.fps || 30);
+    var decoding = 'waiting';
+    if (i.frames && i.codec === 'h264') {
+      decoding = "by the browser's own decoder · " + i.ready + ' frames ready · skipped ' + i.dropped;
+    } else if (i.frames) {
+      decoding = i.decodeMs.toFixed(1) + ' ms a frame (' + Math.round((i.decodeMs / frameMs) * 100) + '% of the time available) · peak ' + Math.round(i.decodeMax) + ' ms';
+    }
     var rows = [
       ['Picture',
         (i.width ? i.width + '×' + i.height : s.quality + 'p') +
         (i.fps ? ' · ' + Math.round(i.fps * 100) / 100 + ' fps' : '') +
         (i.kbps ? ' · ' + (i.kbps / 1000).toFixed(1) + ' Mbps' : '')],
-      ['Decoding', i.frames
-        ? i.decodeMs.toFixed(1) + ' ms a frame (' + Math.round((i.decodeMs / frameMs) * 100) + '% of the time available) · peak ' + Math.round(i.decodeMax) + ' ms'
-        : 'waiting'],
+      ['Format', formatLine(s, i)],
+      ['Decoding', decoding],
       ['Buffer', i.buffer.toFixed(1) + ' s ahead · ran dry ' + i.stalls + '× · fell behind ' + i.holds + '×'],
       ['Sound', i.audio + ' · realigned ' + i.resyncs + '×'],
       ['Server', i.serverSpeed
-        ? 'converting at ' + i.serverSpeed + '× real time' + (i.serverLimited ? ' (held back by the connection)' : '')
+        ? (i.codec === 'h264' ? 'fetching at ' : 'converting at ') + i.serverSpeed + '× real time' + (i.serverLimited ? ' (held back by the connection)' : '')
         : 'measuring…'],
-      ['Browser', browserLine]
+      ['Browser', browserLine()]
     ];
     box.innerHTML = '';
     rows.forEach(function (r) {
