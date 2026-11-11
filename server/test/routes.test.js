@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ROUTES, routeOrder, routeWorked, routeRefused, forgetRoutes, linkStatus, routeNotice } from '../src/youtube.js';
+import { ROUTES, routeOrder, routeWorked, routeRefused, forgetRoutes, linkStatus, routeNotice, whatEachHas } from '../src/youtube.js';
 import { findPlayable, ffmpegArgs } from '../src/stream.js';
 
 const quiet = (fn) => {
@@ -381,4 +381,60 @@ test('ffmpeg reconnects to a dropped file, but is not told to for a segmented st
   const listArgs = ffmpegArgs({ inputs: [list], height: 720, fps: 30, live: false }, 0, '720', 48000, 'h264').join(' ');
   assert.ok(!/-reconnect/.test(listArgs), 'or it would pause at the end of every segment');
   assert.match(listArgs, /-i https:\/\/m\.test\/list\.m3u8/);
+});
+
+// ---- which format carries the picture and which the sound ----
+
+test('a sound stream whose codec YouTube does not name still counts as the sound', () => {
+  // What yt-dlp really gives for the segmented stream: the picture names its
+  // codec and says it has no sound; the sound says it has no picture and
+  // names no codec at all.
+  assert.deepEqual(
+    whatEachHas([
+      { format_id: '312', vcodec: 'avc1.64002A', acodec: 'none' },
+      { format_id: '234', vcodec: 'none', acodec: null },
+    ]),
+    [
+      { hasVideo: true, hasAudio: false },
+      { hasVideo: false, hasAudio: true },
+    ]
+  );
+  assert.deepEqual(whatEachHas([{ vcodec: 'avc1.64002A', acodec: 'none' }, { vcodec: 'none' }])[1], { hasVideo: false, hasAudio: true }, 'missing altogether is the same as not known');
+  // The separate files name everything.
+  assert.deepEqual(
+    whatEachHas([
+      { vcodec: 'avc1.640028', acodec: 'none' },
+      { vcodec: 'none', acodec: 'mp4a.40.2' },
+    ]),
+    [
+      { hasVideo: true, hasAudio: false },
+      { hasVideo: false, hasAudio: true },
+    ]
+  );
+});
+
+test('not knowing is settled by what the other formats say', () => {
+  // One file with picture and sound together.
+  assert.deepEqual(whatEachHas([{ vcodec: 'avc1.42001E', acodec: 'mp4a.40.2' }]), [{ hasVideo: true, hasAudio: true }]);
+  // One format that names neither: it has to be both.
+  assert.deepEqual(whatEachHas([{}]), [{ hasVideo: true, hasAudio: true }]);
+  assert.deepEqual(whatEachHas([{ vcodec: 'avc1.42001E' }]), [{ hasVideo: true, hasAudio: true }]);
+  // A picture with nothing said about sound, next to a format that is sound for certain: the sound is the other one.
+  assert.deepEqual(
+    whatEachHas([{ vcodec: 'avc1.640028' }, { vcodec: 'none', acodec: 'mp4a.40.2' }]),
+    [
+      { hasVideo: true, hasAudio: false },
+      { hasVideo: false, hasAudio: true },
+    ]
+  );
+  // Neither says anything about sound: the one that isn't the picture has it.
+  assert.deepEqual(
+    whatEachHas([{ vcodec: 'avc1.640028' }, { vcodec: 'none' }]),
+    [
+      { hasVideo: true, hasAudio: false },
+      { hasVideo: false, hasAudio: true },
+    ]
+  );
+  // A video with no sound at all stays that way.
+  assert.deepEqual(whatEachHas([{ vcodec: 'avc1.640028', acodec: 'none' }]), [{ hasVideo: true, hasAudio: false }]);
 });

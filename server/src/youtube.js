@@ -288,6 +288,34 @@ export async function linkStatus(input, fetchImpl = fetch, lists = null) {
   }
 }
 
+/*
+ * Which of the formats yt-dlp picked carry the picture and which the sound.
+ *
+ * yt-dlp says 'none' for a format that has no picture (or no sound), names
+ * the codec when it knows it, and says nothing when it doesn't know. Not
+ * knowing isn't not having: the sound of a segmented stream comes with no
+ * codec named, and treating that as "no sound" plays the video silent.
+ *
+ * So: a named codec is a yes and 'none' is a no. If no format is a definite
+ * yes for the picture, the first one that might have it does; if none is a
+ * definite yes for the sound, the last one that might have it does (yt-dlp
+ * lists the picture first and the sound last). A format on its own that names
+ * neither therefore counts as having both.
+ */
+export function whatEachHas(formats) {
+  const has = (codec) => (codec === 'none' ? false : typeof codec === 'string' && codec ? true : null);
+  const out = formats.map((f) => ({ hasVideo: has(f.vcodec), hasAudio: has(f.acodec) }));
+  if (!out.some((o) => o.hasVideo === true)) {
+    const maybe = out.find((o) => o.hasVideo === null);
+    if (maybe) maybe.hasVideo = true;
+  }
+  if (!out.some((o) => o.hasAudio === true)) {
+    const maybe = [...out].reverse().find((o) => o.hasAudio === null);
+    if (maybe) maybe.hasAudio = true;
+  }
+  return out.map((o) => ({ hasVideo: o.hasVideo === true, hasAudio: o.hasAudio === true }));
+}
+
 // "This route has nothing for this video", as opposed to anything being wrong
 // with the video. One that can't be embedded has no "hls" stream, for one.
 export const NO_SUCH_FORMAT = /format is not available|no playable format/i;
@@ -337,13 +365,14 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
       throw err;
     }
     const formats = json.requested_formats && json.requested_formats.length ? json.requested_formats : [json];
-    const inputs = formats
-      .filter((f) => f && f.url)
-      .map((f) => ({
+    const picked = formats.filter((f) => f && f.url);
+    const each = whatEachHas(picked);
+    const inputs = picked
+      .map((f, i) => ({
         url: f.url,
         headers: f.http_headers || json.http_headers || {},
-        hasVideo: !!f.vcodec && f.vcodec !== 'none',
-        hasAudio: !!f.acodec && f.acodec !== 'none',
+        hasVideo: each[i].hasVideo,
+        hasAudio: each[i].hasAudio,
         fps: typeof f.fps === 'number' ? f.fps : null,
         vcodec: typeof f.vcodec === 'string' ? f.vcodec : '',
         // What YouTube says this one is, for the check tool: "234 m3u8_native mp4a.40.2 44100Hz 2ch".
@@ -371,7 +400,6 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
     // when a video won't start: e.g. "137+140 https via TVHTML5 from rr5---sn-x.googlevideo.com".
     const described = (() => {
       try {
-        const picked = formats.filter((f) => f && f.url);
         const first = new URL(picked[0].url);
         const ids = picked.map((f) => f.format_id).filter(Boolean).join('+');
         const protocols = [...new Set(picked.map((f) => f.protocol).filter(Boolean))].join('/');
@@ -381,11 +409,6 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
         return '';
       }
     })();
-    // A single muxed format may not report codecs; assume it has both.
-    if (inputs.length === 1 && !inputs[0].hasVideo && !inputs[0].hasAudio) {
-      inputs[0].hasVideo = true;
-      inputs[0].hasAudio = true;
-    }
     return {
       at: Date.now(), // when these links were looked up; they go stale
       // The moment every file of this video can be fetched. 0 when there is no wait.
