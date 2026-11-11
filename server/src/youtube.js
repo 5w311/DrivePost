@@ -196,6 +196,20 @@ export function streamInfo(id, quality) {
         tbr: typeof f.vbr === 'number' && f.vbr > 0 ? f.vbr : typeof f.tbr === 'number' ? f.tbr : null,
       }));
     if (!inputs.length) throw new Error('No playable format found');
+    // Which of YouTube's formats these are and how they are delivered, for the log
+    // when a video won't start: e.g. "137+140 https via TVHTML5 from rr5---sn-x.googlevideo.com".
+    const route = (() => {
+      try {
+        const picked = formats.filter((f) => f && f.url);
+        const first = new URL(picked[0].url);
+        const ids = picked.map((f) => f.format_id).filter(Boolean).join('+');
+        const protocols = [...new Set(picked.map((f) => f.protocol).filter(Boolean))].join('/');
+        const client = first.searchParams.get('c');
+        return `${ids || '?'} ${protocols || '?'}${client ? ` via ${client}` : ''} from ${first.hostname}`;
+      } catch {
+        return '';
+      }
+    })();
     // A single muxed format may not report codecs; assume it has both.
     if (inputs.length === 1 && !inputs[0].hasVideo && !inputs[0].hasAudio) {
       inputs[0].hasVideo = true;
@@ -211,6 +225,7 @@ export function streamInfo(id, quality) {
       // What YouTube encoded the picture with (avc1 = H.264) and at what rate.
       vcodec: (inputs.find((i) => i.hasVideo) || {}).vcodec || (typeof json.vcodec === 'string' ? json.vcodec : ''),
       tbr: (inputs.find((i) => i.hasVideo) || {}).tbr || null,
+      route,
     };
   });
 }

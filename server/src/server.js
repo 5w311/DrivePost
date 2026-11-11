@@ -553,7 +553,12 @@ function handleControl(ws, profile) {
       const message = String(msg.message || 'Playback error').slice(0, 300);
       const who = profileLabel(profile);
       console.log(`[car${who ? ` ${who}` : ''}] ${message}`);
-      broadcast(profile, { type: 'toast', message });
+      // The car that hit an error already shows it in full, so only the
+      // other screens get it as a notice. A note is shown on the car too.
+      const data = JSON.stringify({ type: 'toast', message });
+      for (const c of controlClients) {
+        if (c.profile === profile && c.ws.readyState === 1 && !(msg.type === 'carError' && c === client)) c.ws.send(data);
+      }
     }
   });
 

@@ -147,6 +147,31 @@ function sendJson(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
+// Why ffmpeg gave up, in words. Its own last line starts with the whole
+// media link, which is hundreds of characters long, means nothing on a car
+// screen, and has this server's home address in it. So links are taken out
+// and the part that says what happened is kept.
+export function failureReason(stderr, code) {
+  const lines = String(stderr || '')
+    .split('\n')
+    .map((l) => l.replace(/https?:\/\/\S+/g, '').replace(/^\[[^\]]*\]\s*/, '').replace(/^[\s:]+/, '').trim())
+    .filter(Boolean);
+  const telling = /returned|HTTP error|forbidden|too many|timed out|refused|reset|unreachable|resolve|invalid data|not found|end of file|i\/o error/i;
+  const raw = [...lines].reverse().find((l) => telling.test(l)) || lines.pop() || `ffmpeg exited with ${code}`;
+  // The line that names the status isn't always the last one ("HTTP error 429
+  // Too Many Requests" is followed by a vaguer "Server returned 4XX").
+  const all = lines.join('\n');
+  const status = (all.match(/HTTP error (\d{3})/i) || all.match(/returned (\d{3})\b/i) || [])[1];
+  let said;
+  if (status === '403') said = 'YouTube refused to send it (403 Forbidden)';
+  else if (status === '429') said = 'YouTube is turning this server away for now (429 Too Many Requests)';
+  else if (status === '404' || status === '410') said = `the link YouTube gave for it has stopped working (${status})`;
+  else if (status && status[0] === '5') said = `YouTube's server had a problem (${status})`;
+  else if (/timed out|refused|reset|unreachable|resolve|network/i.test(raw)) said = `this server couldn't reach YouTube (${raw.slice(0, 80)})`;
+  else said = raw.slice(0, 140);
+  return { said, raw: raw.slice(0, 300) };
+}
+
 // One car connection = one ffmpeg process.
 export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
   if (!AUDIO_RATES.includes(audioRate)) audioRate = 48000;
@@ -304,12 +329,13 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     splitter.flush();
     logSpeed();
     if (code !== 0) {
-      const line = stderr.trim().split('\n').pop() || `ffmpeg exited with ${code}`;
-      console.warn(`[stream ${id}] ffmpeg exited ${code}: ${line}`);
+      const why = failureReason(stderr, code);
+      // For whoever reads the log: what failed and which way the video was being fetched.
+      console.warn(`[stream ${id}] ffmpeg exited ${code} ${lastSentPts === null ? 'before sending anything' : 'partway'}: ${why.raw} | ${quality}p ${codec}, ${info.route || 'unknown route'}, starting at ${Math.round(startAt)}s`);
       // Media links expire; make the next attempt fetch fresh ones.
       forgetStream(id, quality);
       if (lastSentPts === null) {
-        sendJson(ws, { type: 'error', message: `Couldn't play this video (${line.slice(0, 160)})` });
+        sendJson(ws, { type: 'error', message: `Couldn't play this video: ${why.said}` });
         ws.close();
         return;
       }
