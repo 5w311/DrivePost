@@ -17,6 +17,22 @@
   <div class="wrap">
 
     <section class="card">
+      <div class="card-head"><h2>Profiles</h2></div>
+      <div class="card-body">
+        <p id="whoAmI" class="muted" style="margin-top:0">…</p>
+        <div id="ownerProfiles" class="hidden">
+          <div id="profileList" class="plist"></div>
+          <form id="addProfile" class="add-profile" autocomplete="off">
+            <input id="newName" type="text" placeholder="Name, like Maria or Model Y" maxlength="24" autocomplete="off">
+            <input id="newPass" type="text" placeholder="A passcode for them" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
+            <button class="primary" type="submit">Add profile</button>
+          </form>
+          <p class="muted" style="font-size:14px;margin-bottom:0">Each profile has its own passcode, Up Next, Recent, settings, paired phones and Send to Car link. Tell the person their passcode: they type it once in their car at this same address, and their phones pair from their car's screen.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
       <div class="card-head"><h2>Share from iPhone</h2></div>
       <div class="card-body">
         <p class="muted" style="margin-top:0">Add the <b>Send to Car</b> Shortcut once. After that, tap Share in YouTube, Safari or any app and pick <b>Send to Car</b>.</p>
@@ -83,7 +99,7 @@
           <button id="newToken" type="button">New share token</button>
           <button id="logoutAll" type="button">Sign out everywhere</button>
         </div>
-        <p class="muted" style="font-size:14px">A new share token changes your personal link, so the Shortcut stops working until you paste the new link into it (open Send to Car in Shortcuts and replace the address). Signing out everywhere signs out the car and every phone.</p>
+        <p class="muted" style="font-size:14px">A new share token changes your personal link, so the Shortcut stops working until you paste the new link into it (open Send to Car in Shortcuts and replace the address). Signing out everywhere signs out this profile's car and every phone on it.</p>
       </div>
     </section>
   </div>

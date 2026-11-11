@@ -21,7 +21,8 @@ const PRESETS = {
 const AUDIO_RATES = [32000, 44100, 48000];
 const HEADER_BYTES = 9; // float64 timestamp + 1 byte kind (0 video, 1 audio)
 
-const active = new Set();
+// Streams that are running, per profile, so one profile's cars can't push out another's.
+const activeByGroup = new Map();
 
 // MPEG-1 only allows a handful of frame rates. Keep the video's own rate when
 // it's one of them (films stay 24, European TV stays 25) and halve 50/60.
@@ -147,7 +148,7 @@ function sendJson(ws, msg) {
 }
 
 // One car connection = one ffmpeg process.
-export async function handleStream(ws, { id, startAt, quality, audioRate, want }) {
+export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
   if (!AUDIO_RATES.includes(audioRate)) audioRate = 48000;
   let ff = null;
   let closed = false;
@@ -160,6 +161,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want }
   let passthrough = false;
 
   const entry = { close: () => ws.close(4000, 'replaced') };
+  if (!activeByGroup.has(group)) activeByGroup.set(group, new Set());
+  const active = activeByGroup.get(group);
   active.add(entry);
   while (active.size > config.maxStreams) {
     const oldest = active.values().next().value;
@@ -244,6 +247,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want }
   ws.on('close', () => {
     closed = true;
     active.delete(entry);
+    if (!active.size && activeByGroup.get(group) === active) activeByGroup.delete(group);
     clearInterval(flowTimer);
     if (ff) {
       killed = true;

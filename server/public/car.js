@@ -159,6 +159,8 @@
     version: function (msg) {
       DT.noteVersion(msg.version);
       $('#feedbackBtn').classList.toggle('hidden', msg.feedback === false);
+      // With more than one profile on the server, say whose this is.
+      $('.passenger-note').textContent = 'For passengers while the car is moving.' + (msg.profile ? ' Profile: ' + msg.profile : '');
     },
     state: function (msg) {
       state = msg.state;

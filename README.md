@@ -10,6 +10,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Theater button:** shows or hides the lists (Up Next, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
 - **Fullscreen:** tap the video and use the corner button, or switch it from the phone. The video then fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
+- **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, settings, paired phones and Send to Car link, all at the same address.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
 - **Two video formats:** **H.264** passes YouTube's own video straight through, and the browser decodes it (WebCodecs). It's sharper, usually uses less data, and is almost no work for the server. **MPEG-1** is converted on the server and decoded in the page by [JSMpeg](https://github.com/phoboslab/jsmpeg), which works in any browser. The car uses H.264 when it can and switches to MPEG-1 by itself when it can't.
 - **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
@@ -17,7 +18,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Steps down by itself:** if the screen can't keep up, or the connection keeps running dry, the car drops one quality level for that video and says why. The next video starts at your chosen quality again.
 - **Feedback button:** shows a QR code in the car. Scanning it opens a new issue on the project's GitHub page on your phone, with the car's technical details (browser, format, buffer and so on) already filled in. Nothing about the video or your server is included. Set `FEEDBACK_URL` in `.env` to point it at your own fork, or leave it empty to hide the button.
 - **Stats readout:** tap **Stats** under the video to see resolution, format, decoding, buffer, data rate, how fast your server is working and what the browser can decode.
-- **Private:** one passcode, devices stay signed in, and the iPhone Shortcut uses its own share token, which can only add videos and can be replaced at any time.
+- **Private:** a passcode per profile, devices stay signed in, and the iPhone Shortcut uses its own share token, which can only add videos and can be replaced at any time.
 
 ## How it works
 
@@ -83,6 +84,20 @@ If the browser's H.264 decoder reports an error, stops returning pictures, or ca
 
 5. On your phone, tap **Phone** on the car screen and scan the code. Open **Setup & sharing** at the bottom of the remote to set up sharing from your phone.
 
+## Profiles
+
+A profile is one person's, or one car's, own copy of everything: what's playing, Up Next, Recent, resume points, quality and format settings, paired phones and the Send to Car link. The passcode a device signs in with decides which profile it's in, so everyone uses the same address.
+
+- The **main profile** is the one you set up: its passcode is `DRIVE_PASSCODE` in `.env`. Only it can manage profiles.
+- To add one, open **Setup & sharing** on a device signed in to the main profile, and under **Profiles** enter a name and a passcode for the person. Tell them the passcode. They type it once in their car, and pair their phones from their own car's screen.
+- From the same list you can rename a profile, give it a new passcode, sign its devices out, or remove it. Removing a profile deletes its Up Next, history and settings.
+- Passcodes have to differ from each other, because the passcode is what tells profiles apart. Added passcodes are stored scrambled.
+- Once there's more than one profile, the car page and the phone remote show which profile they're on.
+
+A server set up before profiles existed keeps working unchanged: its car, phones and Shortcut become the main profile.
+
+Each car that's playing needs its own share of the server and of your upload. Passing H.264 through is light enough for a Raspberry Pi 4 to serve two or three cars; converting to MPEG-1 at 1080p is one car's worth on a Pi 4. `MAX_STREAMS` is counted per profile.
+
 ## Sharing from an iPhone
 
 iPhones don't let a web app appear in the share sheet, so sharing goes through a Shortcut called **Send to Car**. After that, tap Share in YouTube, Safari or any app and pick it. If nothing is playing, the video starts in the car. Otherwise it goes to Up Next.
@@ -144,7 +159,7 @@ Notices from the car, such as a quality step-down or a switch to MPEG-1, show up
 
 ## Moving to another machine
 
-Your sign-ins, Up Next, history and resume points live in the `drivetest-data` volume. To move them, say from a Raspberry Pi to a PC:
+Your sign-ins, profiles, Up Next, history and resume points live in the `drivetest-data` volume. To move them, say from a Raspberry Pi to a PC:
 
 ```sh
 # On the old machine

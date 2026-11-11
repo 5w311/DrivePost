@@ -14,6 +14,7 @@
   var control = new DT.Control('remote', {
     version: function (msg) {
       DT.noteVersion(msg.version);
+      $('#who').textContent = msg.profile || ''; // whose profile, once there's more than one
     },
     state: function (msg) {
       if (DT.stale && !typing() && DT.reloadIfStale()) return;

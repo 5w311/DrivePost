@@ -119,8 +119,11 @@
       var h = self.handlers[msg.type];
       if (h) h(msg);
     };
-    ws.onclose = function () {
+    ws.onclose = function (ev) {
       if (self.handlers.online) self.handlers.online(false);
+      // Closed because this device was signed out (or keeps failing to get
+      // back in): ask the server, which sends us to the sign-in page if so.
+      if ((ev && ev.code === 4401) || self.retry === 3) DT.api('/api/state').catch(function () {});
       var delay = Math.min(10000, 500 * Math.pow(2, self.retry++));
       setTimeout(function () { self.connect(); }, delay);
     };

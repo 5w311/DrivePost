@@ -345,7 +345,8 @@ body.remote { padding-bottom: 40px; }
   border-bottom: 1px solid var(--line);
 }
 .remote-head .brand { font-size: 18px; }
-.remote-head .car-status { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.remote-head .who { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.remote-head .car-status { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
 .wrap { max-width: 640px; margin: 0 auto; padding: 0 14px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 14px; overflow: hidden; }
 .card-head { padding: 12px 14px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
@@ -393,6 +394,13 @@ a.btn.primary { background: var(--accent); border-color: var(--accent); color: v
   word-break: break-all; user-select: all;
 }
 .kv { display: grid; gap: 6px; margin: 10px 0; }
+/* Profiles on the setup page */
+.plist { display: grid; gap: 8px; margin-bottom: 12px; }
+.prow { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.pname { overflow-wrap: anywhere; }
+.pbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+.pbtns button { min-height: 40px; padding: 0 12px; font-size: 15px; }
+.add-profile { display: grid; gap: 8px; }
 .more { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 4px; }
 .more summary { cursor: pointer; color: var(--muted); font-weight: 650; min-height: 44px; display: flex; align-items: center; }
 .more[open] summary { margin-bottom: 6px; }
