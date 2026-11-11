@@ -166,14 +166,31 @@ const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
  * while, and when the first choice is behind a long wait it starts with
  * one that is ready.
  *
- *   direct  the separate picture and sound files, up to 1080p. Fetched at
- *           full speed and quick to skip around in, but usually behind a
- *           wait of a few seconds.
  *   hls     the stream in short segments that YouTube gives embedded
- *           players, up to 1080p. No ad break in front of it.
+ *           players, up to 1080p. No ad break in front of it, and it
+ *           comes in many times faster than it plays.
+ *   direct  the separate picture and sound files, up to 1080p. Usually
+ *           behind a wait of a few seconds, and YouTube feeds a plain
+ *           download of them at barely twice the speed they play at.
  *   basic   the one small ready-made file (360p) every video has.
+ *
+ * (Measured from a home connection in November 2026 with
+ * src/check-youtube.js: hls no wait and 23x, direct a 4 second wait and
+ * 1.8x, basic a 5 second wait and 200x.)
  */
 export const ROUTES = [
+  {
+    name: 'hls',
+    // The usual sources plus the embedded player, which is the one that has these streams.
+    args: ['--extractor-args', 'youtube:player_client=default,web_embedded'],
+    format: (height) =>
+      [
+        `bv*[height<=${height}][vcodec^=avc1][protocol^=m3u8]+ba[protocol^=m3u8]`,
+        `b[height<=${height}][vcodec^=avc1][protocol^=m3u8]`,
+        `bv*[height<=${height}][protocol^=m3u8]+ba[protocol^=m3u8]`,
+        `b[height<=${height}][protocol^=m3u8]`,
+      ].join('/'),
+  },
   {
     name: 'direct',
     args: [],
@@ -186,18 +203,6 @@ export const ROUTES = [
         `bv*[height<=${height}][protocol^=http]+ba[protocol^=http]`,
         `b[height<=${height}]`,
         'b',
-      ].join('/'),
-  },
-  {
-    name: 'hls',
-    // The usual sources plus the embedded player, which is the one that has these streams.
-    args: ['--extractor-args', 'youtube:player_client=default,web_embedded'],
-    format: (height) =>
-      [
-        `bv*[height<=${height}][vcodec^=avc1][protocol^=m3u8]+ba[protocol^=m3u8]`,
-        `b[height<=${height}][vcodec^=avc1][protocol^=m3u8]`,
-        `bv*[height<=${height}][protocol^=m3u8]+ba[protocol^=m3u8]`,
-        `b[height<=${height}][protocol^=m3u8]`,
       ].join('/'),
   },
   {
@@ -247,6 +252,7 @@ export function routeRefused(name, why) {
 export function forgetRoutes() {
   using = null;
   refused.clear();
+  nothingFor.clear();
 }
 
 export function routeNotice(name) {
@@ -255,8 +261,10 @@ export function routeNotice(name) {
 
 // Does this link really hand over the video? Asks for the first few bytes
 // (or, for a segmented stream, its list and then the first segment) and
-// returns the answer's status: 200 or 206 means yes, 403 is a refusal.
-export async function linkStatus(input, fetchImpl = fetch) {
+// returns the answer's status: 200 or 206 means yes, 403 is a refusal. A
+// segmented stream's list is also put in `lists` (a Map, by input) when one is
+// given, for starting partway through it: see segment-list.js.
+export async function linkStatus(input, fetchImpl = fetch, lists = null) {
   const ask = async (url, range) => {
     const res = await fetchImpl(url, {
       headers: { ...(input.headers || {}), ...(range ? { Range: 'bytes=0-1023' } : {}) },
@@ -269,6 +277,7 @@ export async function linkStatus(input, fetchImpl = fetch) {
   if (!input.list) return (await ask(input.url, true)).status;
   const list = await ask(input.url, false);
   if (list.status !== 200) return list.status;
+  if (lists) lists.set(input, list.text);
   // The first line that isn't a comment is the first segment (or a list of its own).
   const first = list.text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
   if (!first) return 200;
@@ -278,6 +287,14 @@ export async function linkStatus(input, fetchImpl = fetch) {
     return 200; // couldn't tell; ffmpeg will find out
   }
 }
+
+// "This route has nothing for this video", as opposed to anything being wrong
+// with the video. One that can't be embedded has no "hls" stream, for one.
+export const NO_SUCH_FORMAT = /format is not available|no playable format/i;
+// Remembered for a while, so playing such a video doesn't start with a lookup
+// that is known to come back empty.
+const NOTHING_FOR_MS = 60 * 60 * 1000;
+const nothingFor = new Map(); // "id:height:route" -> when that was found out
 
 // Media links (and headers) for ffmpeg to read, got by one of the routes above.
 export function streamInfo(id, quality, routeName = ROUTES[0].name) {
@@ -302,10 +319,23 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
       readyAt: 0,
     });
   }
-  return streamCache.get(`${id}:${height}:${route.name}`, async () => {
-    const json = JSON.parse(
-      await ytdlp([...route.args, '-J', '--no-playlist', '-f', route.format(height), `https://www.youtube.com/watch?v=${id}`], 60000)
-    );
+  const key = `${id}:${height}:${route.name}`;
+  if (Date.now() - (nothingFor.get(key) || 0) < NOTHING_FOR_MS) {
+    return Promise.reject(new Error(`Requested format is not available by the "${route.name}" route`));
+  }
+  return streamCache.get(key, async () => {
+    let json;
+    try {
+      json = JSON.parse(
+        await ytdlp([...route.args, '-J', '--no-playlist', '-f', route.format(height), `https://www.youtube.com/watch?v=${id}`], 60000)
+      );
+    } catch (err) {
+      if (NO_SUCH_FORMAT.test(err.message || '')) {
+        nothingFor.set(key, Date.now());
+        if (nothingFor.size > 500) nothingFor.delete(nothingFor.keys().next().value);
+      }
+      throw err;
+    }
     const formats = json.requested_formats && json.requested_formats.length ? json.requested_formats : [json];
     const inputs = formats
       .filter((f) => f && f.url)
@@ -372,8 +402,16 @@ export function prewarm(id, quality) {
   const key = `${id}:${quality}`;
   const failedAt = prewarmFailed.get(key);
   if (failedAt && Date.now() - failedAt < 60000) return;
-  // By the route a video would be played by right now.
-  streamInfo(id, quality, routeOrder()[0]).then(
+  // By the route a video would be played by right now. If that one has
+  // nothing for this video, by the next: its wait (see ROUTES) is then over
+  // by the time the video comes up.
+  const order = routeOrder();
+  const look = (i) =>
+    streamInfo(id, quality, order[i]).catch((err) => {
+      if (i + 1 < order.length && NO_SUCH_FORMAT.test(err.message || '')) return look(i + 1);
+      throw err;
+    });
+  look(0).then(
     () => prewarmFailed.delete(key),
     () => {
       prewarmFailed.set(key, Date.now());

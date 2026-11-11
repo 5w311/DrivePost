@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, TEST_PATTERN_ID } from './youtube.js';
+import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, NO_SUCH_FORMAT, TEST_PATTERN_ID } from './youtube.js';
+import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
 // How far ahead of the car's playback we transcode before pausing ffmpeg.
@@ -87,7 +88,7 @@ export function canEncodeH264() {
   return x264Check;
 }
 
-function inputArgs(input, startAt, live) {
+function inputArgs(input, startAt, live, cut) {
   const a = [];
   if (input.lavfi) {
     // Generated test source: seeking would render every skipped frame, so
@@ -105,15 +106,34 @@ function inputArgs(input, startAt, live) {
     .map(([k, v]) => `${k}: ${v}\r\n`)
     .join('');
   if (headers) a.push('-headers', headers);
-  if (startAt > 0 && !live) a.push('-ss', String(startAt));
-  a.push('-i', input.url);
+  // A list cut to begin at the right segment is read from its top: no seeking.
+  if (startAt > 0 && !live && !cut) a.push('-ss', String(startAt));
+  a.push('-i', cut ? cut.url : input.url);
   return a;
 }
 
-export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'mpeg1') {
+// Every segmented input cut to start at `startAt`, or nothing: a mix of cut
+// and seeking inputs would put picture and sound on different clocks.
+function usableCuts(info, startAt, cuts) {
+  const lists = info.inputs.filter((i) => i.list);
+  return startAt > 0 && !info.live && cuts && lists.length > 0 && lists.every((i) => cuts.get(i)) ? cuts : null;
+}
+
+/*
+ * `cuts` is for a segmented stream started partway through (segment-list.js):
+ * a Map from each such input to { url, begins }, the list cut to begin with
+ * the segment that holds `startAt` and the time that segment begins at.
+ */
+export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'mpeg1', cuts = null) {
   const plan = streamPlan(info, quality);
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
-  info.inputs.forEach((input) => args.push(...inputArgs(input, startAt, info.live)));
+  cuts = usableCuts(info, startAt, cuts);
+  // A segmented stream's picture and sound come as two lists on one shared
+  // clock. Keeping that clock, instead of letting ffmpeg restart each at
+  // zero, is what keeps them in step, from the start and after a skip.
+  const sharedClock = !info.live && info.inputs.every((i) => i.list) && (!(startAt > 0) || !!cuts);
+  if (sharedClock) args.push('-copyts');
+  info.inputs.forEach((input) => args.push(...inputArgs(input, startAt, info.live, cuts && cuts.get(input))));
 
   const v = info.inputs.findIndex((i) => i.hasVideo);
   const a = info.inputs.findIndex((i) => i.hasAudio);
@@ -133,14 +153,24 @@ export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'm
     // Pass YouTube's H.264 through as it is; only the container changes.
     args.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
   } else {
+    // Converted picture from a cut list: leave out the frames before the spot asked for.
+    const early = cuts ? Math.max(0, startAt - cuts.get(info.inputs[v]).begins) : 0;
+    const fromSpot = early > 0 ? `select='gte(t-start_t,${early.toFixed(3)})',` : '';
     args.push(
-      '-vf', `scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
+      '-vf', `${fromSpot}scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
       '-c:v', 'mpeg1video', '-b:v', `${plan.kbps}k`, '-maxrate', `${max}k`, '-bufsize', `${max}k`,
       '-bf', '0', '-g', String(Math.round(plan.rate.fps * 2))
     );
   }
-  if (a >= 0) args.push('-c:a', 'mp2', '-b:a', `${plan.audioKbps}k`, '-ar', String(audioRate), '-ac', '2');
-  else args.push('-an');
+  if (a >= 0) {
+    if (cuts) {
+      // The sound's segment begins before the spot asked for. Drop the part
+      // before it, counted in samples, so the sound begins exactly there.
+      const early = Math.max(0, startAt - cuts.get(info.inputs[a]).begins);
+      args.push('-af', `aresample=${audioRate},atrim=start_sample=${Math.round(early * audioRate)}`);
+    }
+    args.push('-c:a', 'mp2', '-b:a', `${plan.audioKbps}k`, '-ar', String(audioRate), '-ac', '2');
+  } else args.push('-an');
   // The tiny muxdelay also makes ffmpeg write each audio frame as its own
   // packet with its own timestamp, which the splitter relies on.
   args.push('-sn', '-dn', '-f', 'mpegts', '-muxdelay', '0.001', '-muxpreload', '0', 'pipe:1');
@@ -192,13 +222,15 @@ export async function findPlayable(id, quality, deps = {}) {
   const now = deps.now || Date.now;
   const order = id === TEST_PATTERN_ID ? ['direct'] : routeOrder();
   let refused = null; // YouTube's answer when a route's link was turned down
-  let lookupError = null;
+  let lookupError = null; // something wrong with the video, or with looking it up
+  let nothingThere = false; // a route simply had no such file for it
   const later = []; // routes whose links can't be used yet
+  const lists = new Map(); // the segment lists fetched while checking, by input
 
   // Do this route's links deliver? Stale ones are replaced before the route is blamed.
   const delivers = async (name, found) => {
     const check = async (info) => {
-      const answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => status(i)));
+      const answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => status(i, undefined, lists)));
       return answers.find((a) => a !== 200 && a !== 206);
     };
     let bad = await check(found);
@@ -225,13 +257,18 @@ export async function findPlayable(id, quality, deps = {}) {
         continue;
       }
       const result = await delivers(name, found);
-      if (result.info) return { info: result.info };
+      if (result.info) return { info: result.info, lists };
       if (result.later) later.push({ name, found: result.later });
     } catch (err) {
+      // "No such format" is about this route: on to the next.
+      if (NO_SUCH_FORMAT.test(err.message || '')) {
+        nothingThere = true;
+        continue;
+      }
       lookupError = lookupError || err;
-      // "No such format" is about this route. Anything else (private, removed,
-      // age-restricted...) is about the video, and no other route will change it.
-      if (!/format is not available|no playable format|timed out|fetch failed|aborted/i.test(err.message || '')) break;
+      // Anything else that isn't a hiccup (private, removed, age-restricted...)
+      // is about the video, and no other route will change it.
+      if (!/timed out|fetch failed|aborted/i.test(err.message || '')) break;
     }
   }
 
@@ -249,14 +286,16 @@ export async function findPlayable(id, quality, deps = {}) {
     }
     try {
       const result = await delivers(name, found);
-      if (result.info) return { info: result.info };
+      if (result.info) return { info: result.info, lists };
     } catch (err) {
-      lookupError = lookupError || err;
+      if (NO_SUCH_FORMAT.test(err.message || '')) nothingThere = true;
+      else lookupError = lookupError || err;
     }
   }
 
   if (refused !== null) return { message: `Couldn't play this video: ${refusalReason(refused)}` };
-  return { message: `Couldn't load this video: ${lookupError ? lookupError.message : 'nothing playable was found'}` };
+  if (lookupError) return { message: `Couldn't load this video: ${lookupError.message}` };
+  return { message: `Couldn't load this video: ${nothingThere ? 'YouTube has no version of it that this server can play' : 'nothing playable was found'}` };
 }
 
 // Why ffmpeg gave up, in words. Its own last line starts with the whole
@@ -284,8 +323,36 @@ export function failureReason(stderr, code) {
   return { said, raw: raw.slice(0, 300) };
 }
 
+/*
+ * For a stream started partway through: each segmented input's list, cut to
+ * begin with the segment that holds `startAt` and made fetchable by ffmpeg
+ * (segment-list.js). `lists` are the lists as fetched moments ago. Returns a
+ * Map from input to { url, begins }, or null when there is nothing to cut or
+ * a list can't be cut; ffmpeg then seeks by itself, as it does in a file.
+ * Whatever was handed over is added to `handedOver`, to be taken away again
+ * when the stream closes.
+ */
+export async function cutLists(info, startAt, lists, handedOver = []) {
+  const segmented = info.inputs.filter((i) => i.list);
+  if (!(startAt > 0) || info.live || !lists || !segmented.length) return null;
+  const cuts = new Map();
+  for (const input of segmented) {
+    const cut = lists.has(input) ? trimList(lists.get(input), input.url, startAt) : null;
+    if (!cut) return null;
+    try {
+      const list = await offerList(cut.text);
+      handedOver.push(list);
+      cuts.set(input, { url: list.url, begins: cut.begins });
+    } catch {
+      return null;
+    }
+  }
+  return cuts;
+}
+
 // One car connection = one ffmpeg process.
 export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
+  const handedOver = []; // lists made fetchable for this stream's ffmpeg
   if (!AUDIO_RATES.includes(audioRate)) audioRate = 48000;
   let ff = null;
   let closed = false;
@@ -384,6 +451,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
 
   ws.on('close', () => {
     closed = true;
+    handedOver.forEach((list) => list.done());
     active.delete(entry);
     if (!active.size && activeByGroup.get(group) === active) activeByGroup.delete(group);
     clearInterval(flowTimer);
@@ -425,9 +493,20 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   const notice = routeNotice(info.routeName);
   if (notice && id !== TEST_PATTERN_ID && noticeDue(group, info.routeName)) sendJson(ws, { type: 'notice', message: notice });
 
+  // Starting partway through a segmented stream: give ffmpeg lists that begin there.
+  const cuts = await cutLists(info, startAt, playable.lists, handedOver);
+  playable.lists = null; // they can be large, and the stream may run for hours
+  if (closed) {
+    handedOver.forEach((list) => list.done());
+    return;
+  }
+  if (!cuts && startAt > 0 && !info.live && info.inputs.some((i) => i.list)) {
+    console.warn(`[stream ${id}] couldn't cut the segment list to start at ${Math.round(startAt)}s; ffmpeg is seeking in it by itself, so picture and sound may be out of step`);
+  }
+
   let args;
   try {
-    args = ffmpegArgs(info, startAt, quality, audioRate, codec);
+    args = ffmpegArgs(info, startAt, quality, audioRate, codec, cuts);
   } catch (err) {
     sendJson(ws, { type: 'error', message: err.message });
     ws.close();

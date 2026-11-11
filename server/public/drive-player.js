@@ -296,6 +296,8 @@
       }
       this.gotKey = true;
     }
+    // A decoder that has shut down says so, whichever notices first: this or the regular check.
+    if (this.decoder.state === 'closed') return this.fail('decoder closed');
     try {
       if (!this.configured) {
         var sps = info.sps;

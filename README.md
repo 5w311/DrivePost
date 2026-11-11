@@ -47,11 +47,17 @@ Two things can stand between looking a video up and playing it:
 
 So the server has three routes and doesn't count on any one of them:
 
-- **direct:** the separate picture and sound files, up to 1080p. Fetched at full speed and quick to skip around in, but usually behind a wait of a few seconds.
-- **hls:** the stream in short segments that YouTube gives embedded players, also up to 1080p. No ad break in front of it.
+- **hls:** the stream in short segments that YouTube gives embedded players, up to 1080p. No ad break in front of it, and it comes in many times faster than it plays. This is the first choice.
+- **direct:** the separate picture and sound files, also up to 1080p. Usually behind a wait of a few seconds, and YouTube feeds a plain download of them at barely twice the speed they play at. Used for videos that have no stream, such as ones that can't be embedded.
 - **basic:** the one small ready-made 360p file every video has.
 
-Before playing, the server asks for the first bytes of what it was given. If YouTube refuses, it moves to the next route, remembers that, and comes back to the better route later. If the first choice is behind a wait of more than about 15 seconds, it starts with a route that is ready instead. A wait of 4 seconds or more is shown in the car, and so is having only the basic file (once an hour).
+(Measured from a home connection in November 2026: hls no wait and 23x, direct a 4 second wait and 1.8x, basic a 5 second wait and 200x.)
+
+Before playing, the server asks for the first bytes of what it was given. If YouTube refuses, it moves to the next route, remembers that, and comes back to the better route later. A route that simply has nothing for one video is skipped for that video. If the first choice is behind a wait of more than about 15 seconds, it starts with a route that is ready instead. A wait of 4 seconds or more is shown in the car, and so is having only the basic file (once an hour).
+
+### Skipping around in a segmented stream
+
+To start partway through (a skip, a resume, a change of quality), the server doesn't let ffmpeg seek in the stream's list of segments. ffmpeg's seeking there can begin the picture a whole segment late, and can begin the sound at the start of its segment while labelling it as the spot asked for, which leaves the sound seconds out of step. Instead the server writes ffmpeg a shorter list that begins with the segment holding the spot, hands it over from a small web server of its own (this machine only), and keeps the stream's own timestamps. The picture begins on that segment's first frame, which the car decodes without showing, and the sound is cut to begin exactly at the spot. See `server/src/segment-list.js`.
 
 ### H.264 and MPEG-1
 
@@ -214,7 +220,7 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 
 | Symptom | Check |
 |---|---|
-| Test pattern plays, YouTube doesn't, or videos keep stopping to load | Run `docker compose exec -T drivepost node src/check-youtube.js`. It tries each way the server has of getting a video (see "Getting the video from YouTube"), and says which ones YouTube lets through from your connection right now, how long a wait each is behind, and how fast the video comes in compared with how fast it plays. There are no links in the output. If none work, yt-dlp probably needs updating (restart the container). Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
+| Test pattern plays, YouTube doesn't, or videos keep stopping to load | Run `docker compose exec -T drivepost node src/check-youtube.js`. It tries each way the server has of getting a video (see "Getting the video from YouTube"), and says which ones YouTube lets through from your connection right now, how long a wait each is behind, how fast the video comes in compared with how fast it plays, and how a skip lands. There are no links in the output. If none work, yt-dlp probably needs updating (restart the container). Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
 | "YouTube refused to send it (403 Forbidden)" | YouTube handed out links for the video and then refused to serve them, on every route. Run the check above. This is on YouTube's side and usually clears up by itself or with a yt-dlp update. |
 | The picture is only 360p and a notice says so | YouTube is refusing the better routes from your connection, and the basic file is all that gets through. The server tries the better ones again after half an hour, then less often, and switches back by itself. |
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
