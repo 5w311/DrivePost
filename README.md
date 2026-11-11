@@ -150,7 +150,7 @@ Anything pushed to the branch this machine follows gets installed on it, so keep
 Each time a video starts, the log reports how fast the machine gets it ready:
 
 ```sh
-docker compose logs -f drivetest
+docker compose logs -f drivepost
 # [stream dQw4w9WgXcQ] 1080p passing H.264 through at 31.0x real time (OK)
 # [stream dQw4w9WgXcQ] 480p converting at 2.6x real time (OK)
 ```
@@ -161,26 +161,26 @@ Notices from the car, such as a quality step-down or a switch to MPEG-1, show up
 
 ## Moving to another machine
 
-Your sign-ins, profiles, Up Next, history and resume points live in the `drivetest-data` volume. To move them, say from a Raspberry Pi to a PC:
+Your sign-ins, profiles, Up Next, history and resume points live in a Docker volume (`drivetest-data` in `docker-compose.yml`; it kept the name it had before the app was renamed). To move them, say from a Raspberry Pi to a PC:
 
 ```sh
-# On the old machine
+# On the old machine, in the app's folder
 docker compose --profile tunnel down
-docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine tar czf /backup/drivetest-data.tgz -C /data .
+docker compose run --rm --no-deps --user root --entrypoint sh -v "$PWD":/backup drivepost -c 'tar czf /backup/drivepost-data.tgz -C /data .'
 
-# Copy drivetest-data.tgz and .env to the new machine's DrivePost folder, then:
-docker volume create drivetest_drivetest-data
-docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine sh -c "tar xzf /backup/drivetest-data.tgz -C /data && chown -R 1000:1000 /data"
-docker compose --profile tunnel up -d --build
+# Clone the repo on the new machine, copy drivepost-data.tgz and .env into its folder, then:
+docker compose build
+docker compose run --rm --no-deps --user root --entrypoint sh -v "$PWD":/backup drivepost -c 'tar xzf /backup/drivepost-data.tgz -C /data && chown -R node:node /data'
+docker compose --profile tunnel up -d
 ```
 
-Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine first: two machines running the same tunnel would split traffic between them.
+Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine first: two machines running the same tunnel would split traffic between them. If the old machine updates itself, turn that off there first with `./scripts/install-auto-update.sh --remove`, or its next update starts it again.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| Test pattern plays, YouTube doesn't | Run `docker compose logs drivetest`. Usually yt-dlp needs updating (restart the container) or YouTube is blocking the request. Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
+| Test pattern plays, YouTube doesn't | Run `docker compose logs drivepost`. Usually yt-dlp needs updating (restart the container) or YouTube is blocking the request. Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
 | Choppy picture at 1080p | Tap **Stats**. In MPEG-1, if decoding takes more than about half of the time available per frame, the screen is the limit. In H.264, a climbing "skipped" count means the same. Use 720p. |
 | It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |

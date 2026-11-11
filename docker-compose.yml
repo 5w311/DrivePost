@@ -1,19 +1,22 @@
 services:
-  drivetest:
+  drivepost:
     build: ./server
-    container_name: drivetest
+    container_name: drivepost
     restart: unless-stopped
     env_file: .env
     ports:
       - "8080:8080"
     volumes:
+      # This volume was named while the app was still called DriveTest. It
+      # holds your sign-ins, profiles and history, so it keeps its name: under
+      # a new name the app would start with empty data.
       - drivetest-data:/data
-    # The app answers to both names inside Docker, so a tunnel route can use
-    # http://drivepost:8080 or the older http://drivetest:8080.
+    # The app also answers to its old name inside Docker, so a tunnel route
+    # that still says http://drivetest:8080 keeps working.
     networks:
       default:
         aliases:
-          - drivepost
+          - drivetest
 
   # Optional: publish the app on your domain through a Cloudflare Tunnel.
   # Start with: docker compose --profile tunnel up -d
@@ -26,7 +29,7 @@ services:
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     depends_on:
-      - drivetest
+      - drivepost
 
 volumes:
   drivetest-data:
