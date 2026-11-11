@@ -660,7 +660,9 @@
     if (!svg || !svg.viewBox || !svg.viewBox.baseVal.width) return;
     var squares = svg.viewBox.baseVal.width;
     var room = Math.min(box.clientWidth, box.clientHeight) - 24;
-    var px = Math.floor(room / squares);
+    // Whole pixels of the screen itself, which on sharp screens is finer than a CSS pixel.
+    var dpr = window.devicePixelRatio || 1;
+    var px = Math.floor((room * dpr) / squares) / dpr;
     if (px < 1) return; // too small to snap: leave it stretched to fit
     svg.setAttribute('shape-rendering', 'crispEdges');
     svg.style.width = svg.style.height = px * squares + 'px';

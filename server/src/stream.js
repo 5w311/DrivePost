@@ -183,7 +183,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want }
     // Passing through runs far ahead of the car, so being held back means nothing there.
     const shown = note && !(passthrough && x >= 1.5) ? `, ${note}` : '';
     console.log(`[stream ${id}] ${quality}p ${doing} at ${x.toFixed(1)}x real time (${verdict})${shown}`);
-    sendJson(ws, { type: 'speed', x: Math.round(x * 10) / 10, limitedByNetwork: !!note });
+    sendJson(ws, { type: 'speed', x: Math.round(x * 10) / 10, limitedByNetwork: !!shown });
   }
 
   let baseSent = false;
