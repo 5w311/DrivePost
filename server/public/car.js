@@ -90,6 +90,7 @@
   // Handy from the browser console when troubleshooting.
   DT.debug = {
     player: player,
+    control: null, // filled in below, once the control channel exists
     state: function () { return state; },
     pairingLink: function () { return pairing && pairing.link; },
     feedbackLink: function () { return feedbackLink; }
@@ -168,6 +169,16 @@
       // brought back from the browser's saved copy): load the new one, once
       // that won't interrupt a video.
       if (DT.stale && !(state.now && !state.paused && activated) && DT.reloadIfStale()) return;
+      // A pause made when this page went out of view (below) that the server
+      // hasn't taken in yet, say because the connection was down: ask again,
+      // and stay paused here meanwhile.
+      if (pauseOwed) {
+        if (!state.now || state.paused) pauseOwed = false;
+        else {
+          control.send({ type: 'cmd', action: 'pause' });
+          state.paused = true;
+        }
+      }
       applyFullscreen();
       $('#quality').value = playQuality();
       renderLists();
@@ -193,6 +204,8 @@
     }
   });
 
+  DT.debug.control = control;
+
   // Report position so the phone and resume points stay current.
   setInterval(function () {
     var s = player.active;
@@ -205,6 +218,44 @@
       duration: s.duration
     });
   }, 1000);
+
+  // ---------- pause when the browser is put away ----------
+  // Closing the browser in the car can leave this page running out of sight,
+  // and the sound would carry on. So when the page stops being shown, pause,
+  // just as the pause button would. It stays paused until someone presses
+  // play, in the car or on a phone.
+  var outOfView = false; // this time out of view has been dealt with: a play pressed on a phone after it is respected
+  var pauseOwed = false; // paused here, and the server hasn't confirmed it yet
+
+  function playingNow() {
+    return !!(state && state.now && !state.paused && activated);
+  }
+
+  function wentOutOfView() {
+    if (outOfView) return;
+    outOfView = true;
+    if (!playingNow()) return;
+    pauseOwed = true;
+    state.paused = true;
+    player.setPaused(true); // at once, without waiting for the server
+    renderStage();
+    control.send({ type: 'cmd', action: 'pause' });
+    control.send({ type: 'carNote', message: 'Paused: the browser in the car was closed.' });
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) wentOutOfView();
+    else outOfView = false;
+  });
+  // The page itself is being closed or left. A message on the usual channel
+  // may not get out in time, so also send one the browser promises to deliver.
+  window.addEventListener('pagehide', function () {
+    if (playingNow() && navigator.sendBeacon) navigator.sendBeacon('/api/pause');
+    wentOutOfView();
+  });
+  window.addEventListener('pageshow', function () {
+    if (!document.hidden) outOfView = false;
+  });
 
   // Any tap counts as permission to play sound.
   function activate() {
@@ -283,9 +334,16 @@
     $('#pausedTag').classList.toggle('hidden', !state.paused);
   }
 
-  $('#tapStartBtn').addEventListener('click', function () {
+  // "Tap to play" means play: also when the video is waiting paused, as it is
+  // after the browser was closed or the server restarted. (A tap anywhere
+  // else only allows sound, and leaves a paused video paused.)
+  function tapToPlay() {
     activate();
-  });
+    if (state && state.now && state.paused) control.send({ type: 'cmd', action: 'resume' });
+  }
+  // On the press itself: the button is gone by the time a click would arrive.
+  $('#tapStartBtn').addEventListener('pointerdown', tapToPlay);
+  $('#tapStartBtn').addEventListener('click', tapToPlay);
 
   // The controls go away by themselves once nobody has touched them for a
   // few seconds, playing or paused. Every touch starts the wait over.

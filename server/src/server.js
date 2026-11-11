@@ -411,6 +411,13 @@ async function route(req, res) {
     }
     if (req.method === 'GET' && p === '/api/state') return send(res, 200, store.publicState());
 
+    // The car's page sends this as it is being closed, when its usual channel
+    // may already be gone.
+    if (req.method === 'POST' && p === '/api/pause') {
+      store.command('pause');
+      return send(res, 200, { ok: true });
+    }
+
     if (req.method === 'GET' && p === '/api/search') {
       try {
         const results = await search(url.searchParams.get('q'));
