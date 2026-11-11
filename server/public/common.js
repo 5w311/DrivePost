@@ -67,6 +67,35 @@
     DT._toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3500);
   };
 
+  // ---- staying on the current version ----
+  // The server stamps each page with the version it was built from. When the
+  // server says it runs a different one, this page is old: either the server
+  // was updated while it was open, or the browser brought the page back from
+  // its own saved copy.
+  DT.version = document.documentElement.getAttribute('data-version') || null;
+  DT.serverVersion = null;
+  DT.stale = false;
+  DT.noteVersion = function (v) {
+    if (!v) return;
+    DT.serverVersion = v;
+    if (!DT.version) DT.version = v; // an unstamped page goes by the first version it hears
+    DT.stale = v !== DT.version;
+  };
+  // Load the new page. Returns true if a reload was started. Only once per
+  // version, so a stubborn saved copy can't make the page reload forever.
+  DT.reloadIfStale = function () {
+    if (!DT.stale) return false;
+    try {
+      if (sessionStorage.getItem('dt.reloadedFor') === DT.serverVersion) return false;
+      sessionStorage.setItem('dt.reloadedFor', DT.serverVersion);
+    } catch (e) {
+      if (DT._reloadTried) return false;
+    }
+    DT._reloadTried = true;
+    location.reload();
+    return true;
+  };
+
   // Control channel: keeps queue, now playing and position in sync.
   DT.Control = function (role, handlers) {
     this.role = role;

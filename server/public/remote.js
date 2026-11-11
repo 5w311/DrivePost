@@ -4,8 +4,19 @@
   var el = DT.el;
   var state = null;
 
+  // An old copy of this page (kept open, or brought back by the browser)
+  // loads the new one, unless you're in the middle of typing.
+  function typing() {
+    var a = document.activeElement;
+    return !!a && /^(INPUT|TEXTAREA)$/.test(a.tagName) && !!a.value;
+  }
+
   var control = new DT.Control('remote', {
+    version: function (msg) {
+      DT.noteVersion(msg.version);
+    },
     state: function (msg) {
+      if (DT.stale && !typing() && DT.reloadIfStale()) return;
       state = msg.state;
       render();
     },

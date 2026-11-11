@@ -9,6 +9,7 @@ import { config, QUALITIES } from './config.js';
 import { Auth, clientIp } from './auth.js';
 import { Store } from './state.js';
 import { handleStream } from './stream.js';
+import { stampPage } from './pages.js';
 import {
   search,
   suggest,
@@ -74,17 +75,20 @@ function redirect(res, location) {
   res.end();
 }
 
-function serveFile(res, file) {
+function serveFile(res, file, { versioned = false } = {}) {
   const full = path.join(PUBLIC_DIR, file);
   if (!full.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, { error: 'Not found' });
   fs.readFile(full, (err, data) => {
     if (err) return send(res, 404, { error: 'Not found' });
+    const isPage = path.extname(full) === '.html';
     res.writeHead(200, {
       'Content-Type': TYPES[path.extname(full)] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
+      // Pages are never kept, so they are always fetched fresh. A file asked
+      // for by its version never changes, so it can be kept for good.
+      'Cache-Control': isPage ? 'no-store' : versioned ? 'public, max-age=31536000, immutable' : 'no-cache',
       'X-Content-Type-Options': 'nosniff',
     });
-    res.end(data);
+    res.end(isPage ? stampPage(data.toString('utf8'), VERSION) : data);
   });
 }
 
@@ -173,7 +177,9 @@ async function route(req, res) {
   if (req.method === 'GET' && p === '/login') return serveFile(res, 'login.html');
   if (req.method === 'GET' && p === '/sw.js') return serveFile(res, 'sw.js');
   if (req.method === 'GET' && p === '/manifest.webmanifest') return serveFile(res, 'manifest.webmanifest');
-  if (req.method === 'GET' && p.startsWith('/static/')) return serveFile(res, p.slice('/static/'.length));
+  if (req.method === 'GET' && p.startsWith('/static/')) {
+    return serveFile(res, p.slice('/static/'.length), { versioned: url.searchParams.get('v') === VERSION });
+  }
 
   // Phone pairing link from the car's QR code.
   if (req.method === 'GET' && p.startsWith('/p/')) {
