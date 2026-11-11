@@ -70,7 +70,7 @@ If the browser's H.264 decoder reports an error, stops returning pictures, or ca
    nano .env   # set DRIVE_PASSCODE and SHARE_TOKEN; PUBLIC_URL and TUNNEL_TOKEN come in step 2
    ```
 
-2. Create a tunnel. In the Cloudflare dashboard, go to Networking → Tunnels (older dashboards: Zero Trust → Networks → Tunnels) and create one. Copy its token into `TUNNEL_TOKEN` in `.env` and set `PUBLIC_URL`, for example `https://drive.figari.dev`. Then add a published application route for that hostname pointing at `http://drivetest:8080`.
+2. Create a tunnel. In the Cloudflare dashboard, go to Networking → Tunnels (older dashboards: Zero Trust → Networks → Tunnels) and create one. Copy its token into `TUNNEL_TOKEN` in `.env` and set `PUBLIC_URL`, for example `https://drive.figari.dev`. Then add a published application route for that hostname pointing at `http://drivepost:8080`.
 
 3. Start it:
 

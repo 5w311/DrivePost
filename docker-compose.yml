@@ -8,10 +8,16 @@ services:
       - "8080:8080"
     volumes:
       - drivetest-data:/data
+    # The app answers to both names inside Docker, so a tunnel route can use
+    # http://drivepost:8080 or the older http://drivetest:8080.
+    networks:
+      default:
+        aliases:
+          - drivepost
 
   # Optional: publish the app on your domain through a Cloudflare Tunnel.
   # Start with: docker compose --profile tunnel up -d
-  # In the tunnel's Public Hostname, point your subdomain at http://drivetest:8080
+  # In the tunnel's route, point your subdomain at http://drivepost:8080
   cloudflared:
     image: cloudflare/cloudflared:latest
     profiles: ["tunnel"]
