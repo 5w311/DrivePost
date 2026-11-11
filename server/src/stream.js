@@ -96,7 +96,11 @@ function inputArgs(input, startAt, live) {
     a.push('-f', 'lavfi', '-i', source);
     return a;
   }
-  a.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5');
+  // A file is picked up again where it left off if the connection drops. Not
+  // for a segmented stream: there ffmpeg would take the end of every segment
+  // for a dropped connection and pause to "reconnect", crawling along slower
+  // than the video plays. Its own reader moves from segment to segment.
+  if (!input.list) a.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5');
   const headers = Object.entries(input.headers || {})
     .map(([k, v]) => `${k}: ${v}\r\n`)
     .join('');
@@ -165,36 +169,64 @@ function noticeDue(group, name, now = Date.now()) {
   return true;
 }
 
+const WAIT_GLADLY = 1500; // a wait this short isn't worth looking for another route
+const WAIT_AT_MOST = 90 * 1000; // an ad break longer than this is treated as a refusal
+
 /*
- * Find this video by a route that really delivers (see ROUTES in
- * youtube.js). Each route's link is tried before it is used, because a
- * refused route still hands out links: they just answer 403.
- * Returns { info } or { message } to show in the car.
+ * Find this video by a route that is ready and really delivers (see ROUTES
+ * in youtube.js).
+ *
+ * A route can come back with links that aren't to be used yet (YouTube
+ * holds the media back for the length of an ad). If another route is ready
+ * now, that one is used; otherwise the server waits for the one that is
+ * ready soonest. Every link is tried before it is used, because a refused
+ * route still hands out links: they just answer 403.
+ *
+ * Returns { info } or { message } to show in the car. `onWait(seconds)` is
+ * called when it has to sit out a wait.
  */
 export async function findPlayable(id, quality, deps = {}) {
   const lookup = deps.streamInfo || streamInfo;
   const status = deps.linkStatus || linkStatus;
+  const sleep = deps.sleep || ((ms) => new Promise((done) => setTimeout(done, ms)));
+  const now = deps.now || Date.now;
   const order = id === TEST_PATTERN_ID ? ['direct'] : routeOrder();
   let refused = null; // YouTube's answer when a route's link was turned down
   let lookupError = null;
-  for (const name of order) {
-    try {
-      let found = await lookup(id, quality, name);
-      const check = async (info) => {
-        const answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => status(i)));
-        return answers.find((a) => a !== 200 && a !== 206);
-      };
-      let bad = await check(found);
-      if (bad !== undefined && Date.now() - (found.at || 0) > 60000) {
-        // Links kept from an earlier lookup go stale. Get new ones before blaming the route.
-        forgetStream(id, quality);
-        found = await lookup(id, quality, name);
-        bad = await check(found);
-      }
-      if (bad === undefined) return { info: found };
-      refused = refused ?? bad;
+  const later = []; // routes whose links can't be used yet
+
+  // Do this route's links deliver? Stale ones are replaced before the route is blamed.
+  const delivers = async (name, found) => {
+    const check = async (info) => {
+      const answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => status(i)));
+      return answers.find((a) => a !== 200 && a !== 206);
+    };
+    let bad = await check(found);
+    if (bad !== undefined && now() - (found.at || 0) > 60000) {
       forgetStream(id, quality);
-      routeRefused(name, refusalReason(bad));
+      found = await lookup(id, quality, name);
+      if ((found.readyAt || 0) - now() > WAIT_GLADLY) return { later: found };
+      bad = await check(found);
+    }
+    if (bad === undefined) return { info: found };
+    refused = refused ?? bad;
+    forgetStream(id, quality);
+    routeRefused(name, refusalReason(bad));
+    return {};
+  };
+
+  for (const name of order) {
+    // A better route is nearly ready: waiting for it beats settling for less.
+    if (later.length && Math.min(...later.map((l) => l.found.readyAt)) - now() <= 15000) break;
+    try {
+      const found = await lookup(id, quality, name);
+      if ((found.readyAt || 0) - now() > WAIT_GLADLY) {
+        later.push({ name, found });
+        continue;
+      }
+      const result = await delivers(name, found);
+      if (result.info) return { info: result.info };
+      if (result.later) later.push({ name, found: result.later });
     } catch (err) {
       lookupError = lookupError || err;
       // "No such format" is about this route. Anything else (private, removed,
@@ -202,6 +234,27 @@ export async function findPlayable(id, quality, deps = {}) {
       if (!/format is not available|no playable format|timed out|fetch failed|aborted/i.test(err.message || '')) break;
     }
   }
+
+  // Nothing was ready. Sit out the shortest wait, then the next shortest if that one is refused.
+  later.sort((a, b) => a.found.readyAt - b.found.readyAt);
+  for (const { name, found } of later) {
+    const wait = found.readyAt - now();
+    if (wait > WAIT_AT_MOST) {
+      refused = refused ?? 403;
+      continue;
+    }
+    if (wait > 0) {
+      if (deps.onWait) deps.onWait(Math.ceil(wait / 1000));
+      await sleep(wait + 300);
+    }
+    try {
+      const result = await delivers(name, found);
+      if (result.info) return { info: result.info };
+    } catch (err) {
+      lookupError = lookupError || err;
+    }
+  }
+
   if (refused !== null) return { message: `Couldn't play this video: ${refusalReason(refused)}` };
   return { message: `Couldn't load this video: ${lookupError ? lookupError.message : 'nothing playable was found'}` };
 }
@@ -340,7 +393,12 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     }
   });
 
-  const playable = await findPlayable(id, quality);
+  const playable = await findPlayable(id, quality, {
+    // Only worth mentioning when it's long enough to wonder about.
+    onWait: (seconds) => {
+      if (seconds >= 4) sendJson(ws, { type: 'notice', message: `YouTube makes this server wait ${seconds} seconds before it sends this video.` });
+    },
+  });
   if (closed) return;
   if (!playable.info) {
     sendJson(ws, { type: 'error', message: playable.message });

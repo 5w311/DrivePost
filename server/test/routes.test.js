@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ROUTES, routeOrder, routeWorked, routeRefused, forgetRoutes, linkStatus, routeNotice } from '../src/youtube.js';
-import { findPlayable } from '../src/stream.js';
+import { findPlayable, ffmpegArgs } from '../src/stream.js';
 
 const quiet = (fn) => {
   const { log, warn } = console;
@@ -184,4 +184,119 @@ test('a link is checked by asking for its first bytes; a segmented stream by its
   // Segment names relative to the list.
   assert.equal(await linkStatus({ url: 'https://m.test/a/list.m3u8', list: true }, fake({ 'https://m.test/a/list.m3u8': { status: 200, text: '#EXTM3U\nseg0.ts\n' }, 'https://m.test/a/seg0.ts': { status: 206 } })), 206);
   assert.equal(await linkStatus({ url: 'https://m.test/list.m3u8', list: true }, fake({ 'https://m.test/list.m3u8': { status: 403 } })), 403);
+});
+
+// ---- the wait YouTube puts in front of a video (the length of an ad) ----
+
+// A clock the test moves, and a sleep that moves it.
+function clock(start = 1_000_000) {
+  const c = { t: start, slept: [] };
+  c.now = () => c.t;
+  c.sleep = async (ms) => {
+    c.slept.push(Math.round(ms));
+    c.t += ms;
+  };
+  return c;
+}
+
+test('links that are not ready yet are waited for, not asked for early', async () => {
+  forgetRoutes();
+  const c = clock();
+  const asked = [];
+  const waits = [];
+  const r = await quietly(() =>
+    findPlayable('abcdefghijk', '1080', {
+      now: c.now,
+      sleep: c.sleep,
+      onWait: (s) => waits.push(s),
+      streamInfo: async (id, q, name) => ({ ...found(name), at: c.t, readyAt: name === 'direct' ? c.t + 6000 : 0 }),
+      // Asked before its time, YouTube says 403. That must never happen.
+      linkStatus: async (input) => (asked.push([input.url, c.t]), c.t >= 1_006_000 || !input.url.includes('/direct/') ? 206 : 403),
+    })
+  );
+  assert.equal(r.info.routeName, 'direct', 'six seconds is worth waiting for the better route');
+  assert.deepEqual(waits, [6]);
+  assert.deepEqual(c.slept, [6300]);
+  assert.ok(asked.every(([, t]) => t >= 1_006_000), 'nothing was asked for early');
+  assert.deepEqual(routeOrder(), ['direct', 'hls', 'basic'], 'a wait is not a refusal');
+  forgetRoutes();
+});
+
+test('behind a long wait, a route that is ready now is used instead', async () => {
+  forgetRoutes();
+  const c = clock();
+  const looked = [];
+  const r = await quietly(() =>
+    findPlayable('abcdefghijk', '1080', {
+      now: c.now,
+      sleep: c.sleep,
+      streamInfo: async (id, q, name) => (looked.push(name), { ...found(name), at: c.t, readyAt: name === 'direct' ? c.t + 30000 : 0 }),
+      linkStatus: async () => 200,
+    })
+  );
+  assert.equal(r.info.routeName, 'hls');
+  assert.deepEqual(looked, ['direct', 'hls']);
+  assert.deepEqual(c.slept, [], 'no waiting at all');
+  forgetRoutes();
+});
+
+test('when nothing else works, even a long wait is sat out, and the car is told how long', async () => {
+  forgetRoutes();
+  const c = clock();
+  const waits = [];
+  const r = await quietly(() =>
+    findPlayable('abcdefghijk', '1080', {
+      now: c.now,
+      sleep: c.sleep,
+      onWait: (s) => waits.push(s),
+      streamInfo: async (id, q, name) => {
+        if (name === 'hls') throw new Error('[youtube] abcdefghijk: Requested format is not available');
+        return { ...found(name), at: c.t, readyAt: c.t + 30000 };
+      },
+      linkStatus: async () => 206,
+    })
+  );
+  assert.equal(r.info.routeName, 'direct', 'the better of the two that need the same wait');
+  assert.deepEqual(waits, [30]);
+
+  // An absurd wait is treated as a refusal rather than leaving the car hanging.
+  const c2 = clock();
+  const never = await quietly(() =>
+    findPlayable('abcdefghijk', '1080', {
+      now: c2.now,
+      sleep: c2.sleep,
+      streamInfo: async (id, q, name) => ({ ...found(name), at: c2.t, readyAt: c2.t + 10 * 60 * 1000 }),
+      linkStatus: async () => 206,
+    })
+  );
+  assert.equal(never.message, "Couldn't play this video: YouTube refused to send it (403 Forbidden)");
+  assert.deepEqual(c2.slept, []);
+  forgetRoutes();
+});
+
+test('a video looked up ahead of time has usually sat out its wait already', async () => {
+  forgetRoutes();
+  const c = clock();
+  const r = await quietly(() =>
+    findPlayable('abcdefghijk', '1080', {
+      now: c.now,
+      sleep: c.sleep,
+      // Looked up 40 seconds ago for the queue; its wait ended long since.
+      streamInfo: async (id, q, name) => ({ ...found(name), at: c.t - 40000, readyAt: c.t - 34000 }),
+      linkStatus: async () => 206,
+    })
+  );
+  assert.equal(r.info.routeName, 'direct');
+  assert.deepEqual(c.slept, []);
+  forgetRoutes();
+});
+
+test('ffmpeg reconnects to a dropped file, but is not told to for a segmented stream', () => {
+  const file = { url: 'https://v.test/video.mp4', headers: {}, hasVideo: true, hasAudio: true, vcodec: 'avc1.640028' };
+  const fileArgs = ffmpegArgs({ inputs: [file], height: 720, fps: 30, live: false }, 0, '720', 48000, 'h264').join(' ');
+  assert.match(fileArgs, /-reconnect 1 -reconnect_streamed 1/);
+  const list = { ...file, url: 'https://m.test/list.m3u8', list: true };
+  const listArgs = ffmpegArgs({ inputs: [list], height: 720, fps: 30, live: false }, 0, '720', 48000, 'h264').join(' ');
+  assert.ok(!/-reconnect/.test(listArgs), 'or it would pause at the end of every segment');
+  assert.match(listArgs, /-i https:\/\/m\.test\/list\.m3u8/);
 });

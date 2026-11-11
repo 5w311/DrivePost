@@ -149,18 +149,28 @@ export function videoMeta(id) {
 const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
 
 /*
- * The ways to get a video out of YouTube, best first.
+ * The ways to get a video out of YouTube, first choice first.
  *
- * YouTube closes one or another of these from time to time, for some
- * connections and not for others: the lookup still works and hands out
- * links, but the links answer 403. So the server doesn't count on any one
- * of them. It tries them in this order, checks that the link really
- * delivers before playing, and remembers which one worked.
+ * Two things can stand between a lookup and a video that plays:
  *
- *   direct  the separate picture and sound files, up to 1080p. Best quality
- *           and the quickest to skip around in.
+ * - A wait. Where an ad would play first, YouTube refuses the media (403)
+ *   until the ad's time is up, typically several seconds after the lookup.
+ *   yt-dlp reports when each file becomes available, and the server holds
+ *   off until then.
+ * - A refusal. YouTube closes one way of fetching or another from time to
+ *   time, for some connections and not others. The lookup still hands out
+ *   links; they just keep answering 403.
+ *
+ * So the server doesn't count on any one route. It checks that a link
+ * really delivers before playing, puts a refused route at the back for a
+ * while, and when the first choice is behind a long wait it starts with
+ * one that is ready.
+ *
+ *   direct  the separate picture and sound files, up to 1080p. Fetched at
+ *           full speed and quick to skip around in, but usually behind a
+ *           wait of a few seconds.
  *   hls     the stream in short segments that YouTube gives embedded
- *           players and Apple devices, also up to 1080p.
+ *           players, up to 1080p. No ad break in front of it.
  *   basic   the one small ready-made file (360p) every video has.
  */
 export const ROUTES = [
@@ -270,7 +280,7 @@ export async function linkStatus(input, fetchImpl = fetch) {
 }
 
 // Media links (and headers) for ffmpeg to read, got by one of the routes above.
-export function streamInfo(id, quality, routeName = 'direct') {
+export function streamInfo(id, quality, routeName = ROUTES[0].name) {
   const height = HEIGHTS[quality] || 480;
   const route = routeNamed(routeName);
   if (id === TEST_PATTERN_ID) {
@@ -289,6 +299,7 @@ export function streamInfo(id, quality, routeName = 'direct') {
       tbr: null,
       route: 'built in',
       routeName: 'direct',
+      readyAt: 0,
     });
   }
   return streamCache.get(`${id}:${height}:${route.name}`, async () => {
@@ -307,6 +318,8 @@ export function streamInfo(id, quality, routeName = 'direct') {
         vcodec: typeof f.vcodec === 'string' ? f.vcodec : '',
         tbr: typeof f.vbr === 'number' && f.vbr > 0 ? f.vbr : typeof f.tbr === 'number' ? f.tbr : null,
         height: typeof f.height === 'number' ? f.height : null,
+        // When YouTube will start handing this file over (see ROUTES): yt-dlp's available_at, in ms.
+        readyAt: typeof f.available_at === 'number' && f.available_at > 0 ? f.available_at * 1000 : 0,
         // A segmented stream: the link is a list of segments, not the file itself.
         list: /m3u8/i.test(f.protocol || '') || /\.m3u8(\?|$)/i.test(f.url),
       }));
@@ -332,6 +345,8 @@ export function streamInfo(id, quality, routeName = 'direct') {
     }
     return {
       at: Date.now(), // when these links were looked up; they go stale
+      // The moment every file of this video can be fetched. 0 when there is no wait.
+      readyAt: Math.max(0, ...inputs.map((i) => i.readyAt || 0)),
       title: json.title || '',
       duration: typeof json.duration === 'number' ? json.duration : null,
       live: json.is_live === true,

@@ -40,13 +40,18 @@ In the car, the decoders only decode. The page decides when each picture shows: 
 
 ### Getting the video from YouTube
 
-YouTube closes one way or another of fetching videos from time to time, for some connections and not others: the lookup still works and hands out links, but the links answer 403. So the server has three routes and doesn't count on any one of them:
+Two things can stand between looking a video up and playing it:
 
-- **direct:** the separate picture and sound files, up to 1080p. The best quality and the quickest to skip around in.
-- **hls:** the stream in short segments that YouTube gives embedded players, also up to 1080p.
+- **A wait.** Where an ad would play first, YouTube refuses the video (403) until the ad's time is up, usually several seconds after the lookup. The server is told when each file becomes available and holds off until then. A video that was looked up ahead of time, like the next one in Up Next, has usually sat its wait out already.
+- **A refusal.** YouTube closes one way of fetching or another from time to time, for some connections and not others. The lookup still hands out links; they just keep answering 403.
+
+So the server has three routes and doesn't count on any one of them:
+
+- **direct:** the separate picture and sound files, up to 1080p. Fetched at full speed and quick to skip around in, but usually behind a wait of a few seconds.
+- **hls:** the stream in short segments that YouTube gives embedded players, also up to 1080p. No ad break in front of it.
 - **basic:** the one small ready-made 360p file every video has.
 
-Before playing, the server asks for the first bytes of what it was given. If YouTube refuses, it moves to the next route, remembers that, and comes back to the better route later. When only the basic file gets through, the car and the phones say so once an hour.
+Before playing, the server asks for the first bytes of what it was given. If YouTube refuses, it moves to the next route, remembers that, and comes back to the better route later. If the first choice is behind a wait of more than about 15 seconds, it starts with a route that is ready instead. A wait of 4 seconds or more is shown in the car, and so is having only the basic file (once an hour).
 
 ### H.264 and MPEG-1
 
@@ -209,7 +214,7 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 
 | Symptom | Check |
 |---|---|
-| Test pattern plays, YouTube doesn't | Run `docker compose exec -T drivepost node src/check-youtube.js`. It tries each way the server has of getting a video (see below) and says which ones YouTube lets through from your connection right now, with no links in the output. If none work, yt-dlp probably needs updating (restart the container). Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
+| Test pattern plays, YouTube doesn't, or videos keep stopping to load | Run `docker compose exec -T drivepost node src/check-youtube.js`. It tries each way the server has of getting a video (see "Getting the video from YouTube"), and says which ones YouTube lets through from your connection right now, how long a wait each is behind, and how fast the video comes in compared with how fast it plays. There are no links in the output. If none work, yt-dlp probably needs updating (restart the container). Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
 | "YouTube refused to send it (403 Forbidden)" | YouTube handed out links for the video and then refused to serve them, on every route. Run the check above. This is on YouTube's side and usually clears up by itself or with a yt-dlp update. |
 | The picture is only 360p and a notice says so | YouTube is refusing the better routes from your connection, and the basic file is all that gets through. The server tries the better ones again after half an hour, then less often, and switches back by itself. |
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
