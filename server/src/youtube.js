@@ -346,6 +346,19 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
         hasAudio: !!f.acodec && f.acodec !== 'none',
         fps: typeof f.fps === 'number' ? f.fps : null,
         vcodec: typeof f.vcodec === 'string' ? f.vcodec : '',
+        // What YouTube says this one is, for the check tool: "234 m3u8_native mp4a.40.2 44100Hz 2ch".
+        what: [
+          f.format_id,
+          f.protocol,
+          f.vcodec && f.vcodec !== 'none' ? f.vcodec : '',
+          f.acodec && f.acodec !== 'none' ? f.acodec : '',
+          f.asr ? `${f.asr}Hz` : '',
+          f.audio_channels ? `${f.audio_channels}ch` : '',
+          f.language ? `lang ${f.language}` : '',
+          f.format_note,
+        ]
+          .filter(Boolean)
+          .join(' '),
         tbr: typeof f.vbr === 'number' && f.vbr > 0 ? f.vbr : typeof f.tbr === 'number' ? f.tbr : null,
         height: typeof f.height === 'number' ? f.height : null,
         // When YouTube will start handing this file over (see ROUTES): yt-dlp's available_at, in ms.

@@ -660,6 +660,11 @@
       } else if (msg.type === 'speed') {
         this.stats.serverSpeed = msg.x;
         this.stats.serverLimited = !!msg.limitedByNetwork;
+      } else if (msg.type === 'restart') {
+        // The server is starting this stream over another way (no sound was
+        // coming through). Don't play out what is buffered: start over now.
+        this.serverEnded = false;
+        this.finish();
       } else if (msg.type === 'end') {
         this.serverEnded = true;
         this.complete = !!msg.complete;

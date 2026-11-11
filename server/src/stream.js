@@ -7,6 +7,10 @@ import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 // How far ahead of the car's playback we transcode before pausing ffmpeg.
 const AHEAD_HIGH = 25;
 const AHEAD_LOW = 12;
+// This much picture sent and still no sound, on a video that has sound: the route isn't delivering it.
+const SILENT_AFTER = 20;
+// Videos already started over for that, and when: once is enough, in case the video really is silent there.
+const startedOverForSound = new Map();
 const BACKLOG_HIGH = 4 * 1024 * 1024;
 const BACKLOG_LOW = 1024 * 1024;
 
@@ -394,6 +398,32 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   }
 
   let baseSent = false;
+  let soundPieces = 0;
+  let delivered = false; // picture has come through, and sound too if there is any
+  let soundGivenUp = false;
+
+  /*
+   * Plenty of picture has gone out and not one piece of sound, on a video
+   * that has sound. Rest this route and have the car start the video over,
+   * which takes the next route. Once per video: if it comes out silent that
+   * way too, it plays as it is.
+   */
+  function noSound() {
+    if (soundGivenUp || closed || id === TEST_PATTERN_ID) return;
+    soundGivenUp = true;
+    const now = Date.now();
+    for (const [key, when] of startedOverForSound) if (now - when > 10 * 60 * 1000) startedOverForSound.delete(key);
+    console.warn(`[stream ${id}] no sound is coming through | ${quality}p ${codec}, ${info.route || 'unknown route'}, starting at ${Math.round(startAt)}s`);
+    if (startedOverForSound.has(id)) return;
+    startedOverForSound.set(id, now);
+    routeRefused(info.routeName, 'no sound came through');
+    sendJson(ws, { type: 'notice', message: 'No sound was coming through, so the server is getting this video another way.' });
+    sendJson(ws, { type: 'restart' });
+    killed = true;
+    if (ff) ff.kill('SIGKILL');
+    ws.close();
+  }
+
   const splitter = new TsSplitter(
     (kind, pts, frame) => {
       if (closed) return;
@@ -401,17 +431,24 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
         if (!baseSent) {
           sendJson(ws, { type: 'base', pts: splitter.firstVideoPts });
           baseSent = true;
-          if (id !== TEST_PATTERN_ID) routeWorked(info.routeName); // pictures are flowing: this route delivers
         }
         if (firstDataAt === null) firstDataAt = Date.now();
         // H.264 frames aren't sent in display order, so keep the furthest one.
         lastSentPts = lastSentPts === null ? pts : Math.max(lastSentPts, pts);
+      } else {
+        soundPieces++;
+      }
+      // Picture is flowing, and sound with it if the video has any: this route delivers.
+      if (!delivered && baseSent && (soundPieces || !info.inputs.some((i) => i.hasAudio))) {
+        delivered = true;
+        if (id !== TEST_PATTERN_ID) routeWorked(info.routeName);
       }
       frame.writeDoubleLE(pts, 0);
       frame.writeUInt8(kind, 8);
       ws.send(frame);
       if (kind === KIND_VIDEO) {
         if (lastSentPts - splitter.firstVideoPts >= 20) logSpeed();
+        if (!delivered && lastSentPts - splitter.firstVideoPts >= SILENT_AFTER) noSound();
         checkFlow();
       }
     },
