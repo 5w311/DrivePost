@@ -45,6 +45,13 @@
   var PACE_WINDOW = 4; // H.264: seconds over which skipped pictures are counted
   var PACE_MIN_FPS = 20; // H.264: fewer pictures a second than this, with most skipped, means the screen is too slow
   var H264_RETRY_MS = 2 * 60 * 60 * 1000; // after H.264 fails, use MPEG-1 for this long
+  // Skipping around in what has already arrived (H.264 only), the way a
+  // video site does within its loaded bar, instead of asking the server for
+  // a new stream every time.
+  var KEEP_BEHIND = 30; // seconds already played that stay on hand for skipping back
+  var KEEP_BYTES = 160 * 1024 * 1024; // and never more than this in all
+  var JUMP_NEEDS = 1.5; // seconds on hand past a spot for a skip to go there at once
+  var JUMP_BUFFER = 0.25; // how much of that has to be lined up before it plays
   var VIDEO_STREAM = 0xe0;
   var AUDIO_STREAM = 0xc0;
 
@@ -234,6 +241,12 @@
     return ('0' + v.toString(16)).slice(-2);
   }
 
+  // Can decoding start at this frame? Its first packet says so (the
+  // "random access" flag, which ffmpeg sets on keyframes).
+  function startsHere(data) {
+    return data.length > 5 && data[0] === 0x47 && (data[3] & 0x20) !== 0 && data[4] > 0 && (data[5] & 0x40) !== 0;
+  }
+
   function H264Video(session) {
     var self = this;
     this.s = session;
@@ -256,20 +269,28 @@
     this.dropped = 0;
     this.posterShown = false;
     this.ctx = session.canvas.getContext('2d', { alpha: false });
-    this.decoder = new VideoDecoder({
-      output: function (frame) {
-        self.onFrame(frame);
-      },
-      error: function (e) {
-        self.fail('decoder error' + (e && e.message ? ': ' + e.message : ''));
-      }
-    });
+    this.decoder = this.newDecoder();
     session.player.demuxer.connect(VIDEO_STREAM, {
       write: function (pts, buffers) {
         for (var i = 0; i < buffers.length; i++) self.parts.push(buffers[i]);
       }
     });
   }
+
+  H264Video.prototype.newDecoder = function () {
+    var self = this;
+    var decoder = new VideoDecoder({
+      output: function (frame) {
+        // A frame from a decoder that has since been replaced is of no use.
+        if (decoder !== self.decoder) return frame.close();
+        self.onFrame(frame);
+      },
+      error: function (e) {
+        if (decoder === self.decoder) self.fail('decoder error' + (e && e.message ? ': ' + e.message : ''));
+      }
+    });
+    return decoder;
+  };
 
   H264Video.prototype.fail = function (reason) {
     if (this.failed) return;
@@ -454,6 +475,42 @@
     }
   };
 
+  // Begin again from a keyframe elsewhere in the stream: forget what was
+  // decoded and what the decoder was in the middle of.
+  H264Video.prototype.restart = function () {
+    this.ready.forEach(function (it) {
+      try { it.frame.close(); } catch (e) {}
+    });
+    this.ready = [];
+    this.pending = [];
+    this.inDecoder = 0;
+    this.parts = [];
+    this.gotKey = false;
+    this.skipped = 0;
+    this.flushing = false;
+    this.flushed = false;
+    this.fullSince = 0;
+    this.lastOutputAt = now();
+    this.lastShown = null;
+    this.posterShown = false;
+    this.configured = false;
+    try {
+      this.decoder.reset();
+      return true;
+    } catch (e) {}
+    // It wouldn't start over: use a new one. If that can't be had either, say
+    // so, and the stream is opened again instead; this isn't the decoder
+    // failing at the video.
+    try {
+      var old = this.decoder;
+      this.decoder = this.newDecoder();
+      try { if (old.state !== 'closed') old.close(); } catch (e2) {}
+      return true;
+    } catch (e3) {
+      return false;
+    }
+  };
+
   H264Video.prototype.destroy = function () {
     this.ready.forEach(function (it) {
       try { it.frame.close(); } catch (e) {}
@@ -475,6 +532,12 @@
     this.quality = o.quality;
     this.vq = []; // video frames received, in the order they must be decoded
     this.aq = []; // audio runs waiting for their time
+    // Everything that has arrived and isn't long past, played or not, so a
+    // skip within it needs nothing from the server (see jumpTo).
+    this.kept = { v: [], a: [], bytes: 0 };
+    this.jump = null; // a skip within what is kept, being lined up: the stream time it goes to
+    this.landed = null; // where the last such skip went
+    this.lastForget = 0;
     this.basePts = null; // stream time that `startAt` corresponds to
     this.clock = null; // current stream time
     this.clockBase = 0;
@@ -683,6 +746,13 @@
     var chunk = { pts: view.getFloat64(0, true), data: new Uint8Array(data, 9) };
     this.stats.bytes += data.byteLength - 9;
     this.lastDataAt = now();
+    if (this.codec === 'h264') {
+      this.kept.bytes += chunk.data.length;
+      if (view.getUint8(8) === 0) {
+        chunk.key = startsHere(chunk.data);
+        this.kept.v.push(chunk);
+      } else this.kept.a.push(chunk);
+    }
     if (view.getUint8(8) === 0) {
       this.vq.push(chunk);
       if (this.firstVideoPts === null) this.firstVideoPts = chunk.pts;
@@ -715,6 +785,7 @@
   // sound begins exactly at the spot asked for, so the sound marks the start.
   // Returns null while that isn't known yet.
   StreamSession.prototype.startPts = function () {
+    if (this.jump !== null) return this.jump; // a skip within what is on hand starts where it was aimed
     var v = this.firstVideoPts;
     var a = this.firstAudioPts;
     if (this.codec !== 'h264' || !(this.startAt > 0)) return v;
@@ -753,6 +824,116 @@
     this.freeze();
     if (this.o.onState) this.o.onState(this);
     if (this.o.onVideoFail) this.o.onVideoFail(this, { reason: reason, position: pos });
+  };
+
+  // Silence what is already queued on the sound card, and take new sound
+  // from here on. (JSMpeg's own stop only mutes until the next sound, which
+  // would let the old queue be heard again.)
+  StreamSession.prototype.cutSound = function () {
+    var out = this.player && this.player.audioOut;
+    if (out && out.context && out.gain) {
+      try {
+        var fresh = out.context.createGain();
+        fresh.gain.value = out.volume;
+        fresh.connect(out.context.destination);
+        out.gain.disconnect();
+        out.gain = fresh;
+        out.destination = fresh;
+      } catch (e) {}
+      out.startTime = 0;
+      out.wallclockStartTime = 0;
+    }
+    this.audioSynced = false;
+  };
+
+  // The stretch of the video that is on hand, in seconds into the video:
+  // a skip to anywhere in it happens at once. Null if there is none.
+  StreamSession.prototype.onHand = function () {
+    var v = this.kept.v;
+    var a = this.kept.a;
+    if (this.basePts === null || !v.length || this.lastVideoPts === null) return null;
+    var first = v[0].pts;
+    if (this.hasAudio && a.length && a[0].pts > first) first = a[0].pts;
+    var last = this.audioArriving() ? Math.min(this.lastVideoPts, this.lastAudioPts) : this.lastVideoPts;
+    if (last <= first) return null;
+    return { from: this.startAt + (first - this.basePts), to: this.startAt + (last - this.basePts) };
+  };
+
+  /*
+   * Skip to `position` (seconds into the video) using what has already
+   * arrived, without asking the server for anything. Returns false when that
+   * spot isn't on hand; the stream then has to be opened again there.
+   *
+   * The picture has to be decoded from the keyframe before the spot, so the
+   * decoder starts over there and the frames up to the spot are decoded
+   * without being shown, exactly as at the start of a stream.
+   */
+  StreamSession.prototype.jumpTo = function (position) {
+    var video = this.video;
+    if (this.state === 'done' || this.live || this.codec !== 'h264' || !video || video.failed || !this.sink) return false;
+    if (this.basePts === null || !isFinite(position)) return false;
+    var spot = this.basePts + (position - this.startAt);
+    var v = this.kept.v;
+    var a = this.kept.a;
+    var from = -1;
+    for (var i = v.length - 1; i >= 0; i--) {
+      if (v[i].key && v[i].pts <= spot + 0.001) {
+        from = i;
+        break;
+      }
+    }
+    if (from < 0) return false; // before what is kept
+    if (this.hasAudio && a.length && a[0].pts > spot + 0.15) return false; // picture on hand, but not its sound
+    var have = this.audioArriving() ? Math.min(this.lastVideoPts, this.lastAudioPts) : this.lastVideoPts;
+    if (have - spot < JUMP_NEEDS && !(this.noMore() && have > spot)) return false; // at or past the edge of what has arrived
+
+    if (!video.restart()) return false;
+    this.vq = v.slice(from);
+    var k = 0;
+    while (k < a.length && a[k].pts < spot - 0.12) k++;
+    this.aq = a.slice(k);
+    this.cutSound();
+    this.jump = spot;
+    this.landed = spot;
+    this.clock = spot;
+    this.clockBase = spot;
+    this.wallBase = now();
+    this.lateSince = 0;
+    this.pace = null;
+    // Lined up like the start of a stream: play once the picture for the spot
+    // is decoded. Usually a fraction of a second.
+    if (this.state !== 'buffering') this.setState('buffering');
+    return true;
+  };
+
+  // Let go of what was played a while ago: everything before the last
+  // keyframe that is far enough behind (frames are no use without the
+  // keyframe they follow), and the sound that went with it.
+  StreamSession.prototype.forget = function () {
+    var k = this.kept;
+    var v = k.v;
+    if (!v.length || this.clock === null) return;
+    var limit = this.clock - KEEP_BEHIND;
+    var size = 0; // bytes of the frames before the one being looked at
+    var cut = 0;
+    var cutSize = 0;
+    for (var i = 0; i < v.length; i++) {
+      if (i > 0 && v[i].key) {
+        var tooMuch = k.bytes - cutSize > KEEP_BYTES;
+        if (v[i].pts <= limit || (tooMuch && v[i].pts < this.clock - 1)) {
+          cut = i;
+          cutSize = size;
+        } else break;
+      }
+      size += v[i].data.length;
+    }
+    if (!cut) return;
+    v.splice(0, cut);
+    k.bytes -= cutSize;
+    var a = k.a;
+    var n = 0;
+    while (n < a.length && a[n].pts < v[0].pts - 0.5) k.bytes -= a[n++].data.length;
+    if (n) a.splice(0, n);
   };
 
   StreamSession.prototype.feedAudio = function (chunk) {
@@ -812,22 +993,28 @@
     // H.264: keep the decoder working a little ahead, whatever the state.
     if (this.sink) video.pump();
     if (this.state === 'done') return; // the decoder failed just now
+    if (this.kept.v.length && t - this.lastForget > 1) {
+      this.lastForget = t;
+      this.forget();
+    }
 
     if (this.state === 'buffering' && !this.starting) {
-      var start = this.everPlayed ? -Infinity : this.startPts();
+      // Lining up a start: of the stream, or of a skip within what is on hand.
+      var fresh = !this.everPlayed || this.jump !== null;
+      var start = fresh ? this.startPts() : -Infinity;
       if (start === null) return; // the start point isn't known yet
-      if (!this.everPlayed) video.trim(start);
+      if (fresh) video.trim(start);
       // Sound arrives a little behind the picture, so count whichever is shorter.
       var have = this.audioArriving() ? Math.min(this.lastVideoPts, this.lastAudioPts) : this.lastVideoPts;
-      var from = this.everPlayed ? this.clock : Math.max(this.clock, start - PREROLL);
-      var need = this.everPlayed ? REBUFFER : START_BUFFER;
+      var from = fresh ? Math.max(this.clock, start - PREROLL) : this.clock;
+      var need = this.jump !== null ? JUMP_BUFFER : this.everPlayed ? REBUFFER : START_BUFFER;
       var enough = have - from >= need || this.noMore();
       if (this.noMore()) video.flush();
       if (this.sink && enough && video.readyFor(start)) {
-        if (!this.everPlayed) video.trim(start);
+        if (fresh) video.trim(start);
         if (this.wantPause) {
           // Starting paused: show the first frame so there's a picture.
-          if (!this.everPlayed) video.poster();
+          if (fresh) video.poster();
           this.setState('paused');
         } else this.beginPlay();
       } else if (this.noMore() && video.idle()) {
@@ -931,7 +1118,17 @@
         self.setState('paused');
         return;
       }
-      if (!self.everPlayed) {
+      if (self.jump !== null) {
+        // A skip within what was on hand: the same stream and the same clock, at a new spot.
+        if (!self.video || !self.video.readyFor(self.jump)) {
+          // Its picture isn't decoded yet: back to lining up, and the next tick tries again.
+          if (self.state === 'paused') self.setState('buffering');
+          return;
+        }
+        self.video.trim(self.jump);
+        self.clock = self.jump - PREROLL - outputDelay(audioContext());
+        self.jump = null;
+      } else if (!self.everPlayed) {
         // Start just before the start point, or before the sound if that
         // comes a moment earlier.
         var start = self.startPts();
@@ -965,7 +1162,10 @@
 
   StreamSession.prototype.position = function () {
     if (this.basePts === null || this.clock === null) return this.startAt;
-    return this.startAt + Math.max(0, this.clock - this.basePts);
+    // The clock starts a moment early to line picture and sound up; the
+    // position doesn't read earlier than where playback was started from.
+    var from = this.landed !== null ? this.landed : this.basePts;
+    return this.startAt + (Math.max(from, this.clock) - this.basePts);
   };
 
   StreamSession.prototype.buffered = function () {

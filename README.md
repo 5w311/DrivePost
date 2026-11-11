@@ -7,6 +7,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 ## What it does
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
+- **Skipping without waiting:** the car keeps what it has loaded, about 45 seconds ahead (the lighter part of the seek bar) and the last 30 seconds played. A skip to anywhere in that happens at once; only a skip further away loads again.
 - **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
 - **For You:** videos like the ones you've been watching, on the car page and the phone remote.
 - **Theater button:** shows or hides the lists (Up Next, For You, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
@@ -62,6 +63,10 @@ A route also has to deliver the sound. If 20 seconds of picture have gone out wi
 ### Skipping around in a segmented stream
 
 To start partway through (a skip, a resume, a change of quality), the server doesn't let ffmpeg seek in the stream's list of segments. ffmpeg's seeking there can begin the picture a whole segment late, and can begin the sound at the start of its segment while labelling it as the spot asked for, which leaves the sound seconds out of step. Instead the server writes ffmpeg a shorter list that begins with the segment holding the spot, hands it over from a small web server of its own (this machine only), and keeps the stream's own timestamps. The picture begins on that segment's first frame, which the car decodes without showing, and the sound is cut to begin exactly at the spot. See `server/src/segment-list.js`.
+
+### Skipping within what has loaded
+
+The server reads up to 45 seconds ahead of where the car is playing and then waits until that is down to 30. The car keeps all of it, played or not, until it is 30 seconds behind (and never more than 160 MB). ±10 s, the seek bar and skips from a phone first try to go there within what the car holds: the decoder starts over at the keyframe before the spot, the frames up to the spot are decoded without being shown, the sound already queued is cut, and playback carries on. No request is made and the stream that is open stays open; the server just hears the new position. A spot that isn't on hand opens a new stream there, as before. This works for H.264; in MPEG-1 every skip opens a new stream.
 
 ### Where the recommendations come from
 

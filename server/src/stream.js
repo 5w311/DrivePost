@@ -4,9 +4,11 @@ import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeN
 import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
-// How far ahead of the car's playback we transcode before pausing ffmpeg.
-const AHEAD_HIGH = 25;
-const AHEAD_LOW = 12;
+// How far ahead of the car's playback the server reads before pausing
+// ffmpeg, and where it starts again. This is the loaded stretch on the car's
+// seek bar: the car can skip anywhere in it without a new stream.
+const AHEAD_HIGH = 45;
+const AHEAD_LOW = 30;
 // This much picture sent and still no sound, on a video that has sound: the route isn't delivering it.
 const SILENT_AFTER = 20;
 // Videos already started over for that, and when: once is enough, in case the video really is silent there.

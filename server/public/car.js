@@ -6,7 +6,10 @@
   var state = null; // latest state from the server
   var activated = false; // the passenger has tapped the page (needed for sound)
   var loadedSeq = null;
+  var loadedId = null; // the video the open stream is of
+  var loadedFormat = null; // and the video format setting it was opened under
   var retries = [];
+  var jumps = []; // skips made on this page before the server knew: { to, at }
   var errorMsg = null;
   var searchResults = null;
   var searching = false;
@@ -117,6 +120,9 @@
   function startStream(now, startAt) {
     errorMsg = null;
     loadedSeq = now.seq;
+    loadedId = now.id;
+    loadedFormat = state.settings.format;
+    jumps = [];
     player.load({
       id: now.id,
       seq: now.seq,
@@ -126,6 +132,37 @@
       paused: state.paused
     });
     renderStage();
+  }
+
+  // ---------- skipping within what has loaded ----------
+  // The player keeps what it has received: the stretch ahead that the seek
+  // bar shows as loaded, and the last half minute played. A skip to a spot
+  // in there happens on this page at once; only a skip to somewhere else
+  // has the server start a new stream.
+
+  // Go to `to` (seconds) now if it's on hand, then tell the server either way.
+  function skipTo(to) {
+    var d = duration();
+    to = Math.max(0, d ? Math.min(d - 1, to) : to);
+    var s = player.active;
+    if (s && state && state.now && s.seq === state.now.seq && !errorMsg && s.jumpTo(to)) {
+      jumps.push({ to: to, at: Date.now() });
+    }
+    control.cmd('seek', { to: to });
+  }
+
+  // The server says this video is now at another spot. True if the stream
+  // that is open can simply go there (or already has).
+  function skippedWithin(now) {
+    var s = player.active;
+    if (!s || s.state === 'done' || errorMsg || loadedId !== now.id) return false;
+    if (s.quality !== playQuality() || loadedFormat !== state.settings.format) return false;
+    var to = now.startAt || 0;
+    var t = Date.now();
+    jumps = jumps.filter(function (j) { return t - j.at < 5000; });
+    // Our own skip coming back from the server (which rounds to whole seconds): already there.
+    if (jumps.some(function (j) { return Math.abs(j.to - to) < 1.5; })) return true;
+    return s.jumpTo(to);
   }
 
   function showError(message) {
@@ -149,10 +186,17 @@
     }
     if (now.seq !== loadedSeq) {
       retries = [];
-      // Picks up from the last reported spot (e.g. after reloading the page).
-      var p = state.position;
-      var startAt = p && p.seq === now.seq && p.state !== 'loading' ? Math.max(0, p.t - 2) : now.startAt || 0;
-      startStream(now, startAt);
+      if (skippedWithin(now)) {
+        // The same video at another spot, and that spot was already on hand:
+        // the stream carries on, only the place in it changed.
+        loadedSeq = now.seq;
+        player.active.seq = now.seq;
+      } else {
+        // Picks up from the last reported spot (e.g. after reloading the page).
+        var p = state.position;
+        var startAt = p && p.seq === now.seq && p.state !== 'loading' ? Math.max(0, p.t - 2) : now.startAt || 0;
+        startStream(now, startAt);
+      }
     }
     player.setPaused(!!state.paused);
     renderStage();
@@ -328,7 +372,8 @@
     }
 
     if (s && (s.state === 'buffering' || s.frames === 0) && !state.paused) {
-      msg.appendChild(el('div', {}, [el('div', { class: 'spinner' }), el('div', { style: 'margin-top:12px', text: s.frames ? 'Buffering…' : 'Loading…' })]));
+      // "Buffering" only once it has lasted a moment: a skip within what is loaded takes a fraction of a second.
+      msg.appendChild(el('div', { class: s.frames ? 'after-a-moment' : '' }, [el('div', { class: 'spinner' }), el('div', { style: 'margin-top:12px', text: s.frames ? 'Buffering…' : 'Loading…' })]));
     }
     setIcon($('#playPause'), state.paused ? 'play' : 'pause');
     // Pausing (from the car or the phone) shows the controls for a moment.
@@ -379,12 +424,12 @@
   });
   $('#back10').addEventListener('click', function (e) {
     e.stopPropagation();
-    control.cmd('skip', { by: -10 });
+    skipTo(currentTime() - 10);
     bump();
   });
   $('#fwd10').addEventListener('click', function (e) {
     e.stopPropagation();
-    control.cmd('skip', { by: 10 });
+    skipTo(currentTime() + 10);
     bump();
   });
   $('#nextBtn').addEventListener('click', function (e) {
@@ -433,7 +478,7 @@
       dragging = false;
       var to = frac(ev) * duration();
       preview = null;
-      control.cmd('seek', { to: to });
+      skipTo(to);
       bump();
     });
     scrub.addEventListener('pointercancel', function () {
