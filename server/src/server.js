@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
 import { config, QUALITIES } from './config.js';
-import { Auth, clientIp, OWNER } from './auth.js';
+import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream } from './stream.js';
 import { stampPage, feedbackLink } from './pages.js';
@@ -51,11 +51,20 @@ const auth = new Auth({
 });
 
 // ---------- profiles ----------
-// Each profile keeps its own now playing, Up Next, history and settings. The
-// main profile's live where they always did; the others get a folder each.
+// Each profile keeps its own now playing, Up Next, history and settings, in a
+// folder of its own. The one profile a server had before profiles existed
+// keeps them where they always were, in the data folder itself.
 const stores = new Map();
 function profileDir(id) {
-  return id === OWNER ? config.dataDir : path.join(config.dataDir, 'profiles', id);
+  return id === ORIGINAL ? config.dataDir : path.join(config.dataDir, 'profiles', id);
+}
+// Delete a removed profile's Up Next, history and settings.
+function deleteProfileData(id) {
+  // The original profile's file sits next to everyone's sign-ins: only that file goes.
+  if (id === ORIGINAL) {
+    fs.rmSync(path.join(config.dataDir, 'state.json'), { force: true });
+    fs.rmSync(path.join(config.dataDir, 'state.json.tmp'), { force: true });
+  } else fs.rmSync(profileDir(id), { recursive: true, force: true });
 }
 function storeFor(id) {
   let store = stores.get(id);
@@ -200,7 +209,7 @@ async function route(req, res) {
   const p = url.pathname;
   const profile = auth.profileOf(req); // which profile this device is signed in to, if any
   const authed = !!profile;
-  const admin = auth.isAdmin(req); // has this device typed the server's passcode on the Admin page?
+  const admin = auth.isAdmin(req); // has this device typed the server's own passcode?
 
   if (req.method === 'GET' && p === '/healthz') return send(res, 200, { ok: true });
 
@@ -214,8 +223,8 @@ async function route(req, res) {
     return send(res, 200, { busy: [...stores.values()].some((st) => !!st.now && !st.paused && st.carOnline) });
   }
 
-  // Admin is opened by typing the server's own passcode (DRIVE_PASSCODE) on
-  // it. Being signed in to a profile isn't enough.
+  // Admin is opened by typing the server's own passcode (DRIVE_PASSCODE).
+  // Being signed in to a profile isn't enough.
   if (req.method === 'GET' && p === '/admin') {
     if (!admin) return redirect(res, '/login?admin=1');
     return serveFile(res, 'admin.html');
@@ -256,7 +265,12 @@ async function route(req, res) {
   if (req.method === 'POST' && p === '/api/login') {
     if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
     const body = await readJson(req);
-    // The passcode decides which profile this device joins.
+    // The server's own passcode opens Admin, and only Admin.
+    if (auth.checkAdminPasscode(body.passcode)) {
+      auth.issueAdminCookie(req, res);
+      return send(res, 200, { ok: true, admin: true });
+    }
+    // Any other passcode decides which profile this device joins.
     const matched = auth.checkPasscode(body.passcode);
     if (!matched) {
       // The passcode of someone who asked for a profile and is still waiting.
@@ -269,7 +283,7 @@ async function route(req, res) {
     return send(res, 200, { ok: true });
   }
 
-  // ---- Admin: the server's own passcode, whichever profile the device is on ----
+  // ---- Admin: opened by the server's own passcode, apart from any profile ----
   if (req.method === 'POST' && p === '/api/admin/login') {
     if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
     const body = await readJson(req);
@@ -313,14 +327,12 @@ async function route(req, res) {
           clearTimeout(gone.saveTimer);
           stores.delete(id);
         }
-        // Its Up Next, history and settings go with it.
-        fs.rmSync(profileDir(id), { recursive: true, force: true });
+        deleteProfileData(id);
       } else return send(res, 400, { error: 'Unknown action' });
     } catch (err) {
       return send(res, 400, { error: err.message });
     }
     tellProfileNames();
-    tellRequests();
     return send(res, 200, adminView());
   }
 
@@ -335,13 +347,7 @@ async function route(req, res) {
       try {
         const before = auth.requests.length;
         const waiting = auth.askForProfile(body.name, body.passcode);
-        if (auth.requests.length > before) {
-          console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
-          tellRequests();
-          // Phones signed in to Admin list the request; the main profile's car just mentions it.
-          const note = JSON.stringify({ type: 'toast', message: `${waiting.name} is asking for a profile. Answer in Admin on your phone.` });
-          for (const c of controlClients) if (c.profile === OWNER && c.role === 'car' && c.ws.readyState === 1) c.ws.send(note);
-        }
+        if (auth.requests.length > before) console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
         return send(res, 200, { waiting });
       } catch (err) {
         return send(res, 400, { error: err.message });
@@ -355,10 +361,7 @@ async function route(req, res) {
     if (req.method === 'GET') return send(res, 200, { waiting: !!auth.requestById(id) });
     if (req.method === 'DELETE') {
       const gone = auth.dropRequest(id);
-      if (gone) {
-        console.log(`[profiles] ${gone.name} cancelled their request`);
-        tellRequests();
-      }
+      if (gone) console.log(`[profiles] ${gone.name} cancelled their request`);
       return send(res, 200, { ok: true });
     }
   }
@@ -459,9 +462,8 @@ async function route(req, res) {
         // Where to get the ready-made Shortcut, when this copy of DrivePost has one.
         shortcutUrl: signedShortcut() ? `/shortcut/${encodeURIComponent(SHORTCUT_NAME)}.shortcut` : null,
         testItem: TEST_PATTERN_ITEM,
-        // Who this device is signed in as, and whether it's signed in to Admin.
-        profile: { id: profile, name: auth.profile(profile).name, owner: profile === OWNER },
-        admin,
+        // Which profile this device is signed in to.
+        profile: { id: profile, name: auth.profile(profile).name },
       });
     }
     if (req.method === 'POST' && p === '/api/share-token') {
@@ -496,40 +498,25 @@ function dropScreens(profile) {
   for (const c of controlClients) if (c.profile === profile) c.ws.close(4401, 'signed out');
 }
 
-function hello(client) {
-  return {
-    type: 'version',
-    version: VERSION,
-    feedback: !!config.feedbackUrl,
-    profile: profileLabel(client.profile),
-    // Whether to show the way to Admin: on devices signed in to it, and on
-    // the main profile, whose owner most likely runs the server.
-    admin: client.admin || client.profile === OWNER,
-  };
+function hello(profile) {
+  return { type: 'version', version: VERSION, feedback: !!config.feedbackUrl, profile: profileLabel(profile) };
 }
 
 // Profiles were added, renamed or removed: screens show whose they are once there's more than one.
 function tellProfileNames() {
-  for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c)));
-}
-
-// Screens signed in to Admin list who is waiting for a profile.
-function tellRequests() {
-  const data = JSON.stringify({ type: 'requests', requests: auth.listRequests() });
-  for (const c of controlClients) if (c.admin && c.ws.readyState === 1) c.ws.send(data);
+  for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c.profile)));
 }
 
 function refreshCarOnline(profile) {
   storeFor(profile).setCarOnline([...controlClients].some((c) => c.profile === profile && c.role === 'car'));
 }
 
-function handleControl(ws, profile, admin) {
-  const client = { ws, role: 'remote', profile, admin };
+function handleControl(ws, profile) {
+  const client = { ws, role: 'remote', profile };
   const store = storeFor(profile);
   controlClients.add(client);
-  ws.send(JSON.stringify(hello(client)));
+  ws.send(JSON.stringify(hello(profile)));
   ws.send(JSON.stringify({ type: 'state', state: store.publicState() }));
-  if (admin) ws.send(JSON.stringify({ type: 'requests', requests: auth.listRequests() }));
 
   ws.on('message', (raw) => {
     let msg;
@@ -593,7 +580,7 @@ server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
-    if (url.pathname === '/ws/control') return handleControl(ws, profile, auth.isAdmin(req));
+    if (url.pathname === '/ws/control') return handleControl(ws, profile);
     const id = url.searchParams.get('id');
     if (!isValidId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
@@ -614,7 +601,7 @@ function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-storeFor(OWNER); // the main profile is always there
+if (auth.profile(ORIGINAL)) storeFor(ORIGINAL); // a server from before profiles: its one car, ready as before
 startAutoUpdate();
 server.listen(config.port, () => {
   console.log(`DrivePost listening on :${config.port}`);

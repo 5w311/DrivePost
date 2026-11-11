@@ -36,33 +36,71 @@
     });
   }
 
+  // ---- people asking for a profile ----
+  function ago(at) {
+    var min = Math.floor((Date.now() - at) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return min + ' min ago';
+    if (min < 48 * 60) return Math.floor(min / 60) + ' h ago';
+    return Math.floor(min / 1440) + ' days ago';
+  }
+  // Fills `list` with one row per request, each with Allow and Decline.
+  // `done(answer)` gets the server's answer after either.
+  function showRequests(list, requests, done) {
+    list.innerHTML = '';
+    (requests || []).forEach(function (r) {
+      function answer(action, said) {
+        DT.api('/api/profiles', { body: { action: action, id: r.id } }).then(function (res) {
+          DT.toast(said);
+          if (done) done(res);
+        }).catch(function (e) {
+          if (!signedOut(e)) DT.toast(e.message);
+        });
+      }
+      list.appendChild(DT.el('div', { class: 'prow asking' }, [
+        DT.el('div', { class: 'pname' }, [
+          DT.el('b', { text: r.name }),
+          ' is asking for a profile',
+          DT.el('div', { class: 'psub', text: 'Number on their screen: ' + r.code + ' · asked ' + ago(r.at) })
+        ]),
+        DT.el('div', { class: 'pbtns' }, [
+          DT.el('button', { type: 'button', class: 'primary', text: 'Allow', onclick: function () {
+            answer('approve', r.name + ' can sign in now');
+          } }),
+          DT.el('button', { type: 'button', text: 'Decline', onclick: function () {
+            answer('decline', 'Declined');
+          } })
+        ])
+      ]));
+    });
+  }
+
   function profileRow(p) {
     var buttons = [
       DT.el('button', { type: 'button', text: 'Rename', onclick: function () {
         var name = prompt('New name for this profile:', p.name);
         if (name !== null && name.trim()) act({ action: 'rename', id: p.id, name: name }, 'Renamed');
-      } })
-    ];
-    if (!p.owner) {
-      buttons.push(DT.el('button', { type: 'button', text: 'Passcode', onclick: function () {
+      } }),
+      DT.el('button', { type: 'button', text: 'Passcode', onclick: function () {
         var pass = prompt('New passcode for ' + p.name + ' (at least 4 characters). Devices already signed in stay signed in.');
         if (pass !== null && pass) act({ action: 'passcode', id: p.id, passcode: pass }, 'Passcode changed');
-      } }));
-      buttons.push(DT.el('button', { type: 'button', text: 'Sign out', onclick: function () {
+      } }),
+      DT.el('button', { type: 'button', text: 'Sign out', onclick: function () {
         if (confirm('Sign out the car and every phone on ' + p.name + '?')) act({ action: 'signout', id: p.id }, 'Signed out');
-      } }));
-      buttons.push(DT.el('button', { type: 'button', text: 'Remove', onclick: function () {
+      } }),
+      DT.el('button', { type: 'button', text: 'Remove', onclick: function () {
         if (confirm('Remove ' + p.name + '? Its Up Next, history and settings are deleted and its devices are signed out.')) {
           act({ action: 'remove', id: p.id }, 'Removed');
         }
-      } }));
-    }
+      } })
+    ];
     var car = p.playing ? 'Car connected, playing' : p.carOnline ? 'Car connected' : 'Car not connected';
     return DT.el('div', { class: 'prow' }, [
       DT.el('div', { class: 'pname' }, [
         DT.el('b', { text: p.name }),
-        p.owner ? DT.el('span', { class: 'muted', text: ' · main profile, also opened by the passcode in .env' }) : null,
-        DT.el('div', { class: 'psub', text: car })
+        DT.el('div', { class: 'psub', text: car }),
+        // Only the profile a server had before profiles existed can be without one.
+        p.hasPasscode ? null : DT.el('div', { class: 'psub', text: 'No passcode: only devices already signed in can use it. Give it one with Passcode, or remove it.' })
       ]),
       DT.el('div', { class: 'pbtns' }, buttons)
     ]);
@@ -72,12 +110,14 @@
     // People who asked for a profile from the sign-in page.
     $('#noRequests').classList.toggle('hidden', !!view.requests.length);
     $('#requestList').classList.toggle('hidden', !view.requests.length);
-    DT.showRequests($('#requestList'), view.requests, took);
+    showRequests($('#requestList'), view.requests, took);
     $('#allowAsk').checked = view.allowRequests !== false;
 
     var list = $('#profileList');
     list.innerHTML = '';
     view.profiles.forEach(function (p) { list.appendChild(profileRow(p)); });
+    list.classList.toggle('hidden', !view.profiles.length);
+    $('#noProfiles').classList.toggle('hidden', !!view.profiles.length);
 
     $('#build').textContent = view.server.version;
     $('#since').textContent = new Date(view.server.startedAt).toLocaleString([], {

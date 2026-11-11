@@ -3,18 +3,13 @@
   var $ = DT.$;
   var cfg = null;
 
-  // Which profile this device is on. Profiles are managed on the Admin page.
+  // Which profile this device is on.
   function showProfile() {
-    var me = cfg.profile;
     var who = $('#whoAmI');
     who.innerHTML = '';
     who.appendChild(document.createTextNode('This device is signed in to '));
-    who.appendChild(DT.el('b', { text: me.name, style: 'color:var(--text)' }));
-    who.appendChild(document.createTextNode(me.owner
-      ? ', the main profile. Profiles, and people asking for one, are in Admin.'
-      : '. Its name and passcode are managed in Admin, by whoever runs this DrivePost.'));
-    // The way to Admin, for the main profile and for devices signed in to it.
-    $('#adminRow').classList.toggle('hidden', !(me.owner || cfg.admin));
+    who.appendChild(DT.el('b', { text: cfg.profile.name, style: 'color:var(--text)' }));
+    who.appendChild(document.createTextNode('. Everything on this page is for this profile only.'));
   }
 
   function show() {

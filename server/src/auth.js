@@ -3,22 +3,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /*
- * Sign-in and profiles.
+ * Sign-in, profiles and Admin.
  *
  * A profile is one person's (or one car's) own copy of everything: what's
  * playing, Up Next, history, settings, paired phones and Send to Car link.
  * Which profile a device is in is decided by the passcode it signed in with.
  *
- * The first profile, "main", belongs to whoever runs the server. Its passcode
- * is DRIVE_PASSCODE from .env, as it always was. It can add profiles for
- * other people, each with a passcode of its own.
+ * Someone gets a profile by asking for one on the sign-in page, with a name
+ * and a passcode of their choice. The request waits until it is allowed on
+ * the Admin page; until then the passcode opens nothing.
  *
- * Someone new can also ask for a profile from the sign-in page, by typing a
- * passcode nobody uses yet and giving a name. That request waits until it is
- * allowed on the Admin page; until then the passcode opens nothing.
- *
- * The Admin page is opened by typing DRIVE_PASSCODE on it. Being signed in to
- * a profile, the main one included, is not enough.
+ * DRIVE_PASSCODE from .env is the server's own passcode. It opens the Admin
+ * page and nothing else: it is not a profile's passcode, and being signed in
+ * to a profile doesn't open Admin.
  */
 
 const COOKIE = 'dt_session';
@@ -26,7 +23,11 @@ const SESSION_DAYS = 400;
 const ADMIN_COOKIE = 'dt_admin';
 const ADMIN_DAYS = 30;
 const PAIR_TTL_MS = 10 * 60 * 1000;
-export const OWNER = 'main';
+// The one profile a server had before profiles existed, if it still has it.
+// Its history lives in the data folder itself, and it has no passcode until
+// it is given one in Admin: DRIVE_PASSCODE used to open it and no longer does.
+// A server set up since then has no such profile.
+export const ORIGINAL = 'main';
 export const MAX_PROFILES = 12;
 export const MAX_REQUESTS = 5; // people waiting for the main profile's OK at one time
 const REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -96,30 +97,31 @@ export class Auth {
     this.secrets = { sessionSecret: saved.sessionSecret || b64url(crypto.randomBytes(32)) };
 
     let profiles = [];
+    let hadProfiles = false;
     this.requests = [];
     this.allowRequests = true;
     try {
       const data = JSON.parse(fs.readFileSync(this.profilesFile, 'utf8'));
+      hadProfiles = true;
       if (Array.isArray(data.profiles)) profiles = data.profiles.filter((p) => p && typeof p.id === 'string');
       if (Array.isArray(data.requests)) this.requests = data.requests.filter((r) => r && typeof r.id === 'string' && r.pass);
       if (data.allowRequests === false) this.allowRequests = false;
     } catch {}
-    let owner = profiles.find((p) => p.id === OWNER);
-    if (!owner) {
-      // First start with profiles: the one profile there always was becomes
-      // "main", and keeps its share token so its Shortcut carries on working.
-      owner = { id: OWNER, name: 'Main', epoch: 0, shareToken: saved.shareToken || b64url(crypto.randomBytes(24)) };
-      profiles.unshift(owner);
+    if (!hadProfiles && saved.sessionSecret) {
+      // A server from before profiles existed: the car, phones and Shortcut
+      // it had become a profile called "Main", so they carry on working.
+      profiles.unshift({ id: ORIGINAL, name: 'Main', epoch: 0, shareToken: saved.shareToken || b64url(crypto.randomBytes(24)) });
     }
-    if (shareToken) owner.shareToken = shareToken; // SHARE_TOKEN in .env wins, as before
+    const original = profiles.find((p) => p.id === ORIGINAL);
+    if (shareToken && original) original.shareToken = shareToken; // SHARE_TOKEN in .env, as before
     this.profiles = profiles;
     this.persist();
   }
 
   persist() {
-    // The main profile's share token is also kept where older versions look for it.
-    const owner = this.profiles.find((p) => p.id === OWNER);
-    this.secrets.shareToken = owner.shareToken;
+    // The original profile's share token is also kept where older versions look for it.
+    const original = this.profiles.find((p) => p.id === ORIGINAL);
+    if (original) this.secrets.shareToken = original.shareToken;
     fs.writeFileSync(this.file, JSON.stringify(this.secrets, null, 2), { mode: 0o600 });
     const data = { profiles: this.profiles, requests: this.requests, allowRequests: this.allowRequests };
     fs.writeFileSync(this.profilesFile, JSON.stringify(data, null, 2), { mode: 0o600 });
@@ -133,7 +135,7 @@ export class Auth {
 
   // What may be shown on screen: no passcodes, no tokens.
   listProfiles() {
-    return this.profiles.map((p) => ({ id: p.id, name: p.name, owner: p.id === OWNER }));
+    return this.profiles.map((p) => ({ id: p.id, name: p.name, hasPasscode: !!p.pass }));
   }
 
   cleanName(name) {
@@ -147,7 +149,6 @@ export class Auth {
   checkPasscode(input) {
     const typed = String(input || '');
     if (!typed) return null;
-    if (this.passcode && safeEqual(typed, this.passcode)) return OWNER;
     for (const p of this.profiles) {
       if (p.pass && safeEqual(scramble(typed, p.pass.salt), p.pass.hash)) return p.id;
     }
@@ -158,11 +159,17 @@ export class Auth {
     const typed = String(passcode || '');
     if (typed.length < 4) throw new Error('Use a passcode of at least 4 characters.');
     if (typed.length > 100) throw new Error('That passcode is too long.');
+    this.notTheServers(typed);
     // The passcode is what tells profiles apart, so no two can share one.
     const taken = this.checkPasscode(typed);
     if (taken && taken !== exceptId) throw new Error('Another profile already uses that passcode. Pick a different one.');
     if (this.requestFor(typed)) throw new Error('Someone waiting for your OK asked for that passcode. Answer them first, or pick a different one.');
     return typed;
+  }
+
+  // The server's own passcode opens Admin and can't double as a profile's.
+  notTheServers(typed) {
+    if (this.checkAdminPasscode(typed)) throw new Error("That passcode can't be used for a profile. Pick a different one.");
   }
 
   addProfile(name, passcode) {
@@ -192,7 +199,6 @@ export class Auth {
   setPasscode(id, passcode) {
     const p = this.profile(id);
     if (!p) throw new Error('No such profile.');
-    if (id === OWNER) throw new Error("The main profile's passcode is DRIVE_PASSCODE in the .env file.");
     const typed = this.checkNewPasscode(passcode, id);
     const salt = b64url(crypto.randomBytes(16));
     p.pass = { salt, hash: scramble(typed, salt) };
@@ -200,7 +206,6 @@ export class Auth {
   }
 
   removeProfile(id) {
-    if (id === OWNER) throw new Error("The main profile can't be removed.");
     const i = this.profiles.findIndex((p) => p.id === id);
     if (i < 0) throw new Error('No such profile.');
     this.profiles.splice(i, 1);
@@ -209,8 +214,8 @@ export class Auth {
   }
 
   // ---- asking for a profile ----
-  // Requests are kept in the same file as the profiles, so one made while the
-  // owner is away is still there after the server restarts or updates.
+  // Requests are kept in the same file as the profiles, so one made while
+  // nobody is looking at Admin is still there after the server restarts or updates.
 
   pruneRequests() {
     const cutoff = Date.now() - REQUEST_TTL_MS;
@@ -255,12 +260,13 @@ export class Auth {
   }
 
   // Someone new asks for a profile of their own. Nothing opens for them until
-  // the main profile allows it. Returns what to show while they wait.
+  // it is allowed in Admin. Returns what to show while they wait.
   askForProfile(name, passcode) {
     if (!this.allowRequests) throw new Error("This DrivePost isn't taking requests for new profiles. Ask its owner for a passcode.");
     const typed = String(passcode || '');
     if (typed.length < 4) throw new Error('Use a passcode of at least 4 characters.');
     if (typed.length > 100) throw new Error('That passcode is too long.');
+    this.notTheServers(typed);
     if (this.checkPasscode(typed)) throw new Error('That passcode already opens a profile. Go back and sign in with it.');
     const already = this.requestFor(typed);
     if (already) return this.showRequest(already); // asked before with this passcode: still waiting
@@ -269,8 +275,8 @@ export class Auth {
     if (this.requests.length >= MAX_REQUESTS) {
       throw new Error('Several people are already waiting for an OK. Ask the owner to answer them, then try again.');
     }
-    // A short number shown on both screens, so the owner can tell whose
-    // request this really is before allowing it.
+    // A short number shown on both screens, so whoever allows it can tell
+    // whose request this really is.
     let code;
     do code = String(crypto.randomInt(100, 1000));
     while (this.requests.some((r) => r.code === code));
@@ -287,7 +293,7 @@ export class Auth {
     return this.showRequest(request);
   }
 
-  // The main profile said yes: the request becomes a profile, opened by the
+  // Allowed in Admin: the request becomes a profile, opened by the
   // passcode the person chose. Returns the new profile's id.
   approveRequest(id) {
     const r = this.requestById(id);
@@ -306,7 +312,7 @@ export class Auth {
     return profile.id;
   }
 
-  // Declined by the main profile, or cancelled by the person who asked.
+  // Declined in Admin, or cancelled by the person who asked.
   // Returns the request that was dropped, or null if there was none.
   dropRequest(id) {
     const i = this.requests.findIndex((r) => r.id === id);
@@ -322,7 +328,7 @@ export class Auth {
     return crypto.createHmac('sha256', this.secrets.sessionSecret).update(text).digest('base64url');
   }
 
-  issueCookie(req, res, profileId = OWNER) {
+  issueCookie(req, res, profileId) {
     const p = this.profile(profileId);
     if (!p) throw new Error('No such profile.');
     const exp = Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400;
@@ -355,20 +361,20 @@ export class Auth {
       if (!p || !exp || exp < now || String(p.epoch) !== epochStr) return null;
       return safeEqual(sig, this.sign(`v2.${id}.${epochStr}.${exp}`)) ? id : null;
     }
-    // A sign-in from before profiles existed belongs to the main profile,
-    // until that profile signs out everywhere.
+    // A sign-in from before profiles existed belongs to the original
+    // profile, until that profile is signed out everywhere or removed.
     if (parts.length === 2) {
       const [expStr, sig] = parts;
       const exp = parseInt(expStr, 10);
-      const owner = this.profile(OWNER);
-      if (!exp || exp < now || !owner || owner.epoch !== 0) return null;
-      return safeEqual(sig, this.sign(`v1.${exp}`)) ? OWNER : null;
+      const original = this.profile(ORIGINAL);
+      if (!exp || exp < now || !original || original.epoch !== 0) return null;
+      return safeEqual(sig, this.sign(`v1.${exp}`)) ? ORIGINAL : null;
     }
     return null;
   }
 
   // Signing out everywhere: every existing sign-in to this profile stops working.
-  rotateSessions(profileId = OWNER) {
+  rotateSessions(profileId) {
     const p = this.profile(profileId);
     if (!p) return;
     p.epoch = (p.epoch || 0) + 1;
@@ -377,10 +383,10 @@ export class Auth {
 
   // ---- admin ----
   // The Admin page (profiles, people asking for one) is opened by typing the
-  // server's own passcode, DRIVE_PASSCODE, on it. That is kept apart from
-  // profile sign-ins on purpose: a phone paired from a car's QR code is on
-  // that car's profile without ever having typed a passcode, and must not
-  // get to manage the server that way.
+  // server's own passcode, DRIVE_PASSCODE. That passcode opens nothing else,
+  // and no profile sign-in opens Admin: a phone paired from a car's QR code
+  // is on that car's profile without ever having typed a passcode, and must
+  // not get to manage the server that way.
 
   checkAdminPasscode(input) {
     const typed = String(input || '');
@@ -423,7 +429,7 @@ export class Auth {
 
   // ---- share tokens (the iPhone Shortcut) ----
 
-  shareTokenOf(profileId = OWNER) {
+  shareTokenOf(profileId) {
     const p = this.profile(profileId);
     return p ? p.shareToken : null;
   }
@@ -441,7 +447,7 @@ export class Auth {
     return null;
   }
 
-  rotateShareToken(profileId = OWNER) {
+  rotateShareToken(profileId) {
     const p = this.profile(profileId);
     if (!p) throw new Error('No such profile.');
     p.shareToken = b64url(crypto.randomBytes(24));
@@ -461,7 +467,7 @@ export class Auth {
   }
 
   // A one-time code from a car's QR: the phone that scans it joins that car's profile.
-  newPairCode(profileId = OWNER) {
+  newPairCode(profileId) {
     const now = Date.now();
     for (const [code, entry] of this.pairCodes) if (entry.exp < now) this.pairCodes.delete(code);
     const code = b64url(crypto.randomBytes(12));

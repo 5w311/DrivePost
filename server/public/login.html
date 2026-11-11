@@ -27,7 +27,7 @@
       </div>
 
       <div id="ask" class="hidden">
-        <p>Pick a name and a passcode for your own profile. The owner of this DrivePost then allows it from their phone.</p>
+        <p>Pick a name and a passcode for your own profile. Whoever runs this DrivePost then allows it.</p>
         <form id="askForm" autocomplete="off">
           <input id="askName" type="text" placeholder="Your name, or your car's" maxlength="24" autocomplete="off">
           <input id="askPass" type="text" placeholder="A passcode, at least 4 characters" maxlength="100" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
@@ -38,7 +38,7 @@
       </div>
 
       <div id="waiting" class="hidden">
-        <p><b id="waitName" style="color:var(--text)"></b>, your profile is waiting for the owner's OK. Ask them to open DrivePost on their phone. They'll see your name and this number:</p>
+        <p><b id="waitName" style="color:var(--text)"></b>, your profile is waiting for an OK from whoever runs this DrivePost. They'll see your name and this number on its Admin page:</p>
         <div id="waitCode" class="wait-code"></div>
         <p>This page signs you in by itself once they allow it. You can also close it and come back later with your passcode.</p>
         <button id="waitCancel" type="button" class="ghost" style="width:100%">Cancel my request</button>
@@ -70,8 +70,7 @@
         });
       }
 
-      // Signing in to the Admin page: that takes the server's own passcode,
-      // whichever profile this device is on.
+      // Signing in to the Admin page: that takes the server's own passcode.
       var forAdmin = !!params.get('admin');
       if (forAdmin) {
         next = '/admin';
@@ -89,7 +88,7 @@
         $('newHere').classList.remove('hidden');
       }
 
-      // ---- waiting for the owner's OK ----
+      // ---- waiting to be allowed ----
       // The passcode is kept only in this page's memory, to sign in with once
       // the profile is allowed.
       var held = null;
@@ -148,7 +147,8 @@
         err.textContent = '';
         post(forAdmin ? '/api/admin/login' : '/api/login', { passcode: passcode }).then(function (r) {
           if (r.ok && r.data.waiting) return wait(r.data.waiting, passcode);
-          if (r.ok) return void (location.href = next);
+          // The server's own passcode opens Admin, wherever it is typed.
+          if (r.ok) return void (location.href = r.data.admin ? '/admin' : next);
           err.textContent = r.data.error || 'Sign-in failed';
           if (r.status === 401 && r.data.canAsk) offerAsking('Not your passcode yet?');
         }).catch(function (e) {

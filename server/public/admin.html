@@ -6,14 +6,12 @@
 <meta name="theme-color" content="#0b0d10">
 <title>Admin · DrivePost</title>
 <link rel="icon" href="/static/icon-192.png">
-<link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body class="remote setup">
   <header class="remote-head">
     <div class="brand">Drive<span>Post</span></div>
     <div class="who">Admin</div>
-    <a href="/remote" class="muted" style="margin-left:auto">Remote</a>
   </header>
   <div class="wrap">
 
@@ -22,7 +20,7 @@
       <div class="card-body">
         <div id="requestList" class="plist"></div>
         <p id="noRequests" class="muted" style="margin-top:0">Nobody is waiting for a profile.</p>
-        <p class="muted" style="font-size:14px">To give someone their own profile, send them this address. On the sign-in page they tap <b>Ask for your own profile</b> and pick a name and a passcode. Their name then shows up here with a number, and on the remote of any phone that's signed in to Admin. Nothing works for them until you tap <b>Allow</b>, and you should only do that if the number matches the one on their screen.</p>
+        <p class="muted" style="font-size:14px">To give someone their own profile, send them this address. On the sign-in page they tap <b>Ask for your own profile</b> and pick a name and a passcode. Their name then shows up here with a number. Nothing works for them until you tap <b>Allow</b>, and you should only do that if the number matches the one on their screen.</p>
         <label class="check"><input id="allowAsk" type="checkbox"> <span>Let new people ask for a profile</span></label>
       </div>
     </section>
@@ -31,6 +29,7 @@
       <div class="card-head"><h2>Profiles</h2></div>
       <div class="card-body">
         <div id="profileList" class="plist"></div>
+        <p id="noProfiles" class="muted hidden" style="margin-top:0">No profiles yet. Have the first person ask for one from the sign-in page, or add one yourself below.</p>
         <details class="more">
           <summary>Add a profile yourself instead</summary>
           <form id="addProfile" class="add-profile" autocomplete="off">
@@ -53,11 +52,9 @@
         </div>
         <p class="muted" style="font-size:14px">The build changes whenever an update changes the app's pages, and the time is when the server last started, so both tell you an update went in.</p>
         <button id="adminOut" type="button">Sign out of Admin on this device</button>
-        <p class="muted" style="font-size:14px;margin-bottom:0">Admin is opened with the passcode set as <b>DRIVE_PASSCODE</b> in the server's <b>.env</b> file. Changing it there signs every device out of Admin.</p>
+        <p class="muted" style="font-size:14px;margin-bottom:0">Admin is opened with the passcode set as <b>DRIVE_PASSCODE</b> in the server's <b>.env</b> file. That passcode opens only this page: it isn't a profile's passcode and can't be used as one. Changing it there signs every device out of Admin.</p>
       </div>
     </section>
-
-    <p style="text-align:center;margin-top:18px"><a href="/setup" class="muted">Setup &amp; sharing</a></p>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

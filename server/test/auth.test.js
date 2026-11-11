@@ -4,13 +4,23 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Auth, OWNER, MAX_PROFILES, MAX_REQUESTS } from '../src/auth.js';
+import { Auth, ORIGINAL, MAX_PROFILES, MAX_REQUESTS } from '../src/auth.js';
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-auth-'));
 }
+// 'server-pass' stands for DRIVE_PASSCODE, the server's own passcode.
 function make(dir = tmp(), extra = {}) {
-  return new Auth({ dataDir: dir, passcode: 'owner-pass', ...extra });
+  return new Auth({ dataDir: dir, passcode: 'server-pass', ...extra });
+}
+// A data folder as a server from before profiles existed left it: one secret
+// that signed its car and phones in, and its Shortcut's token.
+function oldServer(dir = tmp()) {
+  const sessionSecret = crypto.randomBytes(32).toString('base64url');
+  fs.writeFileSync(path.join(dir, 'secrets.json'), JSON.stringify({ sessionSecret, shareToken: 'old-share-token' }));
+  const exp = Math.floor(Date.now() / 1000) + 86400;
+  const cookie = `${exp}.${crypto.createHmac('sha256', sessionSecret).update(`v1.${exp}`).digest('base64url')}`;
+  return { dir, sessionSecret, exp, cookie };
 }
 // Sign a device in and hand back a request carrying its cookie.
 function signedIn(auth, profile) {
@@ -20,51 +30,68 @@ function signedIn(auth, profile) {
 }
 const withCookie = (value) => ({ headers: { cookie: `dt_session=${value}` }, socket: {} });
 
-test('a fresh server has one profile, opened by the passcode from .env', () => {
-  const auth = make();
-  assert.deepEqual(auth.listProfiles(), [{ id: 'main', name: 'Main', owner: true }]);
-  assert.equal(auth.checkPasscode('owner-pass'), OWNER);
+test('a fresh server has no profiles, and the passcode from .env opens none', () => {
+  const dir = tmp();
+  const auth = make(dir);
+  assert.deepEqual(auth.listProfiles(), []);
+  assert.equal(auth.checkPasscode('server-pass'), null, "the server's passcode is not a profile's");
+  assert.equal(auth.checkAdminPasscode('server-pass'), true, 'it opens Admin');
   assert.equal(auth.checkPasscode('nope'), null);
   assert.equal(auth.checkPasscode(''), null);
-  assert.equal(auth.profileOf(signedIn(auth, OWNER)), OWNER);
   assert.equal(auth.profileOf({ headers: {}, socket: {} }), null);
+  assert.deepEqual(make(dir).listProfiles(), [], 'and none appears on a restart');
 });
 
-test('updating a server from before profiles keeps its sign-ins and its Shortcut', () => {
-  const dir = tmp();
-  // What an older version left behind, and a cookie it handed out.
-  const sessionSecret = crypto.randomBytes(32).toString('base64url');
-  fs.writeFileSync(path.join(dir, 'secrets.json'), JSON.stringify({ sessionSecret, shareToken: 'old-share-token' }));
-  const exp = Math.floor(Date.now() / 1000) + 86400;
-  const oldCookie = `${exp}.${crypto.createHmac('sha256', sessionSecret).update(`v1.${exp}`).digest('base64url')}`;
-
-  const auth = make(dir);
-  assert.equal(auth.profileOf(withCookie(oldCookie)), OWNER, 'the car and phones stay signed in, as the main profile');
-  assert.equal(auth.shareTokenOf(OWNER), 'old-share-token');
-  assert.equal(auth.shareProfile({ headers: {} }, 'old-share-token'), OWNER, 'the one-paste link still works');
-  assert.equal(auth.shareProfile({ headers: { authorization: 'Bearer old-share-token' } }), OWNER, 'so does a Shortcut made with the header');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8')).shareToken, 'old-share-token', 'still where an older version would look');
+test('a server from before profiles keeps its car, phones and Shortcut as a profile called Main', () => {
+  const old = oldServer();
+  const auth = make(old.dir);
+  assert.deepEqual(auth.listProfiles(), [{ id: ORIGINAL, name: 'Main', hasPasscode: false }]);
+  assert.equal(auth.profileOf(withCookie(old.cookie)), ORIGINAL, 'the car and phones stay signed in');
+  assert.equal(auth.shareTokenOf(ORIGINAL), 'old-share-token');
+  assert.equal(auth.shareProfile({ headers: {} }, 'old-share-token'), ORIGINAL, 'the one-paste link still works');
+  assert.equal(auth.shareProfile({ headers: { authorization: 'Bearer old-share-token' } }), ORIGINAL, 'so does a Shortcut made with the header');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(old.dir, 'secrets.json'), 'utf8')).shareToken, 'old-share-token', 'still where an older version would look');
+  assert.equal(auth.checkPasscode('server-pass'), null, 'but the passcode from .env no longer signs anything in to it');
 
   // An expired or made-up old cookie is still refused.
   const past = Math.floor(Date.now() / 1000) - 10;
-  const expired = `${past}.${crypto.createHmac('sha256', sessionSecret).update(`v1.${past}`).digest('base64url')}`;
+  const expired = `${past}.${crypto.createHmac('sha256', old.sessionSecret).update(`v1.${past}`).digest('base64url')}`;
   assert.equal(auth.profileOf(withCookie(expired)), null);
-  assert.equal(auth.profileOf(withCookie(`${exp}.forged`)), null);
+  assert.equal(auth.profileOf(withCookie(`${old.exp}.forged`)), null);
 
-  // Signing the main profile out everywhere ends the old sign-ins too.
-  auth.rotateSessions(OWNER);
-  assert.equal(auth.profileOf(withCookie(oldCookie)), null);
+  // Signing it out everywhere ends the old sign-ins too.
+  auth.rotateSessions(ORIGINAL);
+  assert.equal(auth.profileOf(withCookie(old.cookie)), null);
 });
 
-test('each added profile has its own passcode, which decides who signs in where', () => {
+test('the profile from before profiles is an ordinary one: it can get a passcode, or be removed for good', () => {
+  const old = oldServer();
+  const auth = make(old.dir);
+  const car = signedIn(auth, ORIGINAL);
+  auth.setPasscode(ORIGINAL, 'my-new-pass');
+  assert.equal(auth.checkPasscode('my-new-pass'), ORIGINAL);
+  assert.deepEqual(auth.listProfiles(), [{ id: ORIGINAL, name: 'Main', hasPasscode: true }]);
+  assert.equal(auth.profileOf(car), ORIGINAL, 'devices already on it stay signed in');
+  auth.renameProfile(ORIGINAL, 'Greg');
+  assert.equal(auth.profile(ORIGINAL).name, 'Greg');
+
+  auth.removeProfile(ORIGINAL);
+  assert.deepEqual(auth.listProfiles(), []);
+  assert.equal(auth.profileOf(car), null);
+  assert.equal(auth.profileOf(withCookie(old.cookie)), null);
+  assert.equal(auth.shareProfile({ headers: {} }, 'old-share-token'), null);
+  assert.equal(auth.checkPasscode('my-new-pass'), null);
+  assert.deepEqual(make(old.dir).listProfiles(), [], "it doesn't come back on a restart");
+});
+
+test('each profile has its own passcode, which decides who signs in where', () => {
   const dir = tmp();
   const auth = make(dir);
   const maria = auth.addProfile('  Maria  ', 'maria-1234');
   const kid = auth.addProfile('Model Y', 'y-car-99');
-  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main', 'Maria', 'Model Y']);
+  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Maria', 'Model Y']);
   assert.equal(auth.checkPasscode('maria-1234'), maria);
   assert.equal(auth.checkPasscode('y-car-99'), kid);
-  assert.equal(auth.checkPasscode('owner-pass'), OWNER);
   assert.equal(auth.checkPasscode('Maria-1234'), null, 'passcodes are exact');
 
   // Passcodes are not kept as typed.
@@ -81,17 +108,16 @@ test('passcodes must be different, names are required, and there is a limit', ()
   const auth = make();
   const a = auth.addProfile('A', 'aaaa-1');
   assert.throws(() => auth.addProfile('B', 'aaaa-1'), /already uses that passcode/);
-  assert.throws(() => auth.addProfile('B', 'owner-pass'), /already uses that passcode/, "not the main profile's either");
+  assert.throws(() => auth.addProfile('B', 'server-pass'), /can't be used for a profile/, "the server's own passcode is for Admin only");
   assert.throws(() => auth.addProfile('B', 'abc'), /at least 4/);
   assert.throws(() => auth.addProfile('   ', 'bbbb-1'), /name/);
   const b = auth.addProfile('B', 'bbbb-1');
   assert.throws(() => auth.setPasscode(b, 'aaaa-1'), /already uses/);
+  assert.throws(() => auth.setPasscode(b, 'server-pass'), /can't be used for a profile/);
   auth.setPasscode(b, 'bbbb-1'); // its own passcode again is fine
   auth.setPasscode(b, 'bbbb-2');
   assert.equal(auth.checkPasscode('bbbb-1'), null);
   assert.equal(auth.checkPasscode('bbbb-2'), b);
-  assert.throws(() => auth.setPasscode(OWNER, 'whatever'), /\.env/);
-  assert.throws(() => auth.removeProfile(OWNER), /can't be removed/);
   auth.renameProfile(a, 'A long name that goes on and on and on');
   assert.equal(auth.profile(a).name.length, 24);
   for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `pass-${i}`);
@@ -100,21 +126,22 @@ test('passcodes must be different, names are required, and there is a limit', ()
 
 test('sign-ins belong to one profile and are ended one profile at a time', () => {
   const auth = make();
+  const greg = auth.addProfile('Greg', 'greg-1234');
   const maria = auth.addProfile('Maria', 'maria-1234');
-  const car = signedIn(auth, OWNER);
+  const car = signedIn(auth, greg);
   const mariaCar = signedIn(auth, maria);
   const mariaPhone = signedIn(auth, maria);
-  assert.equal(auth.profileOf(car), OWNER);
+  assert.equal(auth.profileOf(car), greg);
   assert.equal(auth.profileOf(mariaCar), maria);
 
   // A cookie can't be edited into another profile.
-  const stolen = mariaCar.headers.cookie.replace(`p.${maria}.`, `p.${OWNER}.`);
+  const stolen = mariaCar.headers.cookie.replace(`p.${maria}.`, `p.${greg}.`);
   assert.equal(auth.profileOf({ headers: { cookie: stolen }, socket: {} }), null);
 
   auth.rotateSessions(maria);
   assert.equal(auth.profileOf(mariaCar), null);
   assert.equal(auth.profileOf(mariaPhone), null);
-  assert.equal(auth.profileOf(car), OWNER, 'other profiles stay signed in');
+  assert.equal(auth.profileOf(car), greg, 'other profiles stay signed in');
   assert.equal(auth.profileOf(signedIn(auth, maria)), maria, 'and the profile can sign in again');
 });
 
@@ -130,33 +157,39 @@ test('removing a profile ends everything that belonged to it', () => {
   assert.equal(auth.claimPairCode(code), null);
   assert.equal(auth.checkPasscode('maria-1234'), null);
   assert.throws(() => auth.issueCookie({ headers: {}, socket: {} }, { setHeader() {} }, maria));
+  assert.throws(() => auth.removeProfile(maria), /No such profile/);
 });
 
 test("a phone pairs into the profile of the car that showed the code, once", () => {
   const auth = make();
+  const greg = auth.addProfile('Greg', 'greg-1234');
   const maria = auth.addProfile('Maria', 'maria-1234');
-  const mine = auth.newPairCode(OWNER);
+  const mine = auth.newPairCode(greg);
   const hers = auth.newPairCode(maria);
   assert.equal(auth.claimPairCode(hers), maria);
   assert.equal(auth.claimPairCode(hers), null, 'a code works once');
-  assert.equal(auth.claimPairCode(mine), OWNER);
+  assert.equal(auth.claimPairCode(mine), greg);
   assert.equal(auth.claimPairCode('made-up'), null);
 });
 
 test('each profile has its own Send to Car link', () => {
-  const auth = make(tmp(), { shareToken: 'env-token' });
+  const old = oldServer();
+  const auth = make(old.dir, { shareToken: 'env-token' });
   const maria = auth.addProfile('Maria', 'maria-1234');
-  assert.equal(auth.shareTokenOf(OWNER), 'env-token', 'SHARE_TOKEN from .env is the main profile\'s');
+  assert.equal(auth.shareTokenOf(ORIGINAL), 'env-token', "SHARE_TOKEN from .env is the original profile's, as before");
   const hers = auth.shareTokenOf(maria);
   assert.notEqual(hers, 'env-token');
   assert.equal(auth.shareProfile({ headers: {} }, hers), maria);
-  assert.equal(auth.shareProfile({ headers: {} }, 'env-token'), OWNER);
+  assert.equal(auth.shareProfile({ headers: {} }, 'env-token'), ORIGINAL);
   assert.equal(auth.shareProfile({ headers: {} }, ''), null);
   assert.equal(auth.shareProfile({ headers: {} }, 'wrong'), null);
   const fresh = auth.rotateShareToken(maria);
   assert.equal(auth.shareProfile({ headers: {} }, hers), null, 'the old link stops working');
   assert.equal(auth.shareProfile({ headers: {} }, fresh), maria);
-  assert.equal(auth.shareProfile({ headers: {} }, 'env-token'), OWNER, 'the other profile\'s link is untouched');
+  assert.equal(auth.shareProfile({ headers: {} }, 'env-token'), ORIGINAL, "the other profile's link is untouched");
+
+  // A server set up since profiles has no original profile for SHARE_TOKEN to go to.
+  assert.deepEqual(make(tmp(), { shareToken: 'env-token' }).listProfiles(), []);
 });
 
 // ---- asking for a profile from the sign-in page ----
@@ -170,7 +203,7 @@ test('a new passcode opens nothing until the main profile allows it', () => {
   assert.match(asked.code, /^[1-9]\d\d$/, 'a three-digit number to compare on both screens');
   assert.deepEqual(Object.keys(asked).sort(), ['at', 'code', 'id', 'name'], 'nothing about the passcode leaves the server');
   assert.equal(auth.checkPasscode('maria-1234'), null, 'waiting is not signed in');
-  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main']);
+  assert.deepEqual(auth.listProfiles(), []);
   assert.equal(auth.requestFor('maria-1234').id, asked.id);
   assert.equal(auth.requestFor('maria-12345'), null);
   assert.deepEqual(auth.listRequests(), [asked]);
@@ -197,7 +230,7 @@ test('declined and cancelled requests leave nothing behind', () => {
   assert.equal(auth.requestFor('let-me-in'), null);
   assert.equal(auth.checkPasscode('let-me-in'), null);
   assert.throws(() => auth.approveRequest(asked.id), /gone/);
-  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main']);
+  assert.deepEqual(auth.listProfiles(), []);
 });
 
 test('asking again with the same passcode is the same request', () => {
@@ -211,7 +244,7 @@ test('asking again with the same passcode is the same request', () => {
 test('requests are checked and limited', () => {
   const auth = make();
   const taken = auth.addProfile('Kid', 'kid-pass-1');
-  assert.throws(() => auth.askForProfile('X', 'owner-pass'), /already opens a profile/);
+  assert.throws(() => auth.askForProfile('X', 'server-pass'), /can't be used for a profile/, "nobody gets a profile with the server's own passcode");
   assert.throws(() => auth.askForProfile('X', 'kid-pass-1'), /already opens a profile/);
   assert.throws(() => auth.askForProfile('X', 'abc'), /at least 4/);
   assert.throws(() => auth.askForProfile('X', 'x'.repeat(101)), /too long/);
@@ -260,14 +293,14 @@ test('a full server takes no requests, and old requests run out', () => {
 
 test('a server from before requests existed starts with none and takes them', () => {
   const dir = tmp();
-  const first = make(dir);
+  const first = make(oldServer(dir).dir);
   first.addProfile('Maria', 'maria-1234');
   // What the previous version wrote: profiles only.
   fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify({ profiles: first.profiles }));
   const auth = make(dir);
   assert.deepEqual(auth.listRequests(), []);
   assert.equal(auth.canAsk(), true);
-  assert.equal(auth.listProfiles().length, 2);
+  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main', 'Maria']);
 });
 
 // ---- the Admin page ----
@@ -280,17 +313,17 @@ function adminSignedIn(auth, also = '') {
 }
 
 test('Admin takes the passcode from .env, and a profile sign-in is not enough', () => {
-  const dir = tmp();
+  const dir = oldServer().dir;
   const auth = make(dir);
   const maria = auth.addProfile('Maria', 'maria-1234');
-  assert.equal(auth.checkAdminPasscode('owner-pass'), true);
+  assert.equal(auth.checkAdminPasscode('server-pass'), true);
   assert.equal(auth.checkAdminPasscode('maria-1234'), false, "another profile's passcode doesn't open Admin");
   assert.equal(auth.checkAdminPasscode(''), false);
   assert.equal(auth.checkAdminPasscode(undefined), false);
 
-  // Signed in to a profile, even the main one, is not signed in to Admin.
-  const car = signedIn(auth, OWNER);
-  assert.equal(auth.profileOf(car), OWNER);
+  // Signed in to a profile, even the one from before profiles, is not signed in to Admin.
+  const car = signedIn(auth, ORIGINAL);
+  assert.equal(auth.profileOf(car), ORIGINAL);
   assert.equal(auth.isAdmin(car), false);
   assert.equal(auth.isAdmin(signedIn(auth, maria)), false);
   assert.equal(auth.isAdmin({ headers: {}, socket: {} }), false);
@@ -314,18 +347,19 @@ test('Admin takes the passcode from .env, and a profile sign-in is not enough', 
   assert.equal(make(dir).isAdmin(laptop), true);
   const changed = new Auth({ dataDir: dir, passcode: 'a-new-passcode' });
   assert.equal(changed.isAdmin(laptop), false);
-  assert.equal(changed.profileOf(car), OWNER, 'profile sign-ins are not affected');
+  assert.equal(changed.profileOf(car), ORIGINAL, 'profile sign-ins are not affected');
 });
 
 test('signing in to a profile and to Admin in one answer keeps both', () => {
   const auth = make();
+  const greg = auth.addProfile('Greg', 'greg-1234');
   const headers = {};
   const res = { getHeader: (k) => headers[k], setHeader: (k, v) => (headers[k] = v) };
-  auth.issueCookie({ headers: {}, socket: {} }, res, OWNER);
+  auth.issueCookie({ headers: {}, socket: {} }, res, greg);
   auth.issueAdminCookie({ headers: {}, socket: {} }, res);
   assert.equal(headers['Set-Cookie'].length, 2);
   const cookie = headers['Set-Cookie'].map((c) => c.split(';')[0]).join('; ');
   const req = { headers: { cookie }, socket: {} };
-  assert.equal(auth.profileOf(req), OWNER);
+  assert.equal(auth.profileOf(req), greg);
   assert.equal(auth.isAdmin(req), true);
 });

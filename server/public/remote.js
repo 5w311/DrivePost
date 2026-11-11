@@ -15,7 +15,6 @@
     version: function (msg) {
       DT.noteVersion(msg.version);
       $('#who').textContent = msg.profile || ''; // whose profile, once there's more than one
-      $('#adminLink').classList.toggle('hidden', !msg.admin); // the main profile's way to Admin
     },
     state: function (msg) {
       if (DT.stale && !typing() && DT.reloadIfStale()) return;
@@ -27,11 +26,6 @@
     },
     toast: function (msg) {
       DT.toast(msg.message);
-    },
-    // Main profile only: people who asked for a profile from the sign-in page.
-    requests: function (msg) {
-      $('#askCard').classList.toggle('hidden', !msg.requests.length);
-      DT.showRequests($('#askList'), msg.requests);
     }
   });
 

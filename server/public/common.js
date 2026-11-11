@@ -320,43 +320,6 @@
     return { hide: hide };
   };
 
-  // ---- people asking for a profile (shown to the main profile) ----
-  function ago(at) {
-    var min = Math.floor((Date.now() - at) / 60000);
-    if (min < 1) return 'just now';
-    if (min < 60) return min + ' min ago';
-    if (min < 48 * 60) return Math.floor(min / 60) + ' h ago';
-    return Math.floor(min / 1440) + ' days ago';
-  }
-  // Fills `list` with one row per request, each with Allow and Decline.
-  // `done(answer)` gets the server's answer after either.
-  DT.showRequests = function (list, requests, done) {
-    list.innerHTML = '';
-    (requests || []).forEach(function (r) {
-      function answer(action, said) {
-        DT.api('/api/profiles', { body: { action: action, id: r.id } }).then(function (res) {
-          DT.toast(said);
-          if (done) done(res);
-        }).catch(function (e) { DT.toast(e.message); });
-      }
-      list.appendChild(DT.el('div', { class: 'prow asking' }, [
-        DT.el('div', { class: 'pname' }, [
-          DT.el('b', { text: r.name }),
-          ' is asking for a profile',
-          DT.el('div', { class: 'psub', text: 'Number on their screen: ' + r.code + ' · asked ' + ago(r.at) })
-        ]),
-        DT.el('div', { class: 'pbtns' }, [
-          DT.el('button', { type: 'button', class: 'primary', text: 'Allow', onclick: function () {
-            answer('approve', r.name + ' can sign in now');
-          } }),
-          DT.el('button', { type: 'button', text: 'Decline', onclick: function () {
-            answer('decline', 'Declined');
-          } })
-        ])
-      ]));
-    });
-  };
-
   DT.iconButton = function (name, label, onclick, cls) {
     var b = DT.el('button', { class: 'icon-btn' + (cls ? ' ' + cls : ''), 'aria-label': label, title: label, onclick: onclick });
     b.appendChild(DT.icon(name));
