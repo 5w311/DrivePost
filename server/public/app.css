@@ -143,6 +143,21 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 .suggest-row span:only-child { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .suggest-row b, .suggest-row span:only-child { min-width: 0; }
 .suggest-row.active, .suggest-row:active { background: var(--panel-3); }
+/* A search made before: a clock in front of it. */
+.suggest-row.searched .icon { flex: none; width: 20px; height: 20px; margin-right: 12px; color: var(--muted); }
+.suggest-row .suggest-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; color: var(--text); }
+.suggest-row.searched .suggest-words > span:only-child { color: var(--text); }
+/* The same searches as a list: tap to run again, × to forget. */
+.search-row {
+  display: flex; align-items: center; gap: 12px; min-height: var(--tap); padding: 0 4px 0 14px;
+  border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.search-row:active { background: var(--panel-3); }
+.search-row > .icon { flex: none; width: 20px; height: 20px; color: var(--muted); }
+.search-row .search-words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-row .icon-btn { flex: none; color: var(--muted); }
+.search-row .icon-btn .icon { width: 18px; height: 18px; }
+.empty .see-foryou { margin-top: 14px; }
 /* On the phone the list sits in the page flow under the search box. */
 body.remote .has-suggest { flex-wrap: wrap; scroll-margin-top: calc(72px + env(safe-area-inset-top, 0px)); }
 /* ...and the box shares its row with the Go button; only the list wraps below. */
@@ -237,8 +252,10 @@ button.ghost.on { color: var(--accent); background: rgba(62, 139, 255, 0.14); }
 .side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
 .tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tabs button {
-  flex: 1; border: 0; border-radius: 0; background: transparent; color: var(--muted);
+  flex: 1 1 auto; border: 0; border-radius: 0; background: transparent; color: var(--muted);
   min-height: var(--tap); border-bottom: 3px solid transparent;
+  /* Four of them share a narrow column: keep each on one line. */
+  white-space: nowrap; padding-left: 6px; padding-right: 6px;
 }
 .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 .panel { flex: 1; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
@@ -370,6 +387,8 @@ body.remote { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
 .field-row { display: flex; gap: 8px; }
 .btn-row { display: flex; gap: 8px; margin-top: 10px; }
 .btn-row button, .btn-row .btn { flex: 1; }
+/* Three across on a phone ("Play", "Next", "+ Up Next"): one line each. */
+.list .btn-row button { white-space: nowrap; padding-left: 8px; padding-right: 8px; }
 a.btn {
   display: flex; align-items: center; justify-content: center; text-align: center;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;

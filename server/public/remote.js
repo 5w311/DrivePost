@@ -86,6 +86,9 @@
 
     renderQueue();
     renderRecent();
+    renderSearches();
+    renderRecs();
+    loadRecs();
     paintTime();
   }
 
@@ -205,9 +208,34 @@
 
   DT.autocomplete($('#q'), {
     local: function () { return state ? state.history.map(function (h) { return h.title; }) : []; },
+    recent: function () { return state ? state.searches || [] : []; },
+    listWhenEmpty: false, // they are listed under the box already
     onPick: runSearch,
     max: 5,
     reveal: true
+  });
+
+  // Searches made before, listed under the box until there are results to show.
+  function renderSearches() {
+    var box = $('#searches');
+    box.innerHTML = '';
+    var before = (state && state.searches) || [];
+    if (!before.length || $('#results').children.length) return;
+    box.appendChild(el('div', { class: 'panel-head' }, [
+      el('span', { text: 'Recent searches' }),
+      el('button', { class: 'ghost', text: 'Clear', onclick: function () { control.cmd('clearSearches'); } })
+    ]));
+    DT.searchRows(before.slice(0, 8), {
+      onPick: function (text) { $('#q').value = text; runSearch(); },
+      onForget: function (text) { control.cmd('forgetSearch', { q: text }); }
+    }).forEach(function (row) { box.appendChild(row); });
+  }
+  // Emptying the box puts them back in place of the results.
+  $('#q').addEventListener('input', function () {
+    if (!$('#q').value.trim() && $('#results').children.length) {
+      $('#results').innerHTML = '';
+      renderSearches();
+    }
   });
 
   $('#searchForm').addEventListener('submit', function (ev) {
@@ -222,14 +250,68 @@
     var box = $('#results');
     box.innerHTML = '';
     box.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'spinner' })]));
+    renderSearches();
     DT.api('/api/search?q=' + encodeURIComponent(q)).then(function (r) {
       box.innerHTML = '';
       if (!r.results.length) box.appendChild(el('div', { class: 'empty', text: 'No results.' }));
       r.results.forEach(function (item) { box.appendChild(resultRow(item)); });
+      renderSearches();
     }).catch(function (e) {
       box.innerHTML = '';
       box.appendChild(el('div', { class: 'empty', text: e.message }));
     });
+  }
+
+  // ---------- recommendations ----------
+  // Videos like the ones this profile has been watching. Fetched once the
+  // page knows the profile's state, and again when what they are based on
+  // has changed.
+
+  var recs = { items: null, basis: null, loading: false, failed: false, all: false };
+  function loadRecs(again) {
+    if (!state || recs.loading) return;
+    var basis = (state.now ? state.now.id : '') + '|' + (state.history[0] ? state.history[0].id : '');
+    if (!again && recs.items && recs.basis === basis) return;
+    recs.loading = true;
+    recs.basis = basis;
+    renderRecs();
+    DT.api('/api/recommended').then(function (r) {
+      recs.items = r.items || [];
+      recs.failed = !!r.failed;
+    }).catch(function () {
+      recs.items = recs.items || [];
+      recs.failed = true;
+    }).then(function () {
+      recs.loading = false;
+      renderRecs();
+    });
+  }
+  $('#recsRefresh').addEventListener('click', function () { loadRecs(true); });
+
+  function renderRecs() {
+    var box = $('#foryou');
+    box.innerHTML = '';
+    $('#recsRefresh').textContent = recs.loading ? 'Loading…' : 'Refresh';
+    if (!recs.items) {
+      box.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'spinner' })]));
+      return;
+    }
+    // Not what is playing or already lined up, even if the list was fetched before that.
+    var items = recs.items.filter(function (item) {
+      return !(state.now && state.now.id === item.id) && !state.queue.some(function (x) { return x.id === item.id; });
+    });
+    if (!items.length) {
+      box.appendChild(el('div', { class: 'empty', text: recs.failed
+        ? "Couldn't get recommendations just now. Tap Refresh to try again."
+        : 'Play a video or two and videos like them show up here.' }));
+      return;
+    }
+    items.slice(0, recs.all ? items.length : 6).forEach(function (item) { box.appendChild(resultRow(item)); });
+    if (!recs.all && items.length > 6) {
+      box.appendChild(el('div', { class: 'btn-row', style: 'margin:0;padding:12px' }, [
+        el('button', { text: 'Show ' + (items.length - 6) + ' more', onclick: function () { recs.all = true; renderRecs(); } })
+      ]));
+    }
   }
 
   // ---------- queue & recent ----------

@@ -72,7 +72,7 @@ function ytdlp(args, timeoutMs = 45000) {
 }
 
 // Small TTL cache that also shares in-flight promises.
-class Cache {
+export class Cache {
   constructor(ttlMs, max = 200) {
     this.ttl = ttlMs;
     this.max = max;

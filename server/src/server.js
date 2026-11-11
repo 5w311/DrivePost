@@ -10,6 +10,7 @@ import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream } from './stream.js';
 import { stampPage, feedbackLink } from './pages.js';
+import { recommendFor } from './recommend.js';
 import {
   search,
   suggest,
@@ -420,11 +421,19 @@ async function route(req, res) {
 
     if (req.method === 'GET' && p === '/api/search') {
       try {
-        const results = await search(url.searchParams.get('q'));
+        const q = url.searchParams.get('q');
+        const results = await search(q);
+        // Worth remembering if it found something.
+        if (results.length) store.noteSearch(q);
         return send(res, 200, { results });
       } catch (err) {
         return send(res, 502, { error: `Search failed: ${err.message}` });
       }
+    }
+
+    // Videos like the ones this profile has been watching.
+    if (req.method === 'GET' && p === '/api/recommended') {
+      return send(res, 200, await recommendFor({ now: store.now, history: store.history, queue: store.queue }));
     }
 
     if (req.method === 'GET' && p === '/api/suggest') {

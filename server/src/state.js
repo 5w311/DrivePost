@@ -6,12 +6,22 @@ import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
 import { QUALITIES } from './config.js';
 
 const HISTORY_MAX = 40;
+const SEARCHES_MAX = 20;
 const PROGRESS_MAX = 300;
 const RESUME_MIN = 15; // don't bother resuming in the first 15 s
 const RESUME_TAIL = 30; // or in the last 30 s
 
 function clampStr(v, max) {
   return typeof v === 'string' ? v.slice(0, max) : '';
+}
+
+// What someone searched for, tidied for keeping: one line, not too long. A
+// pasted link isn't a search, and isn't kept.
+export function cleanSearch(raw) {
+  if (typeof raw !== 'string') return null;
+  const q = raw.replace(/\s+/g, ' ').trim().slice(0, 100);
+  if (!q || /youtu\.?be|youtube\.com|^https?:/i.test(q)) return null;
+  return q;
 }
 
 // Turn whatever a client sent into a clean item, or null.
@@ -38,6 +48,8 @@ export class Store extends EventEmitter {
     } catch {}
     this.queue = Array.isArray(saved.queue) ? saved.queue.map((i) => this.keyed(cleanItem(i))).filter(Boolean) : [];
     this.history = Array.isArray(saved.history) ? saved.history.map(cleanItem).filter(Boolean) : [];
+    // What this profile searched for lately, newest first.
+    this.searches = Array.isArray(saved.searches) ? saved.searches.map(cleanSearch).filter(Boolean).slice(0, SEARCHES_MAX) : [];
     this.progress = saved.progress && typeof saved.progress === 'object' ? saved.progress : {};
     this.settings = { quality: defaultQuality, ...(saved.settings || {}) };
     if (!QUALITIES.includes(this.settings.quality)) this.settings.quality = defaultQuality;
@@ -83,6 +95,7 @@ export class Store extends EventEmitter {
       paused: this.paused,
       queue: this.queue,
       history: this.history.slice(0, 20),
+      searches: this.searches,
       progress,
       settings: this.settings,
       playQuality: this.playQuality(),
@@ -111,6 +124,7 @@ export class Store extends EventEmitter {
       now: this.now,
       queue: this.queue,
       history: this.history,
+      searches: this.searches,
       progress: this.progress,
       settings: this.settings,
       seq: this.seq,
@@ -123,6 +137,19 @@ export class Store extends EventEmitter {
     } catch (err) {
       console.error('Could not save state:', err.message);
     }
+  }
+
+  // ---- searches ----
+
+  // A search was run: put it at the top of the recent ones. The same words
+  // again, however they are capitalised, move up instead of being listed twice.
+  noteSearch(raw) {
+    const q = cleanSearch(raw);
+    if (!q) return;
+    const same = (other) => other.toLowerCase() === q.toLowerCase();
+    if (this.searches.length && same(this.searches[0])) return;
+    this.searches = [q, ...this.searches.filter((other) => !same(other))].slice(0, SEARCHES_MAX);
+    this.changed();
   }
 
   // ---- playback ----
@@ -268,6 +295,14 @@ export class Store extends EventEmitter {
         break;
       case 'clearHistory':
         this.history = [];
+        break;
+      case 'forgetSearch': {
+        const q = String(data.q || '').toLowerCase();
+        this.searches = this.searches.filter((other) => other.toLowerCase() !== q);
+        break;
+      }
+      case 'clearSearches':
+        this.searches = [];
         break;
       default:
         return 'Unknown command';

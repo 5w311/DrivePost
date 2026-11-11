@@ -1,0 +1,696 @@
+{
+ "responseContext": {
+  "visitorData": "x"
+ },
+ "contents": {
+  "twoColumnWatchNextResults": {
+   "results": {
+    "results": {
+     "contents": []
+    }
+   },
+   "secondaryResults": {
+    "secondaryResults": {
+     "results": [
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "30:41",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 1"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 1"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "128K"
+                }
+               },
+               {
+                "text": {
+                 "content": "7mo ago"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0001AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "11:55",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 2"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 2"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "243K"
+                }
+               },
+               {
+                "text": {
+                 "content": "2y ago"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0002AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "38 videos",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 3"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 3"
+                }
+               },
+               {
+                "text": {
+                 "content": "Playlist"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "View full playlist"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx3",
+        "contentType": "LOCKUP_CONTENT_TYPE_PLAYLIST"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "1:05:56",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 4"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 4"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "17M"
+                }
+               },
+               {
+                "text": {
+                 "content": "7d ago"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0004AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "LIVE",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 5"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 5"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "3.7K watching"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0005AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "8:09:00",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 6"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 6"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "2"
+                }
+               },
+               {
+                "text": {
+                 "content": "Streamed 6h ago"
+                }
+               }
+              ]
+             },
+             {
+              "badges": [
+               {
+                "badgeViewModel": {
+                 "badgeText": "New",
+                 "badgeStyle": "BADGE_DEFAULT"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0006AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "17 lessons",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 7"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 7"
+                }
+               },
+               {
+                "text": {
+                 "content": "Course"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "View full course"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx7",
+        "contentType": "LOCKUP_CONTENT_TYPE_COURSE"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "9:51",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 8"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 8"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "1.5M"
+                }
+               },
+               {
+                "text": {
+                 "content": "8d ago"
+                }
+               }
+              ]
+             },
+             {
+              "badges": [
+               {
+                "badgeViewModel": {
+                 "badgeText": "Members only",
+                 "badgeStyle": "BADGE_MEMBERS_ONLY"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0008AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": [
+           {
+            "thumbnailBottomOverlayViewModel": {
+             "badges": [
+              {
+               "thumbnailBadgeViewModel": {
+                "text": "UPCOMING",
+                "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 9"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 9"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "556"
+                }
+               },
+               {
+                "text": {
+                 "content": "7d ago"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0009AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "lockupViewModel": {
+        "contentImage": {
+         "thumbnailViewModel": {
+          "overlays": []
+         }
+        },
+        "metadata": {
+         "lockupMetadataViewModel": {
+          "title": {
+           "content": "Video number 10"
+          },
+          "metadata": {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "Channel 10"
+                }
+               }
+              ]
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "187K"
+                }
+               },
+               {
+                "text": {
+                 "content": "3d ago"
+                }
+               }
+              ]
+             },
+             {
+              "badges": [
+               {
+                "badgeViewModel": {
+                 "badgeText": "New",
+                 "badgeStyle": "BADGE_DEFAULT"
+                }
+               }
+              ]
+             }
+            ]
+           }
+          }
+         }
+        },
+        "contentId": "vid0010AAAA",
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO"
+       }
+      },
+      {
+       "continuationItemRenderer": {
+        "trigger": "CONTINUATION_TRIGGER_ON_ITEM_SHOWN"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ "playerOverlays": {
+  "playerOverlayRenderer": {
+   "endScreen": {
+    "watchNextEndScreenRenderer": {
+     "results": [
+      {
+       "endScreenVideoRenderer": {
+        "videoId": "end0001AAAA",
+        "title": {
+         "simpleText": "End screen one"
+        },
+        "shortBylineText": {
+         "runs": [
+          {
+           "text": "Channel E1"
+          }
+         ]
+        },
+        "lengthInSeconds": 754
+       }
+      },
+      {
+       "endScreenVideoRenderer": {
+        "videoId": "end0002AAAA",
+        "title": {
+         "runs": [
+          {
+           "text": "End screen "
+          },
+          {
+           "text": "two"
+          }
+         ]
+        },
+        "shortBylineText": {
+         "runs": [
+          {
+           "text": "Channel E2"
+          }
+         ]
+        },
+        "lengthText": {
+         "simpleText": "1:02:03"
+        }
+       }
+      },
+      {
+       "endScreenPlaylistRenderer": {
+        "playlistId": "PLzzz",
+        "title": {
+         "simpleText": "A playlist"
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

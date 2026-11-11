@@ -167,7 +167,8 @@
     stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
     restart: '<path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/>',
     expand: '<path d="M5 5h5v2H7v3H5zM14 5h5v5h-2V7h-3zM5 14h2v3h3v2H5zM17 14h2v5h-5v-2h3z"/>',
-    compress: '<path d="M8 5h2v5H5V8h3zM14 5h2v3h3v2h-5zM5 14h5v5H8v-3H5zM14 14h5v2h-3v3h-2z"/>'
+    compress: '<path d="M8 5h2v5H5V8h3zM14 5h2v3h3v2h-5zM5 14h5v5H8v-3H5zM14 14h5v2h-3v3h-2z"/>',
+    clock: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm-1 2.5v5.1l3.7 2.2 1-1.7-2.7-1.6V7.5z"/>'
   };
   DT.icon = function (name, cls) {
     var span = document.createElement('span');
@@ -211,6 +212,22 @@
   // titles to match on the spot (recently played); the rest come from
   // YouTube through the server. `opts.onPick(text)` runs when one is chosen.
   // `opts.max` limits the rows; `opts.reveal` scrolls the box into view on focus.
+  // Rows for searches made before: tap one to run it again, × to forget it.
+  DT.searchRows = function (searches, opts) {
+    return searches.map(function (text) {
+      var row = DT.el('div', { class: 'search-row' }, [
+        DT.icon('clock'),
+        DT.el('div', { class: 'search-words', text: text }),
+        DT.iconButton('x', 'Forget this search', function (ev) {
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+          opts.onForget(text);
+        })
+      ]);
+      row.addEventListener('click', function () { opts.onPick(text); });
+      return row;
+    });
+  };
+
   DT.autocomplete = function (input, opts) {
     var form = input.form || input.parentNode;
     var box = DT.el('div', { class: 'suggest hidden', role: 'listbox' });
@@ -248,11 +265,26 @@
       }).slice(0, 2);
     }
 
+    // Searches made before: all the latest ones while the box is empty, the
+    // ones that match once something is typed.
+    function searchedBefore(q) {
+      var all = (opts.recent && opts.recent()) || [];
+      // (Not where the page already lists them right under the box, as the phone does.)
+      if (!q) return opts.listWhenEmpty === false ? [] : all.slice(0, opts.max || 7);
+      return all.filter(function (t) {
+        var k = t.toLowerCase();
+        return k.indexOf(q) >= 0 && k !== q;
+      }).slice(0, 3);
+    }
+
     function render() {
       var typed = input.value.trim();
       var q = typed.toLowerCase();
       var seen = {};
-      items = localMatches(q).concat(remote).filter(function (t) {
+      var before = searchedBefore(q);
+      var wasSearched = {};
+      before.forEach(function (t) { wasSearched[t.toLowerCase()] = true; });
+      items = before.concat(q ? localMatches(q) : [], q ? remote : []).filter(function (t) {
         var k = t.toLowerCase();
         if (seen[k]) return false;
         seen[k] = true;
@@ -263,10 +295,13 @@
       box.classList.toggle('hidden', !items.length);
       items.forEach(function (text, i) {
         // Show what would be added to the typed words in bold, like YouTube does.
-        var starts = text.toLowerCase().indexOf(q) === 0;
-        var row = DT.el('div', { class: 'suggest-row', role: 'option' }, starts
+        var starts = q && text.toLowerCase().indexOf(q) === 0;
+        var words = starts
           ? [DT.el('span', { text: text.slice(0, typed.length) }), DT.el('b', { text: text.slice(typed.length) })]
-          : [DT.el('span', { text: text })]);
+          : [DT.el('span', { text: text })];
+        var was = wasSearched[text.toLowerCase()];
+        var row = DT.el('div', { class: 'suggest-row' + (was ? ' searched' : ''), role: 'option' },
+          was ? [DT.icon('clock'), DT.el('span', { class: 'suggest-words' }, words)] : words);
         // Keep the keyboard focus (and the on-screen keyboard) until the pick lands.
         row.addEventListener('pointerdown', function (ev) { ev.preventDefault(); });
         row.addEventListener('click', function () { pick(items[i]); });
@@ -285,8 +320,14 @@
       var q = input.value.trim();
       clearTimeout(timer);
       var mine = ++ticket;
-      if (q.length < 2 || /youtu\.?be|youtube\.com|^https?:/i.test(q)) {
+      if (/youtu\.?be|youtube\.com|^https?:/i.test(q)) {
         hide();
+        return;
+      }
+      if (q.length < 2) {
+        // Too little to ask YouTube about, but enough to show earlier searches.
+        remote = [];
+        render();
         return;
       }
       remote = remote.filter(function (t) { return t.toLowerCase().indexOf(q.toLowerCase()) === 0; });
@@ -307,6 +348,15 @@
       else if (ev.key === 'Enter' && active >= 0) { ev.preventDefault(); pick(items[active]); }
     });
     input.addEventListener('blur', function () { setTimeout(hide, 150); });
+    // Tapping into an empty box shows the searches made before.
+    function showBefore() {
+      if (!input.value.trim() && box.classList.contains('hidden')) {
+        remote = [];
+        render();
+      }
+    }
+    input.addEventListener('focus', showBefore);
+    input.addEventListener('click', showBefore);
     if (opts.reveal) {
       // On a phone the keyboard covers the lower half of the screen: move the
       // search box to the top so the suggestions under it stay in view.

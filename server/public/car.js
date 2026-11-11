@@ -753,7 +753,18 @@
   function recentTitles() {
     return state ? state.history.map(function (h) { return h.title; }) : [];
   }
-  DT.autocomplete($('#q'), { local: recentTitles, onPick: runSearch });
+  function searchedBefore() {
+    return state ? state.searches || [] : [];
+  }
+  DT.autocomplete($('#q'), { local: recentTitles, recent: searchedBefore, onPick: runSearch });
+
+  // Emptying the box puts the earlier searches back in place of the results.
+  $('#q').addEventListener('input', function () {
+    if (!$('#q').value.trim() && searchResults && !searching) {
+      searchResults = null;
+      renderLists();
+    }
+  });
 
   $('#searchForm').addEventListener('submit', function (ev) {
     ev.preventDefault();
@@ -810,8 +821,36 @@
     document.querySelectorAll('.tabs button').forEach(function (b) {
       b.classList.toggle('on', b.getAttribute('data-tab') === name);
     });
-    ['queue', 'search', 'recent'].forEach(function (n) {
+    ['queue', 'foryou', 'search', 'recent'].forEach(function (n) {
       $('#panel-' + n).classList.toggle('hidden', n !== name);
+    });
+    if (name === 'foryou') loadRecs();
+  }
+
+  // ---------- recommendations ----------
+  // Videos like the ones this profile has been watching. Fetched when the
+  // list is opened, and again when what they are based on has changed.
+
+  var recs = { items: null, basis: null, loading: false, failed: false };
+  function recsBasis() {
+    return (state.now ? state.now.id : '') + '|' + (state.history[0] ? state.history[0].id : '');
+  }
+  function loadRecs(again) {
+    if (!state || recs.loading) return;
+    var basis = recsBasis();
+    if (!again && recs.items && recs.basis === basis) return;
+    recs.loading = true;
+    recs.basis = basis;
+    renderLists();
+    DT.api('/api/recommended').then(function (r) {
+      recs.items = r.items || [];
+      recs.failed = !!r.failed;
+    }).catch(function () {
+      recs.items = recs.items || [];
+      recs.failed = true;
+    }).then(function () {
+      recs.loading = false;
+      renderLists();
     });
   }
   document.querySelectorAll('.tabs button').forEach(function (b) {
@@ -855,7 +894,12 @@
     q.innerHTML = '';
     $('#qCount').textContent = state.queue.length ? String(state.queue.length) : '';
     if (!state.queue.length) {
-      q.appendChild(el('div', { class: 'empty', text: 'Up Next is empty. Videos you add from search or your phone line up here.' }));
+      q.appendChild(el('div', { class: 'empty' }, [
+        el('div', { text: 'Up Next is empty. Videos you add from search or your phone line up here.' }),
+        state.history.length || state.now
+          ? el('button', { class: 'see-foryou', text: 'See videos for you', onclick: function () { setTab('foryou'); } })
+          : null
+      ]));
     } else {
       q.appendChild(el('div', { class: 'panel-head' }, [
         el('span', { text: state.queue.length + (state.queue.length === 1 ? ' video' : ' videos') }),
@@ -880,10 +924,46 @@
       });
     }
 
+    // For You
+    var f = $('#panel-foryou');
+    f.innerHTML = '';
+    f.appendChild(el('div', { class: 'panel-head' }, [
+      el('span', { text: "Like what you've been watching" }),
+      el('button', { class: 'ghost', text: recs.loading ? 'Loading…' : 'Refresh', onclick: function () { loadRecs(true); } })
+    ]));
+    if (!recs.items) {
+      f.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'spinner' })]));
+    } else if (!recs.items.length) {
+      f.appendChild(el('div', { class: 'empty', text: recs.failed
+        ? "Couldn't get recommendations just now. Tap Refresh to try again."
+        : 'Play a video or two and videos like them show up here.' }));
+    } else {
+      recs.items.forEach(function (item) {
+        // Not what is playing or already lined up, even if the list was fetched before that.
+        if ((state.now && state.now.id === item.id) || state.queue.some(function (x) { return x.id === item.id; })) return;
+        f.appendChild(DT.itemRow(item, {
+          progress: progress[item.id],
+          onclick: function () { itemSheet(item); }
+        }));
+      });
+    }
+    if (tab === 'foryou') loadRecs();
+
     // Search
     var s = $('#panel-search');
     s.innerHTML = '';
+    var before = searchedBefore();
     if (searching) s.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'spinner' })]));
+    else if (!searchResults && before.length) {
+      s.appendChild(el('div', { class: 'panel-head' }, [
+        el('span', { text: 'Recent searches' }),
+        el('button', { class: 'ghost', text: 'Clear', onclick: function () { control.cmd('clearSearches'); } })
+      ]));
+      DT.searchRows(before, {
+        onPick: function (text) { $('#q').value = text; runSearch(); },
+        onForget: function (text) { control.cmd('forgetSearch', { q: text }); }
+      }).forEach(function (row) { s.appendChild(row); });
+    }
     else if (!searchResults) s.appendChild(el('div', { class: 'empty', text: 'Type in the search box at the top.' }));
     else if (!searchResults.length) s.appendChild(el('div', { class: 'empty', text: 'No results.' }));
     else searchResults.forEach(function (item) {

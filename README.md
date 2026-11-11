@@ -7,11 +7,13 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 ## What it does
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
-- **Theater button:** shows or hides the lists (Up Next, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
+- **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
+- **For You:** videos like the ones you've been watching, on the car page and the phone remote.
+- **Theater button:** shows or hides the lists (Up Next, For You, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
 - **Fullscreen:** tap the video and use the corner button, or switch it from the phone. The video then fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
 - **Pauses when the browser is closed:** closing or leaving the browser in the car pauses the video, so the sound doesn't carry on out of sight. It stays paused until someone presses play. Opening the page again shows **Tap to play**, which carries on from the same spot. Pressing play on the phone while the car's browser is closed is respected, so you can still listen that way.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
-- **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it.
+- **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, searches, recommendations, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it.
 - **Admin page:** `/admin`, opened with the passcode from `.env` and nothing else, shows who is waiting for a profile, every profile and its car, and the running build.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
 - **Two video formats:** **H.264** passes YouTube's own video straight through, and the browser decodes it (WebCodecs). It's sharper, usually uses less data, and is almost no work for the server. **MPEG-1** is converted on the server and decoded in the page by [JSMpeg](https://github.com/phoboslab/jsmpeg), which works in any browser. The car uses H.264 when it can and switches to MPEG-1 by itself when it can't.
@@ -60,6 +62,10 @@ A route also has to deliver the sound. If 20 seconds of picture have gone out wi
 ### Skipping around in a segmented stream
 
 To start partway through (a skip, a resume, a change of quality), the server doesn't let ffmpeg seek in the stream's list of segments. ffmpeg's seeking there can begin the picture a whole segment late, and can begin the sound at the start of its segment while labelling it as the spot asked for, which leaves the sound seconds out of step. Instead the server writes ffmpeg a shorter list that begins with the segment holding the spot, hands it over from a small web server of its own (this machine only), and keeps the stream's own timestamps. The picture begins on that segment's first frame, which the car decodes without showing, and the sound is cut to begin exactly at the spot. See `server/src/segment-list.js`.
+
+### Where the recommendations come from
+
+There is no YouTube account behind DrivePost, so there are no personal recommendations to ask YouTube for. What YouTube gives anyone is the list of related videos it shows beside a video. For You asks for that list for what is playing and for the last five videos the profile played, and deals them into one list a round at a time, newest first, leaving out what has been watched or is already in Up Next. Each video's list is kept for 12 hours, so opening For You again costs nothing. Nothing about the profile is sent to YouTube beyond the IDs of those videos, which it has seen already when they were played. See `server/src/recommend.js`.
 
 ### H.264 and MPEG-1
 
@@ -115,7 +121,7 @@ If the browser's H.264 decoder reports an error, stops returning pictures, or ca
 
 ## Profiles
 
-A profile is one person's, or one car's, own copy of everything: what's playing, Up Next, Recent, resume points, quality and format settings, paired phones and the Send to Car link. The passcode a device signs in with decides which profile it's in, so everyone uses the same address.
+A profile is one person's, or one car's, own copy of everything: what's playing, Up Next, Recent, recent searches, For You, resume points, quality and format settings, paired phones and the Send to Car link. The passcode a device signs in with decides which profile it's in, so everyone uses the same address.
 
 - **Getting a profile:** the person opens your address, taps **Ask for your own profile** on the sign-in page, and picks a name and a passcode. Their screen then shows a three-digit number and waits. You see their name and the same number in **Admin** (below). Tap **Allow** and their screen signs in by itself; tap **Decline** and nothing is made. Until you allow it, their passcode opens nothing.
 - Only allow a request whose number matches the one on the person's screen. Your address is public, so anyone who finds it can ask, and the number is how you know a request is really from the person you think.

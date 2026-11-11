@@ -45,6 +45,10 @@ export const config = {
   // Where search suggestions come from (YouTube's own suggestion service).
   suggestUrl: env.SUGGEST_URL || 'https://suggestqueries.google.com/complete/search',
 
+  // Where "videos like this one" come from: the same request youtube.com
+  // makes to fill the list beside a video. No account, no key.
+  relatedUrl: env.RELATED_URL || 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false',
+
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   maxStreams: int('MAX_STREAMS', 3),
   defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',
