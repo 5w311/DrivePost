@@ -38,6 +38,16 @@ The server keeps about 25 seconds ahead of the car and pauses ffmpeg after that,
 
 In the car, the decoders only decode. The page decides when each picture shows: every frame goes on screen at its timestamp, and audio is queued on the sound card half a second ahead at the matching time. That keeps playback even when data arrives in bursts or the browser repaints slowly.
 
+### Getting the video from YouTube
+
+YouTube closes one way or another of fetching videos from time to time, for some connections and not others: the lookup still works and hands out links, but the links answer 403. So the server has three routes and doesn't count on any one of them:
+
+- **direct:** the separate picture and sound files, up to 1080p. The best quality and the quickest to skip around in.
+- **hls:** the stream in short segments that YouTube gives embedded players, also up to 1080p.
+- **basic:** the one small ready-made 360p file every video has.
+
+Before playing, the server asks for the first bytes of what it was given. If YouTube refuses, it moves to the next route, remembers that, and comes back to the better route later. When only the basic file gets through, the car and the phones say so once an hour.
+
 ### H.264 and MPEG-1
 
 The car asks for H.264 when its browser can decode it. That needs WebCodecs, which browsers only offer on https pages. The server passes H.264 through when YouTube has the video in H.264 at the chosen quality, which is nearly always the case up to 1080p. Otherwise the picture is converted to MPEG-1, as before. Live streams are always converted. The sound is converted to MP2 either way.
@@ -199,7 +209,9 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 
 | Symptom | Check |
 |---|---|
-| Test pattern plays, YouTube doesn't | Run `docker compose logs drivepost`. Usually yt-dlp needs updating (restart the container) or YouTube is blocking the request. Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
+| Test pattern plays, YouTube doesn't | Run `docker compose exec -T drivepost node src/check-youtube.js`. It tries each way the server has of getting a video (see below) and says which ones YouTube lets through from your connection right now, with no links in the output. If none work, yt-dlp probably needs updating (restart the container). Some videos (age-restricted, members-only) need a cookies file: put `cookies.txt` in the data volume and set `YTDLP_ARGS=--cookies /data/cookies.txt`. |
+| "YouTube refused to send it (403 Forbidden)" | YouTube handed out links for the video and then refused to serve them, on every route. Run the check above. This is on YouTube's side and usually clears up by itself or with a yt-dlp update. |
+| The picture is only 360p and a notice says so | YouTube is refusing the better routes from your connection, and the basic file is all that gets through. The server tries the better ones again after half an hour, then less often, and switches back by itself. |
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
 | Choppy picture at 1080p | Tap **Stats**. In MPEG-1, if decoding takes more than about half of the time available per frame, the screen is the limit. In H.264, a climbing "skipped" count means the same. Use 720p. |
 | It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |

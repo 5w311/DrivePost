@@ -665,6 +665,9 @@
         this.failed = true;
         this.finish();
         if (this.o.onError) this.o.onError(this, msg.message || 'Playback error');
+      } else if (msg.type === 'notice') {
+        // Something worth knowing that isn't an error, like a lower quality than asked for.
+        if (this.o.onNotice && msg.message) this.o.onNotice(this, String(msg.message));
       }
       return;
     }
@@ -1100,6 +1103,7 @@
       onSlow: ifActive(cb.onSlow),
       onStall: ifActive(cb.onStall),
       onVideoFail: ifActive(cb.onVideoFail),
+      onNotice: ifActive(cb.onNotice),
       onError: function (s, message) {
         if (s === self.active) {
           self.clearStale();

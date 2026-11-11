@@ -56,6 +56,10 @@
       showError(message);
       control.send({ type: 'carError', message: message });
     },
+    onNotice: function (s, message) {
+      // Shown here and on the phones (the server passes a car's notes round).
+      control.send({ type: 'carNote', message: message });
+    },
     onSlow: function (s) {
       // Decoding keeps falling behind: this screen can't handle the quality.
       if (s.codec === 'h264' && QUALITIES.indexOf(playQuality()) <= 0) {

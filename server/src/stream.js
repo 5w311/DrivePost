@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { streamInfo, forgetStream } from './youtube.js';
+import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, TEST_PATTERN_ID } from './youtube.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
 // How far ahead of the car's playback we transcode before pausing ffmpeg.
@@ -147,6 +147,65 @@ function sendJson(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
+// What YouTube's answer to a request means, in words.
+export function refusalReason(status) {
+  if (status === 403) return 'YouTube refused to send it (403 Forbidden)';
+  if (status === 429) return 'YouTube is turning this server away for now (429 Too Many Requests)';
+  if (status === 404 || status === 410) return `the link YouTube gave for it has stopped working (${status})`;
+  if (status >= 500) return `YouTube's server had a problem (${status})`;
+  return `YouTube answered ${status}`;
+}
+
+// When a lower quality than asked for is all there is, say so, but not for every video.
+const noticedAt = new Map();
+function noticeDue(group, name, now = Date.now()) {
+  const key = `${group}:${name}`;
+  if (now - (noticedAt.get(key) || 0) < 60 * 60 * 1000) return false;
+  noticedAt.set(key, now);
+  return true;
+}
+
+/*
+ * Find this video by a route that really delivers (see ROUTES in
+ * youtube.js). Each route's link is tried before it is used, because a
+ * refused route still hands out links: they just answer 403.
+ * Returns { info } or { message } to show in the car.
+ */
+export async function findPlayable(id, quality, deps = {}) {
+  const lookup = deps.streamInfo || streamInfo;
+  const status = deps.linkStatus || linkStatus;
+  const order = id === TEST_PATTERN_ID ? ['direct'] : routeOrder();
+  let refused = null; // YouTube's answer when a route's link was turned down
+  let lookupError = null;
+  for (const name of order) {
+    try {
+      let found = await lookup(id, quality, name);
+      const check = async (info) => {
+        const answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => status(i)));
+        return answers.find((a) => a !== 200 && a !== 206);
+      };
+      let bad = await check(found);
+      if (bad !== undefined && Date.now() - (found.at || 0) > 60000) {
+        // Links kept from an earlier lookup go stale. Get new ones before blaming the route.
+        forgetStream(id, quality);
+        found = await lookup(id, quality, name);
+        bad = await check(found);
+      }
+      if (bad === undefined) return { info: found };
+      refused = refused ?? bad;
+      forgetStream(id, quality);
+      routeRefused(name, refusalReason(bad));
+    } catch (err) {
+      lookupError = lookupError || err;
+      // "No such format" is about this route. Anything else (private, removed,
+      // age-restricted...) is about the video, and no other route will change it.
+      if (!/format is not available|no playable format|timed out|fetch failed|aborted/i.test(err.message || '')) break;
+    }
+  }
+  if (refused !== null) return { message: `Couldn't play this video: ${refusalReason(refused)}` };
+  return { message: `Couldn't load this video: ${lookupError ? lookupError.message : 'nothing playable was found'}` };
+}
+
 // Why ffmpeg gave up, in words. Its own last line starts with the whole
 // media link, which is hundreds of characters long, means nothing on a car
 // screen, and has this server's home address in it. So links are taken out
@@ -222,6 +281,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
         if (!baseSent) {
           sendJson(ws, { type: 'base', pts: splitter.firstVideoPts });
           baseSent = true;
+          if (id !== TEST_PATTERN_ID) routeWorked(info.routeName); // pictures are flowing: this route delivers
         }
         if (firstDataAt === null) firstDataAt = Date.now();
         // H.264 frames aren't sent in display order, so keep the furthest one.
@@ -280,15 +340,14 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     }
   });
 
-  let info;
-  try {
-    info = await streamInfo(id, quality);
-  } catch (err) {
-    sendJson(ws, { type: 'error', message: `Couldn't load this video: ${err.message}` });
+  const playable = await findPlayable(id, quality);
+  if (closed) return;
+  if (!playable.info) {
+    sendJson(ws, { type: 'error', message: playable.message });
     ws.close();
     return;
   }
-  if (closed) return;
+  const info = playable.info;
 
   const plan = streamPlan(info, quality);
   codec = chooseCodec(want, info, await canEncodeH264());
@@ -305,6 +364,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     fps: passthrough ? info.fps || null : codec === 'h264' ? 30 : plan.rate.fps,
     kbps: passthrough ? (info.tbr ? Math.round(info.tbr) : null) : plan.kbps,
   });
+  const notice = routeNotice(info.routeName);
+  if (notice && id !== TEST_PATTERN_ID && noticeDue(group, info.routeName)) sendJson(ws, { type: 'notice', message: notice });
 
   let args;
   try {
@@ -335,6 +396,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       // Media links expire; make the next attempt fetch fresh ones.
       forgetStream(id, quality);
       if (lastSentPts === null) {
+        // Checked out fine, yet ffmpeg couldn't use it: the next try takes another route.
+        if (id !== TEST_PATTERN_ID) routeRefused(info.routeName, why.raw);
         sendJson(ws, { type: 'error', message: `Couldn't play this video: ${why.said}` });
         ws.close();
         return;

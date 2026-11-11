@@ -148,21 +148,131 @@ export function videoMeta(id) {
 
 const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
 
-function formatFor(height) {
-  // Prefer H.264 + AAC: cheap to decode, so a Raspberry Pi keeps up.
-  return [
-    `bv*[height<=${height}][vcodec^=avc1]+ba[acodec^=mp4a][audio_channels<=2]`,
-    `bv*[height<=${height}][vcodec^=avc1]+ba[acodec^=mp4a]`,
-    `bv*[height<=${height}][vcodec^=avc1]+ba`,
-    `bv*[height<=${height}]+ba`,
-    `b[height<=${height}]`,
-    'b',
-  ].join('/');
+/*
+ * The ways to get a video out of YouTube, best first.
+ *
+ * YouTube closes one or another of these from time to time, for some
+ * connections and not for others: the lookup still works and hands out
+ * links, but the links answer 403. So the server doesn't count on any one
+ * of them. It tries them in this order, checks that the link really
+ * delivers before playing, and remembers which one worked.
+ *
+ *   direct  the separate picture and sound files, up to 1080p. Best quality
+ *           and the quickest to skip around in.
+ *   hls     the stream in short segments that YouTube gives embedded
+ *           players and Apple devices, also up to 1080p.
+ *   basic   the one small ready-made file (360p) every video has.
+ */
+export const ROUTES = [
+  {
+    name: 'direct',
+    args: [],
+    // Prefer H.264 + AAC: cheap to decode, and it can be passed straight on to the car.
+    format: (height) =>
+      [
+        `bv*[height<=${height}][vcodec^=avc1][protocol^=http]+ba[acodec^=mp4a][audio_channels<=2][protocol^=http]`,
+        `bv*[height<=${height}][vcodec^=avc1][protocol^=http]+ba[acodec^=mp4a][protocol^=http]`,
+        `bv*[height<=${height}][vcodec^=avc1][protocol^=http]+ba[protocol^=http]`,
+        `bv*[height<=${height}][protocol^=http]+ba[protocol^=http]`,
+        `b[height<=${height}]`,
+        'b',
+      ].join('/'),
+  },
+  {
+    name: 'hls',
+    // The usual sources plus the embedded player, which is the one that has these streams.
+    args: ['--extractor-args', 'youtube:player_client=default,web_embedded'],
+    format: (height) =>
+      [
+        `bv*[height<=${height}][vcodec^=avc1][protocol^=m3u8]+ba[protocol^=m3u8]`,
+        `b[height<=${height}][vcodec^=avc1][protocol^=m3u8]`,
+        `bv*[height<=${height}][protocol^=m3u8]+ba[protocol^=m3u8]`,
+        `b[height<=${height}][protocol^=m3u8]`,
+      ].join('/'),
+  },
+  {
+    name: 'basic',
+    args: [],
+    format: () => '18/b[height<=360][protocol^=http]/b[protocol^=http]',
+    // What to tell people when this is all there is.
+    notice: 'YouTube is only letting this server have its basic 360p version right now, so that is what is playing.',
+  },
+];
+
+const routeNamed = (name) => ROUTES.find((r) => r.name === name) || ROUTES[0];
+
+// Routes YouTube refused lately: when, and how many times in a row.
+const RETRY_AFTER = 30 * 60 * 1000;
+const RETRY_AFTER_MOST = 6 * 60 * 60 * 1000;
+const refused = new Map(); // name -> { at, times }
+let using = null; // the route in use, only so a change shows up in the log
+
+function resting(name, now) {
+  const r = refused.get(name);
+  return !!r && now - r.at < Math.min(RETRY_AFTER * 2 ** (r.times - 1), RETRY_AFTER_MOST);
 }
 
-// Direct media URLs (and headers) for ffmpeg to read.
-export function streamInfo(id, quality) {
+// The order to try routes in right now: best first, with the ones refused
+// lately at the back. A refused route gets another go after half an hour,
+// then an hour, and so on up to six, so the server finds its way back to
+// the better routes once YouTube lets them through again. (Refused routes
+// are still tried last rather than not at all: the wait is only a guess.)
+export function routeOrder(now = Date.now()) {
+  const names = ROUTES.map((r) => r.name);
+  return [...names.filter((n) => !resting(n, now)), ...names.filter((n) => resting(n, now))];
+}
+
+export function routeWorked(name) {
+  if (using !== name) console.log(`[youtube] getting videos by the "${name}" route`);
+  using = name;
+  refused.delete(name);
+}
+
+export function routeRefused(name, why) {
+  console.warn(`[youtube] the "${name}" route was refused${why ? ` (${why})` : ''}`);
+  const before = refused.get(name);
+  refused.set(name, { at: Date.now(), times: before ? before.times + 1 : 1 });
+}
+
+export function forgetRoutes() {
+  using = null;
+  refused.clear();
+}
+
+export function routeNotice(name) {
+  return routeNamed(name).notice || '';
+}
+
+// Does this link really hand over the video? Asks for the first few bytes
+// (or, for a segmented stream, its list and then the first segment) and
+// returns the answer's status: 200 or 206 means yes, 403 is a refusal.
+export async function linkStatus(input, fetchImpl = fetch) {
+  const ask = async (url, range) => {
+    const res = await fetchImpl(url, {
+      headers: { ...(input.headers || {}), ...(range ? { Range: 'bytes=0-1023' } : {}) },
+      signal: AbortSignal.timeout(10000),
+    });
+    const text = range ? '' : await res.text().catch(() => '');
+    if (range && res.body) await res.body.cancel().catch(() => {});
+    return { status: res.status, text };
+  };
+  if (!input.list) return (await ask(input.url, true)).status;
+  const list = await ask(input.url, false);
+  if (list.status !== 200) return list.status;
+  // The first line that isn't a comment is the first segment (or a list of its own).
+  const first = list.text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
+  if (!first) return 200;
+  try {
+    return (await ask(new URL(first, input.url).href, true)).status;
+  } catch {
+    return 200; // couldn't tell; ffmpeg will find out
+  }
+}
+
+// Media links (and headers) for ffmpeg to read, got by one of the routes above.
+export function streamInfo(id, quality, routeName = 'direct') {
   const height = HEIGHTS[quality] || 480;
+  const route = routeNamed(routeName);
   if (id === TEST_PATTERN_ID) {
     return Promise.resolve({
       title: TEST_PATTERN_ITEM.title,
@@ -177,11 +287,13 @@ export function streamInfo(id, quality) {
       fps: 30,
       vcodec: 'generated',
       tbr: null,
+      route: 'built in',
+      routeName: 'direct',
     });
   }
-  return streamCache.get(`${id}:${height}`, async () => {
+  return streamCache.get(`${id}:${height}:${route.name}`, async () => {
     const json = JSON.parse(
-      await ytdlp(['-J', '--no-playlist', '-f', formatFor(height), `https://www.youtube.com/watch?v=${id}`], 60000)
+      await ytdlp([...route.args, '-J', '--no-playlist', '-f', route.format(height), `https://www.youtube.com/watch?v=${id}`], 60000)
     );
     const formats = json.requested_formats && json.requested_formats.length ? json.requested_formats : [json];
     const inputs = formats
@@ -194,11 +306,14 @@ export function streamInfo(id, quality) {
         fps: typeof f.fps === 'number' ? f.fps : null,
         vcodec: typeof f.vcodec === 'string' ? f.vcodec : '',
         tbr: typeof f.vbr === 'number' && f.vbr > 0 ? f.vbr : typeof f.tbr === 'number' ? f.tbr : null,
+        height: typeof f.height === 'number' ? f.height : null,
+        // A segmented stream: the link is a list of segments, not the file itself.
+        list: /m3u8/i.test(f.protocol || '') || /\.m3u8(\?|$)/i.test(f.url),
       }));
     if (!inputs.length) throw new Error('No playable format found');
     // Which of YouTube's formats these are and how they are delivered, for the log
     // when a video won't start: e.g. "137+140 https via TVHTML5 from rr5---sn-x.googlevideo.com".
-    const route = (() => {
+    const described = (() => {
       try {
         const picked = formats.filter((f) => f && f.url);
         const first = new URL(picked[0].url);
@@ -216,16 +331,19 @@ export function streamInfo(id, quality) {
       inputs[0].hasAudio = true;
     }
     return {
+      at: Date.now(), // when these links were looked up; they go stale
       title: json.title || '',
       duration: typeof json.duration === 'number' ? json.duration : null,
       live: json.is_live === true,
       inputs,
-      height,
+      // What was really found, which can be less than what was asked for.
+      height: Math.min(height, (inputs.find((i) => i.hasVideo) || {}).height || height),
       fps: (inputs.find((i) => i.hasVideo) || {}).fps || (typeof json.fps === 'number' ? json.fps : null),
       // What YouTube encoded the picture with (avc1 = H.264) and at what rate.
       vcodec: (inputs.find((i) => i.hasVideo) || {}).vcodec || (typeof json.vcodec === 'string' ? json.vcodec : ''),
       tbr: (inputs.find((i) => i.hasVideo) || {}).tbr || null,
-      route,
+      route: `${route.name}: ${described}`,
+      routeName: route.name,
     };
   });
 }
@@ -239,7 +357,8 @@ export function prewarm(id, quality) {
   const key = `${id}:${quality}`;
   const failedAt = prewarmFailed.get(key);
   if (failedAt && Date.now() - failedAt < 60000) return;
-  streamInfo(id, quality).then(
+  // By the route a video would be played by right now.
+  streamInfo(id, quality, routeOrder()[0]).then(
     () => prewarmFailed.delete(key),
     () => {
       prewarmFailed.set(key, Date.now());
@@ -249,7 +368,7 @@ export function prewarm(id, quality) {
 }
 
 export function forgetStream(id, quality) {
-  streamCache.map.delete(`${id}:${HEIGHTS[quality] || 480}`);
+  for (const r of ROUTES) streamCache.map.delete(`${id}:${HEIGHTS[quality] || 480}:${r.name}`);
 }
 
 // Keep yt-dlp current; YouTube changes often and old versions stop working.
