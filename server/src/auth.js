@@ -14,12 +14,17 @@ import path from 'node:path';
  * other people, each with a passcode of its own.
  *
  * Someone new can also ask for a profile from the sign-in page, by typing a
- * passcode nobody uses yet and giving a name. That request waits until the
- * main profile allows it; until then the passcode opens nothing.
+ * passcode nobody uses yet and giving a name. That request waits until it is
+ * allowed on the Admin page; until then the passcode opens nothing.
+ *
+ * The Admin page is opened by typing DRIVE_PASSCODE on it. Being signed in to
+ * a profile, the main one included, is not enough.
  */
 
 const COOKIE = 'dt_session';
 const SESSION_DAYS = 400;
+const ADMIN_COOKIE = 'dt_admin';
+const ADMIN_DAYS = 30;
 const PAIR_TTL_MS = 10 * 60 * 1000;
 export const OWNER = 'main';
 export const MAX_PROFILES = 12;
@@ -59,6 +64,12 @@ export function clientIp(req) {
     req.socket.remoteAddress ||
     'unknown'
   );
+}
+
+// Add a cookie to the answer without dropping one that is already on it.
+function addCookie(res, cookie) {
+  const had = typeof res.getHeader === 'function' ? res.getHeader('Set-Cookie') : undefined;
+  res.setHeader('Set-Cookie', had ? [].concat(had, cookie) : cookie);
 }
 
 // Only mark the cookie https-only when this request really came over https
@@ -324,11 +335,11 @@ export class Auth {
       `Max-Age=${SESSION_DAYS * 86400}`,
     ];
     if (isHttps(req)) parts.push('Secure');
-    res.setHeader('Set-Cookie', parts.join('; '));
+    addCookie(res, parts.join('; '));
   }
 
   clearCookie(res) {
-    res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    addCookie(res, `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
   }
 
   // The profile this request is signed in to, or null.
@@ -362,6 +373,52 @@ export class Auth {
     if (!p) return;
     p.epoch = (p.epoch || 0) + 1;
     this.persist();
+  }
+
+  // ---- admin ----
+  // The Admin page (profiles, people asking for one) is opened by typing the
+  // server's own passcode, DRIVE_PASSCODE, on it. That is kept apart from
+  // profile sign-ins on purpose: a phone paired from a car's QR code is on
+  // that car's profile without ever having typed a passcode, and must not
+  // get to manage the server that way.
+
+  checkAdminPasscode(input) {
+    const typed = String(input || '');
+    return !!typed && !!this.passcode && safeEqual(typed, this.passcode);
+  }
+
+  // The passcode is part of what gets signed, so changing DRIVE_PASSCODE
+  // signs every device out of Admin.
+  adminSig(exp) {
+    const pass = crypto.createHash('sha256').update(String(this.passcode)).digest('base64url');
+    return this.sign(`admin.${exp}.${pass}`);
+  }
+
+  issueAdminCookie(req, res) {
+    const exp = Math.floor(Date.now() / 1000) + ADMIN_DAYS * 86400;
+    const parts = [
+      `${ADMIN_COOKIE}=${exp}.${this.adminSig(exp)}`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Lax',
+      `Max-Age=${ADMIN_DAYS * 86400}`,
+    ];
+    if (isHttps(req)) parts.push('Secure');
+    addCookie(res, parts.join('; '));
+  }
+
+  clearAdminCookie(res) {
+    addCookie(res, `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  }
+
+  // Has this device typed the server's passcode on the Admin page?
+  isAdmin(req) {
+    const value = parseCookies(req.headers.cookie)[ADMIN_COOKIE];
+    if (!value || !this.passcode) return false;
+    const [expStr, sig] = value.split('.');
+    const exp = parseInt(expStr, 10);
+    if (!exp || !sig || exp < Date.now() / 1000) return false;
+    return safeEqual(sig, this.adminSig(exp));
   }
 
   // ---- share tokens (the iPhone Shortcut) ----

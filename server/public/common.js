@@ -52,7 +52,11 @@
         throw new Error('Sign in first');
       }
       return res.json().catch(function () { return {}; }).then(function (data) {
-        if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
+        if (!res.ok) {
+          var err = new Error(data.error || 'Request failed (' + res.status + ')');
+          err.status = res.status;
+          throw err;
+        }
         return data;
       });
     });

@@ -36,6 +36,7 @@ function assetVersion() {
   return hash.digest('hex').slice(0, 12);
 }
 const VERSION = assetVersion();
+const STARTED = Date.now();
 
 if (!config.passcode) {
   console.error('DRIVE_PASSCODE is not set. Set it in your .env file and restart.');
@@ -74,6 +75,21 @@ function storeFor(id) {
 function profileLabel(id) {
   const p = auth.profile(id);
   return auth.profiles.length > 1 && p ? p.name : '';
+}
+
+// Everything the Admin page shows: the profiles and whether their cars are
+// on, who is waiting for a profile, and which build is running.
+function adminView() {
+  return {
+    profiles: auth.listProfiles().map((p) => {
+      const st = stores.get(p.id);
+      const carOnline = !!(st && st.carOnline);
+      return { ...p, carOnline, playing: carOnline && !!st.now && !st.paused };
+    }),
+    requests: auth.listRequests(),
+    allowRequests: auth.allowRequests,
+    server: { version: VERSION, startedAt: STARTED },
+  };
 }
 
 // ---------- helpers ----------
@@ -184,6 +200,7 @@ async function route(req, res) {
   const p = url.pathname;
   const profile = auth.profileOf(req); // which profile this device is signed in to, if any
   const authed = !!profile;
+  const admin = auth.isAdmin(req); // has this device typed the server's passcode on the Admin page?
 
   if (req.method === 'GET' && p === '/healthz') return send(res, 200, { ok: true });
 
@@ -197,6 +214,12 @@ async function route(req, res) {
     return send(res, 200, { busy: [...stores.values()].some((st) => !!st.now && !st.paused && st.carOnline) });
   }
 
+  // Admin is opened by typing the server's own passcode (DRIVE_PASSCODE) on
+  // it. Being signed in to a profile isn't enough.
+  if (req.method === 'GET' && p === '/admin') {
+    if (!admin) return redirect(res, '/login?admin=1');
+    return serveFile(res, 'admin.html');
+  }
   if (req.method === 'GET' && PAGES[p]) {
     if (!authed) return redirect(res, `/login?next=${encodeURIComponent(p + url.search)}`);
     return serveFile(res, PAGES[p]);
@@ -246,9 +269,64 @@ async function route(req, res) {
     return send(res, 200, { ok: true });
   }
 
+  // ---- Admin: the server's own passcode, whichever profile the device is on ----
+  if (req.method === 'POST' && p === '/api/admin/login') {
+    if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
+    const body = await readJson(req);
+    if (!auth.checkAdminPasscode(body.passcode)) return send(res, 401, { error: 'Wrong passcode' });
+    auth.issueAdminCookie(req, res);
+    return send(res, 200, { ok: true });
+  }
+  if (req.method === 'POST' && p === '/api/admin/logout') {
+    auth.clearAdminCookie(res);
+    return send(res, 200, { ok: true });
+  }
+  if (req.method === 'GET' && p === '/api/admin') {
+    if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    return send(res, 200, adminView());
+  }
+  // Adding, renaming and removing profiles, and answering people who asked for one.
+  if (req.method === 'POST' && p === '/api/profiles') {
+    if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    const body = await readJson(req);
+    const id = String(body.id || '');
+    try {
+      if (body.action === 'add') auth.addProfile(body.name, body.passcode);
+      else if (body.action === 'approve') {
+        const made = auth.approveRequest(id);
+        console.log(`[profiles] ${auth.profile(made).name} was allowed a profile`);
+      } else if (body.action === 'decline') {
+        const gone = auth.dropRequest(id);
+        if (gone) console.log(`[profiles] ${gone.name}'s request was declined`);
+      } else if (body.action === 'asking') auth.setAllowRequests(body.on === true);
+      else if (body.action === 'rename') auth.renameProfile(id, body.name);
+      else if (body.action === 'passcode') auth.setPasscode(id, body.passcode);
+      else if (body.action === 'signout') {
+        if (!auth.profile(id)) throw new Error('No such profile.');
+        auth.rotateSessions(id);
+        dropScreens(id);
+      } else if (body.action === 'remove') {
+        auth.removeProfile(id);
+        dropScreens(id);
+        const gone = stores.get(id);
+        if (gone) {
+          clearTimeout(gone.saveTimer);
+          stores.delete(id);
+        }
+        // Its Up Next, history and settings go with it.
+        fs.rmSync(profileDir(id), { recursive: true, force: true });
+      } else return send(res, 400, { error: 'Unknown action' });
+    } catch (err) {
+      return send(res, 400, { error: err.message });
+    }
+    tellProfileNames();
+    tellRequests();
+    return send(res, 200, adminView());
+  }
+
   // Asking for a profile, from the sign-in page. None of this needs a
   // sign-in, and none of it opens anything: a request only becomes a profile
-  // when the main profile allows it.
+  // when it is allowed in Admin.
   if (p === '/api/join') {
     if (req.method === 'GET') return send(res, 200, { open: auth.canAsk() });
     if (req.method === 'POST') {
@@ -260,8 +338,8 @@ async function route(req, res) {
         if (auth.requests.length > before) {
           console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
           tellRequests();
-          // The owner's phones list the request; their car just mentions it.
-          const note = JSON.stringify({ type: 'toast', message: `${waiting.name} is asking for a profile. Answer on your phone.` });
+          // Phones signed in to Admin list the request; the main profile's car just mentions it.
+          const note = JSON.stringify({ type: 'toast', message: `${waiting.name} is asking for a profile. Answer in Admin on your phone.` });
           for (const c of controlClients) if (c.profile === OWNER && c.role === 'car' && c.ws.readyState === 1) c.ws.send(note);
         }
         return send(res, 200, { waiting });
@@ -381,57 +459,13 @@ async function route(req, res) {
         // Where to get the ready-made Shortcut, when this copy of DrivePost has one.
         shortcutUrl: signedShortcut() ? `/shortcut/${encodeURIComponent(SHORTCUT_NAME)}.shortcut` : null,
         testItem: TEST_PATTERN_ITEM,
-        // Who this device is signed in as. The main profile also sees the
-        // others, so it can add and remove them.
+        // Who this device is signed in as, and whether it's signed in to Admin.
         profile: { id: profile, name: auth.profile(profile).name, owner: profile === OWNER },
-        profiles: profile === OWNER ? auth.listProfiles() : undefined,
-        // People waiting for a profile, and whether new ones may ask.
-        requests: profile === OWNER ? auth.listRequests() : undefined,
-        allowRequests: profile === OWNER ? auth.allowRequests : undefined,
+        admin,
       });
     }
     if (req.method === 'POST' && p === '/api/share-token') {
       return send(res, 200, { shareToken: auth.rotateShareToken(profile) });
-    }
-
-    // Adding, renaming and removing profiles, and answering people who asked
-    // for one: the main profile only.
-    if (req.method === 'POST' && p === '/api/profiles') {
-      if (profile !== OWNER) return send(res, 403, { error: 'Only the main profile can change profiles.' });
-      const body = await readJson(req);
-      const id = String(body.id || '');
-      try {
-        if (body.action === 'add') auth.addProfile(body.name, body.passcode);
-        else if (body.action === 'approve') {
-          const made = auth.approveRequest(id);
-          console.log(`[profiles] ${auth.profile(made).name} was allowed a profile`);
-        } else if (body.action === 'decline') {
-          const gone = auth.dropRequest(id);
-          if (gone) console.log(`[profiles] ${gone.name}'s request was declined`);
-        } else if (body.action === 'asking') auth.setAllowRequests(body.on === true);
-        else if (body.action === 'rename') auth.renameProfile(id, body.name);
-        else if (body.action === 'passcode') auth.setPasscode(id, body.passcode);
-        else if (body.action === 'signout') {
-          if (!auth.profile(id)) throw new Error('No such profile.');
-          auth.rotateSessions(id);
-          dropScreens(id);
-        } else if (body.action === 'remove') {
-          auth.removeProfile(id);
-          dropScreens(id);
-          const gone = stores.get(id);
-          if (gone) {
-            clearTimeout(gone.saveTimer);
-            stores.delete(id);
-          }
-          // Its Up Next, history and settings go with it.
-          fs.rmSync(profileDir(id), { recursive: true, force: true });
-        } else return send(res, 400, { error: 'Unknown action' });
-      } catch (err) {
-        return send(res, 400, { error: err.message });
-      }
-      tellProfileNames();
-      tellRequests();
-      return send(res, 200, { profiles: auth.listProfiles(), requests: auth.listRequests(), allowRequests: auth.allowRequests });
     }
   }
 
@@ -462,31 +496,40 @@ function dropScreens(profile) {
   for (const c of controlClients) if (c.profile === profile) c.ws.close(4401, 'signed out');
 }
 
-function hello(profile) {
-  return { type: 'version', version: VERSION, feedback: !!config.feedbackUrl, profile: profileLabel(profile) };
+function hello(client) {
+  return {
+    type: 'version',
+    version: VERSION,
+    feedback: !!config.feedbackUrl,
+    profile: profileLabel(client.profile),
+    // Whether to show the way to Admin: on devices signed in to it, and on
+    // the main profile, whose owner most likely runs the server.
+    admin: client.admin || client.profile === OWNER,
+  };
 }
 
 // Profiles were added, renamed or removed: screens show whose they are once there's more than one.
 function tellProfileNames() {
-  for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c.profile)));
+  for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c)));
 }
 
-// The main profile's screens list who is waiting for a profile.
+// Screens signed in to Admin list who is waiting for a profile.
 function tellRequests() {
-  broadcast(OWNER, { type: 'requests', requests: auth.listRequests() });
+  const data = JSON.stringify({ type: 'requests', requests: auth.listRequests() });
+  for (const c of controlClients) if (c.admin && c.ws.readyState === 1) c.ws.send(data);
 }
 
 function refreshCarOnline(profile) {
   storeFor(profile).setCarOnline([...controlClients].some((c) => c.profile === profile && c.role === 'car'));
 }
 
-function handleControl(ws, profile) {
-  const client = { ws, role: 'remote', profile };
+function handleControl(ws, profile, admin) {
+  const client = { ws, role: 'remote', profile, admin };
   const store = storeFor(profile);
   controlClients.add(client);
-  ws.send(JSON.stringify(hello(profile)));
+  ws.send(JSON.stringify(hello(client)));
   ws.send(JSON.stringify({ type: 'state', state: store.publicState() }));
-  if (profile === OWNER) ws.send(JSON.stringify({ type: 'requests', requests: auth.listRequests() }));
+  if (admin) ws.send(JSON.stringify({ type: 'requests', requests: auth.listRequests() }));
 
   ws.on('message', (raw) => {
     let msg;
@@ -550,7 +593,7 @@ server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
-    if (url.pathname === '/ws/control') return handleControl(ws, profile);
+    if (url.pathname === '/ws/control') return handleControl(ws, profile, auth.isAdmin(req));
     const id = url.searchParams.get('id');
     if (!isValidId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));

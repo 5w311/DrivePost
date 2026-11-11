@@ -269,3 +269,63 @@ test('a server from before requests existed starts with none and takes them', ()
   assert.equal(auth.canAsk(), true);
   assert.equal(auth.listProfiles().length, 2);
 });
+
+// ---- the Admin page ----
+
+// Type the server's passcode on a device and hand back a request carrying what it was given.
+function adminSignedIn(auth, also = '') {
+  let cookie = '';
+  auth.issueAdminCookie({ headers: {}, socket: {} }, { setHeader: (k, v) => (cookie = v.split(';')[0]) });
+  return { headers: { cookie: [cookie, also].filter(Boolean).join('; ') }, socket: {} };
+}
+
+test('Admin takes the passcode from .env, and a profile sign-in is not enough', () => {
+  const dir = tmp();
+  const auth = make(dir);
+  const maria = auth.addProfile('Maria', 'maria-1234');
+  assert.equal(auth.checkAdminPasscode('owner-pass'), true);
+  assert.equal(auth.checkAdminPasscode('maria-1234'), false, "another profile's passcode doesn't open Admin");
+  assert.equal(auth.checkAdminPasscode(''), false);
+  assert.equal(auth.checkAdminPasscode(undefined), false);
+
+  // Signed in to a profile, even the main one, is not signed in to Admin.
+  const car = signedIn(auth, OWNER);
+  assert.equal(auth.profileOf(car), OWNER);
+  assert.equal(auth.isAdmin(car), false);
+  assert.equal(auth.isAdmin(signedIn(auth, maria)), false);
+  assert.equal(auth.isAdmin({ headers: {}, socket: {} }), false);
+
+  // Admin works from any device, whatever profile it's on, and doesn't change that profile.
+  const laptop = adminSignedIn(auth);
+  assert.equal(auth.isAdmin(laptop), true);
+  assert.equal(auth.profileOf(laptop), null, 'Admin alone opens no profile');
+  const mariasPhone = adminSignedIn(auth, signedIn(auth, maria).headers.cookie);
+  assert.equal(auth.isAdmin(mariasPhone), true);
+  assert.equal(auth.profileOf(mariasPhone), maria);
+
+  // It can't be made up or stretched.
+  const [name, value] = laptop.headers.cookie.split('=');
+  const [exp, sig] = value.split('.');
+  assert.equal(auth.isAdmin({ headers: { cookie: `${name}=${Number(exp) + 1000}.${sig}` }, socket: {} }), false);
+  assert.equal(auth.isAdmin({ headers: { cookie: `${name}=${exp}.forged` }, socket: {} }), false);
+  assert.equal(auth.isAdmin({ headers: { cookie: `${name}=1.${auth.adminSig(1)}` }, socket: {} }), false, 'run out');
+
+  // Survives a restart; changing DRIVE_PASSCODE signs every device out of Admin.
+  assert.equal(make(dir).isAdmin(laptop), true);
+  const changed = new Auth({ dataDir: dir, passcode: 'a-new-passcode' });
+  assert.equal(changed.isAdmin(laptop), false);
+  assert.equal(changed.profileOf(car), OWNER, 'profile sign-ins are not affected');
+});
+
+test('signing in to a profile and to Admin in one answer keeps both', () => {
+  const auth = make();
+  const headers = {};
+  const res = { getHeader: (k) => headers[k], setHeader: (k, v) => (headers[k] = v) };
+  auth.issueCookie({ headers: {}, socket: {} }, res, OWNER);
+  auth.issueAdminCookie({ headers: {}, socket: {} }, res);
+  assert.equal(headers['Set-Cookie'].length, 2);
+  const cookie = headers['Set-Cookie'].map((c) => c.split(';')[0]).join('; ');
+  const req = { headers: { cookie }, socket: {} };
+  assert.equal(auth.profileOf(req), OWNER);
+  assert.equal(auth.isAdmin(req), true);
+});

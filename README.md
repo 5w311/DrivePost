@@ -10,7 +10,8 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Theater button:** shows or hides the lists (Up Next, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
 - **Fullscreen:** tap the video and use the corner button, or switch it from the phone. The video then fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
-- **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it from your phone.
+- **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it.
+- **Admin page:** `/admin`, opened with the passcode from `.env`, shows who is waiting for a profile, every profile and its car, and the running build.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
 - **Two video formats:** **H.264** passes YouTube's own video straight through, and the browser decodes it (WebCodecs). It's sharper, usually uses less data, and is almost no work for the server. **MPEG-1** is converted on the server and decoded in the page by [JSMpeg](https://github.com/phoboslab/jsmpeg), which works in any browser. The car uses H.264 when it can and switches to MPEG-1 by itself when it can't.
 - **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
@@ -88,13 +89,10 @@ If the browser's H.264 decoder reports an error, stops returning pictures, or ca
 
 A profile is one person's, or one car's, own copy of everything: what's playing, Up Next, Recent, resume points, quality and format settings, paired phones and the Send to Car link. The passcode a device signs in with decides which profile it's in, so everyone uses the same address.
 
-- The **main profile** is the one you set up: its passcode is `DRIVE_PASSCODE` in `.env`. Only it can manage profiles.
-- **Getting a profile:** the person opens your address, taps **Ask for your own profile** on the sign-in page, and picks a name and a passcode. Their screen then shows a three-digit number and waits. You see their name and the same number on your phone remote and under **Profiles** in **Setup & sharing**. Tap **Allow** and their screen signs in by itself; tap **Decline** and nothing is made. Until you allow it, their passcode opens nothing.
+- The **main profile** is the one you set up: the passcode in `.env`, `DRIVE_PASSCODE`, opens it. Your car, phones and Shortcut from before profiles are on it.
+- **Getting a profile:** the person opens your address, taps **Ask for your own profile** on the sign-in page, and picks a name and a passcode. Their screen then shows a three-digit number and waits. You see their name and the same number in **Admin** (below). Tap **Allow** and their screen signs in by itself; tap **Decline** and nothing is made. Until you allow it, their passcode opens nothing.
 - Only allow a request whose number matches the one on the person's screen. Your address is public, so anyone who finds it can ask, and the number is how you know a request is really from the person you think.
 - Requests wait for up to a week, also across restarts and updates, so you can answer later. The person can close the page and come back with their passcode. At most five wait at a time, and one address can only ask a few times per ten minutes.
-- To stop taking requests, untick **Let new people ask for a profile** under **Profiles**. The sign-in page then only takes passcodes that already work.
-- You can also add a profile yourself: under **Profiles**, open **Add a profile yourself instead**, enter a name and a passcode, and tell the person the passcode.
-- From the same list you can rename a profile, give it a new passcode, sign its devices out, or remove it. Removing a profile deletes its Up Next, history and settings.
 - Passcodes have to differ from each other, because the passcode is what tells profiles apart. Passcodes people choose or you add are stored scrambled.
 - Each person pairs their phones from their own car's screen, or signs in on them with their passcode.
 - Once there's more than one profile, the car page and the phone remote show which profile they're on.
@@ -102,6 +100,17 @@ A profile is one person's, or one car's, own copy of everything: what's playing,
 A server set up before profiles existed keeps working unchanged: its car, phones and Shortcut become the main profile.
 
 Each car that's playing needs its own share of the server and of your upload. Passing H.264 through is light enough for a Raspberry Pi 4 to serve two or three cars; converting to MPEG-1 at 1080p is one car's worth on a Pi 4. `MAX_STREAMS` is counted per profile.
+
+### Admin
+
+`https://your-address/admin` is where you run the server: it lists people waiting for a profile, every profile and whether its car is connected, and which build is running and since when.
+
+- **Admin is opened by typing `DRIVE_PASSCODE`**, the passcode in `.env`, on that page. Being signed in to a profile is not enough, not even the main one, because a phone paired from a car's QR code is on that car's profile without ever having typed a passcode.
+- It works from any device, whichever profile that device is on, and doesn't change that profile. The device stays signed in to Admin for 30 days, or until you tap **Sign out of Admin on this device**. Changing `DRIVE_PASSCODE` signs every device out of Admin.
+- A phone that is signed in to Admin also shows people waiting for a profile at the top of its remote, with **Allow** and **Decline**. The main profile's car shows a short notice when someone asks.
+- From the profile list you can rename a profile, give it a new passcode, sign its devices out, or remove it. Removing a profile deletes its Up Next, history and settings.
+- To stop taking requests, untick **Let new people ask for a profile**. The sign-in page then only takes passcodes that already work.
+- You can also add a profile yourself: open **Add a profile yourself instead**, enter a name and a passcode, and tell the person the passcode.
 
 ## Sharing from an iPhone
 

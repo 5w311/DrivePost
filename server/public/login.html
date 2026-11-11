@@ -70,10 +70,21 @@
         });
       }
 
+      // Signing in to the Admin page: that takes the server's own passcode,
+      // whichever profile this device is on.
+      var forAdmin = !!params.get('admin');
+      if (forAdmin) {
+        next = '/admin';
+        INTRO = "Admin: enter the server's own passcode, the one set as DRIVE_PASSCODE in its .env file. This device stays signed in to Admin for 30 days.";
+        $('intro').textContent = INTRO;
+        document.title = 'Admin sign-in · DrivePost';
+      }
+
       function show(which) {
         ['signIn', 'ask', 'waiting'].forEach(function (id) { $(id).classList.toggle('hidden', id !== which); });
       }
       function offerAsking(text) {
+        if (forAdmin) return;
         $('newHereText').textContent = text || 'New here?';
         $('newHere').classList.remove('hidden');
       }
@@ -135,7 +146,7 @@
         var err = $('error');
         var passcode = $('passcode').value;
         err.textContent = '';
-        post('/api/login', { passcode: passcode }).then(function (r) {
+        post(forAdmin ? '/api/admin/login' : '/api/login', { passcode: passcode }).then(function (r) {
           if (r.ok && r.data.waiting) return wait(r.data.waiting, passcode);
           if (r.ok) return void (location.href = next);
           err.textContent = r.data.error || 'Sign-in failed';
