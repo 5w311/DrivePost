@@ -92,7 +92,7 @@ input:focus, select:focus { border-color: var(--accent); }
 
 /* ---------- toast, sheet, modal ---------- */
 .toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 140%);
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 140%);
   background: var(--panel-3); border: 1px solid var(--line); border-radius: 12px;
   padding: 12px 18px; max-width: min(92vw, 560px); z-index: 50;
   transition: transform 0.25s ease, opacity 0.25s ease; box-shadow: 0 10px 30px rgba(0,0,0,0.45);
@@ -107,9 +107,9 @@ input:focus, select:focus { border-color: var(--accent); }
 .scrim.center { align-items: center; }
 .sheet {
   background: var(--panel); border: 1px solid var(--line); border-radius: 18px 18px 0 0;
-  width: min(100%, 560px); padding: 16px 16px 20px; display: flex; flex-direction: column; gap: 10px;
+  width: min(100%, 560px); padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px;
 }
-.scrim.center .sheet { border-radius: 18px; }
+.scrim.center .sheet { border-radius: 18px; padding-bottom: 20px; }
 .sheet-title { font-weight: 700; font-size: 17px; margin: 2px 4px 6px; }
 .sheet button { width: 100%; min-height: var(--tap); text-align: left; }
 
@@ -144,7 +144,7 @@ body.car { height: 100vh; overflow: hidden; display: flex; flex-direction: colum
 .suggest-row b, .suggest-row span:only-child { min-width: 0; }
 .suggest-row.active, .suggest-row:active { background: var(--panel-3); }
 /* On the phone the list sits in the page flow under the search box. */
-body.remote .has-suggest { flex-wrap: wrap; scroll-margin-top: 72px; }
+body.remote .has-suggest { flex-wrap: wrap; scroll-margin-top: calc(72px + env(safe-area-inset-top, 0px)); }
 /* ...and the box shares its row with the Go button; only the list wraps below. */
 body.remote .has-suggest > input { flex: 1 1 0; width: auto; min-width: 0; }
 body.remote .has-suggest > button { flex: none; }
@@ -338,16 +338,20 @@ body.theater .stage { max-height: calc(100vh - 150px); width: min(100%, calc((10
 }
 
 /* ---------- phone remote ---------- */
-body.remote { padding-bottom: 40px; }
+/* Opened from an iPhone's home screen, the page runs under the status bar
+   and around the notch and home bar. The env() insets keep everything clear
+   of them; in an ordinary browser tab they are all zero. */
+body.remote { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
 .remote-head {
   position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
-  padding: 12px 16px; background: rgba(11,13,16,0.92); backdrop-filter: blur(10px);
+  padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
+  background: rgba(11,13,16,0.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
 }
 .remote-head .brand { font-size: 18px; }
 .remote-head .who { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .remote-head .car-status { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
-.wrap { max-width: 640px; margin: 0 auto; padding: 0 14px; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 calc(14px + env(safe-area-inset-right, 0px)) 0 calc(14px + env(safe-area-inset-left, 0px)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 14px; overflow: hidden; }
 .card-head { padding: 12px 14px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
 .card-body { padding: 14px; }
@@ -379,7 +383,10 @@ a.btn.primary { background: var(--accent); border-color: var(--accent); color: v
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* ---------- login / setup ---------- */
-.center-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.center-page {
+  min-height: 100vh; display: grid; place-items: center;
+  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+}
 .login-box { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 24px; }
 .login-box h1 { margin: 0 0 6px; font-size: 24px; }
 .login-box p { color: var(--muted); margin: 0 0 18px; }
