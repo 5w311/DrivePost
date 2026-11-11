@@ -1,5 +1,5 @@
 {
-  "name": "drivetest",
+  "name": "drivepost",
   "version": "0.1.0",
   "private": true,
   "description": "Self-hosted YouTube player for the Tesla browser that keeps playing after you leave Park (for passengers).",

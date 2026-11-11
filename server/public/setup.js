@@ -64,7 +64,7 @@
   function show() {
     showProfiles();
     $('#shareLink').textContent = cfg.shareLink;
-    // The ready-made Shortcut, when this copy of DriveTest has one. Without
+    // The ready-made Shortcut, when this copy of DrivePost has one. Without
     // it, the by-hand steps are the way, so show them opened up.
     var quick = !!cfg.shortcutUrl;
     $('#quickShortcut').classList.toggle('hidden', !quick);

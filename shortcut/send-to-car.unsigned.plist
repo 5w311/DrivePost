@@ -12,9 +12,9 @@
 			<key>WFWorkflowActionParameters</key>
 			<dict>
 				<key>WFCommentActionText</key>
-				<string>Sends what you share to your DriveTest server, which plays it in the car or adds it to Up Next.
+				<string>Sends what you share to your DrivePost server, which plays it in the car or adds it to Up Next.
 
-The address below is your personal DriveTest link. If you make a new share token, copy the new link from Setup &amp; sharing in the DriveTest remote and paste it over the old one.</string>
+The address below is your personal DrivePost link. If you make a new share token, copy the new link from Setup &amp; sharing in the DrivePost remote and paste it over the old one.</string>
 			</dict>
 		</dict>
 		<dict>
@@ -107,7 +107,7 @@ The address below is your personal DriveTest link. If you make a new share token
 				<key>WFNotificationActionSound</key>
 				<false/>
 				<key>WFNotificationActionTitle</key>
-				<string>DriveTest</string>
+				<string>DrivePost</string>
 			</dict>
 		</dict>
 	</array>
@@ -136,7 +136,7 @@ The address below is your personal DriveTest link. If you make a new share token
 			<key>ParameterKey</key>
 			<string>WFURL</string>
 			<key>Text</key>
-			<string>Paste your DriveTest link here. To copy it, open Setup &amp; sharing in the DriveTest remote.</string>
+			<string>Paste your DrivePost link here. To copy it, open Setup &amp; sharing in the DrivePost remote.</string>
 		</dict>
 	</array>
 	<key>WFWorkflowInputContentItemClasses</key>

@@ -20,7 +20,7 @@ It's all static, so there's no build step.
 
 ## Deploy to Cloudflare Pages
 
-**From GitHub:** push this folder to a repo, create a Pages project connected to it, leave the framework preset as None, leave the build command empty and set the output directory to `/`. Then add a custom domain such as `drivetest.figari.dev`.
+**From GitHub:** push this folder to a repo, create a Pages project connected to it, leave the framework preset as None, leave the build command empty and set the output directory to `/`. Then add a custom domain such as `drive-test.example.com`.
 
 **Or straight from your machine:**
 

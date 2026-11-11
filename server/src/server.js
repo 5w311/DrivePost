@@ -161,7 +161,7 @@ async function shareText(store, text) {
 
 const PAGES = { '/': 'car.html', '/remote': 'remote.html', '/setup': 'setup.html' };
 
-// The ready-made iPhone Shortcut, if this copy of DriveTest ships one. iPhones
+// The ready-made iPhone Shortcut, if this copy of DrivePost ships one. iPhones
 // only open Shortcut files signed through Apple, which start with "AEA1".
 const SHORTCUT_NAME = 'Send to Car';
 let shortcutFile;
@@ -261,7 +261,7 @@ async function route(req, res) {
     // A share link belongs to one profile; a signed-in browser shares to its own.
     const target = auth.shareProfile(req, url.searchParams.get('key')) || profile;
     if (!target) {
-      return send(res, 401, 'Wrong or old DriveTest link. Copy a fresh one from Setup & sharing.', 'text/plain; charset=utf-8');
+      return send(res, 401, 'Wrong or old DrivePost link. Copy a fresh one from Setup & sharing.', 'text/plain; charset=utf-8');
     }
     const body = await readJson(req);
     const result = await shareText(storeFor(target), body.url || body.text || body.input || '');
@@ -333,7 +333,7 @@ async function route(req, res) {
         shareToken: token,
         // One address with the token in it: all the iPhone Shortcut needs.
         shareLink: `${baseUrl(req)}/api/share?key=${encodeURIComponent(token)}`,
-        // Where to get the ready-made Shortcut, when this copy of DriveTest has one.
+        // Where to get the ready-made Shortcut, when this copy of DrivePost has one.
         shortcutUrl: signedShortcut() ? `/shortcut/${encodeURIComponent(SHORTCUT_NAME)}.shortcut` : null,
         testItem: TEST_PATTERN_ITEM,
         // Who this device is signed in as. The main profile also sees the
@@ -511,5 +511,5 @@ process.on('SIGINT', shutdown);
 storeFor(OWNER); // the main profile is always there
 startAutoUpdate();
 server.listen(config.port, () => {
-  console.log(`DriveTest listening on :${config.port}`);
+  console.log(`DrivePost listening on :${config.port}`);
 });

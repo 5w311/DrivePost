@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets this machine up to update DriveTest by itself: a systemd timer runs
+# Sets this machine up to update DrivePost by itself: a systemd timer runs
 # scripts/auto-update.sh every 2 minutes. Run once, from anywhere:
 #
 #   ./scripts/install-auto-update.sh            # turn it on
@@ -8,11 +8,17 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 RUN_AS="$(id -un)"
-UNIT=drivetest-update
+UNIT=drivepost-update
+OLD_UNIT=drivetest-update   # the timer's name before the app was renamed
+
+remove_timer() {
+  sudo systemctl disable --now "$1.timer" 2>/dev/null || true
+  sudo rm -f "/etc/systemd/system/$1.service" "/etc/systemd/system/$1.timer"
+}
 
 if [ "${1:-}" = "--remove" ]; then
-  sudo systemctl disable --now "$UNIT.timer" 2>/dev/null || true
-  sudo rm -f "/etc/systemd/system/$UNIT.service" "/etc/systemd/system/$UNIT.timer"
+  remove_timer "$UNIT"
+  remove_timer "$OLD_UNIT"
   sudo systemctl daemon-reload
   echo "Automatic updates are off."
   exit 0
@@ -29,9 +35,16 @@ fi
 
 chmod +x "$REPO/scripts/auto-update.sh"
 
+# A machine set up before the rename has the timer under its old name.
+# Replace it, so two timers don't do the same job.
+if [ -e "/etc/systemd/system/$OLD_UNIT.timer" ] || [ -e "/etc/systemd/system/$OLD_UNIT.service" ]; then
+  remove_timer "$OLD_UNIT"
+  echo "Replaced the old $OLD_UNIT timer with $UNIT."
+fi
+
 sudo tee "/etc/systemd/system/$UNIT.service" >/dev/null <<UNIT_EOF
 [Unit]
-Description=Update DriveTest from GitHub when there is something new
+Description=Update DrivePost from GitHub when there is something new
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -47,7 +60,7 @@ UNIT_EOF
 
 sudo tee "/etc/systemd/system/$UNIT.timer" >/dev/null <<UNIT_EOF
 [Unit]
-Description=Check GitHub for DriveTest updates every 2 minutes
+Description=Check GitHub for DrivePost updates every 2 minutes
 
 [Timer]
 OnBootSec=2min

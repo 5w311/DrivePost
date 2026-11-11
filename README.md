@@ -1,8 +1,8 @@
-# DriveTest
+# DrivePost
 
 A self-hosted YouTube player for the Tesla browser that keeps playing after you shift out of Park, for passengers.
 
-Tesla's browser pauses its built-in video player when the car leaves Park. DriveTest never uses that player. A small server at home fetches the video, and the car page decodes it itself and draws it on a `<canvas>`, with sound through Web Audio. The [proof of concept](test/) confirmed that canvas playback keeps going in Drive.
+Tesla's browser pauses its built-in video player when the car leaves Park. DrivePost never uses that player. A small server at home fetches the video, and the car page decodes it itself and draws it on a `<canvas>`, with sound through Web Audio. The [proof of concept](test/) confirmed that canvas playback keeps going in Drive.
 
 ## What it does
 
@@ -65,7 +65,7 @@ If the browser's H.264 decoder reports an error, stops returning pictures, or ca
 1. Clone the repo onto the machine and create your settings:
 
    ```sh
-   git clone https://github.com/5w311/DriveTest.git && cd DriveTest
+   git clone https://github.com/5w311/DrivePost.git && cd DrivePost
    cp .env.example .env
    nano .env   # set DRIVE_PASSCODE and SHARE_TOKEN; PUBLIC_URL and TUNNEL_TOKEN come in step 2
    ```
@@ -119,11 +119,13 @@ Making a new share token (Setup page, under Security) changes your personal link
 
 ## Updating
 
-yt-dlp updates itself when the container starts and once a day. YouTube changes often, and old versions stop working. To update DriveTest itself:
+yt-dlp updates itself when the container starts and once a day. YouTube changes often, and old versions stop working. To update DrivePost itself:
 
 ```sh
-git pull && docker compose --profile tunnel up -d --build
+git pull && docker compose --profile tunnel up -d --build --remove-orphans
 ```
+
+`--remove-orphans` matters once, on a machine set up while the app was still called DriveTest: it clears away the container with the old name, which would otherwise keep port 8080. If you updated without it and got `port is already allocated`, run `docker compose --profile tunnel up -d --force-recreate --remove-orphans` to put things right. Your data is not touched either way.
 
 ### Automatic updates
 
@@ -137,7 +139,7 @@ It sets up a timer that checks GitHub every 2 minutes. When there are new commit
 
 | To do this | Run |
 |---|---|
-| See what it did | `journalctl -u drivetest-update -n 30 --no-pager` |
+| See what it did | `journalctl -u drivepost-update -n 30 --no-pager` |
 | Check right now | `./scripts/auto-update.sh` |
 | Turn it off | `./scripts/install-auto-update.sh --remove` |
 
@@ -166,7 +168,7 @@ Your sign-ins, profiles, Up Next, history and resume points live in the `drivete
 docker compose --profile tunnel down
 docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine tar czf /backup/drivetest-data.tgz -C /data .
 
-# Copy drivetest-data.tgz and .env to the new machine's DriveTest folder, then:
+# Copy drivetest-data.tgz and .env to the new machine's DrivePost folder, then:
 docker volume create drivetest_drivetest-data
 docker run --rm -v drivetest_drivetest-data:/data -v "$PWD":/backup alpine sh -c "tar xzf /backup/drivetest-data.tgz -C /data && chown -R 1000:1000 /data"
 docker compose --profile tunnel up -d --build
@@ -188,7 +190,7 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 
 ## Fullscreen in a Tesla
 
-Tesla only lets its browser take over the entire display in Park. While driving, the browser keeps its own window, so DriveTest's fullscreen fills that window. It also asks the browser for true fullscreen, which works on phones and computers and is ignored where the browser doesn't allow it.
+Tesla only lets its browser take over the entire display in Park. While driving, the browser keeps its own window, so DrivePost's fullscreen fills that window. It also asks the browser for true fullscreen, which works on phones and computers and is ignored where the browser doesn't allow it.
 
 ## Notes
 

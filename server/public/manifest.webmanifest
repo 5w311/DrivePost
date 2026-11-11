@@ -1,6 +1,6 @@
 {
-  "name": "DriveTest",
-  "short_name": "DriveTest",
+  "name": "DrivePost",
+  "short_name": "DrivePost",
   "description": "Send videos to the car.",
   "start_url": "/remote",
   "scope": "/",

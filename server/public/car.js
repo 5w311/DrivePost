@@ -639,7 +639,7 @@
       el('div', { class: 'feedback' }, [
         qr,
         el('div', { class: 'feedback-text' }, [
-          el('div', { text: 'Scan this with your phone camera. It opens a new issue on the DriveTest GitHub page, ready for you to say what happened.' }),
+          el('div', { text: 'Scan this with your phone camera. It opens a new issue on the DrivePost GitHub page, ready for you to say what happened.' }),
           el('div', { class: 'muted', text: 'These details from the car are filled in for you. Nothing about what you watch or your server is included.' }),
           el('div', { class: 'details', text: details })
         ])

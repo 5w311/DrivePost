@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Auth, OWNER, MAX_PROFILES } from '../src/auth.js';
 
 function tmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'drivetest-auth-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-auth-'));
 }
 function make(dir = tmp(), extra = {}) {
   return new Auth({ dataDir: dir, passcode: 'owner-pass', ...extra });

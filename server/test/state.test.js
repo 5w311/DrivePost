@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Store } from '../src/state.js';
 
 function makeStore(quality = '1080') {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivetest-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-'));
   return new Store({ dataDir, defaultQuality: quality });
 }
 
@@ -95,7 +95,7 @@ test('the video format is a shared setting and changing it restarts the stream',
 });
 
 test('a saved format this version does not know falls back to automatic', () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivetest-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-'));
   fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ settings: { quality: '480', format: 'theora' } }));
   const s = new Store({ dataDir, defaultQuality: '480' });
   assert.equal(s.settings.format, 'auto');

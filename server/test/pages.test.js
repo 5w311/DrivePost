@@ -46,9 +46,9 @@ const DETAILS = [
 ].join('\n');
 
 test('the feedback link opens a new issue with the details filled in', () => {
-  const link = feedbackLink('https://github.com/5w311/DriveTest/issues/new', DETAILS, 'abc123def456');
+  const link = feedbackLink('https://github.com/5w311/DrivePost/issues/new', DETAILS, 'abc123def456');
   const url = new URL(link);
-  assert.equal(url.origin + url.pathname, 'https://github.com/5w311/DriveTest/issues/new');
+  assert.equal(url.origin + url.pathname, 'https://github.com/5w311/DrivePost/issues/new');
   assert.equal(url.searchParams.get('title'), 'Feedback: ');
   const body = url.searchParams.get('body');
   assert.ok(body.startsWith('**What happened?**\n'), 'room to write comes first');

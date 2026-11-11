@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DriveTest auto-update: if GitHub has commits this machine isn't running yet,
+# DrivePost auto-update: if GitHub has commits this machine isn't running yet,
 # pull them and rebuild. Meant to be run every couple of minutes by the timer
 # that scripts/install-auto-update.sh sets up. Safe to run by hand too.
 #
@@ -10,9 +10,13 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 cd "$REPO"
 
+SERVICE=drivepost                       # the app's name in docker-compose.yml
+OLD_SERVICE=drivetest                   # its name there before the app was renamed
+
 STATE_DIR="$REPO/.auto-update"          # ignored by git
 DEPLOYED="$STATE_DIR/deployed"          # commit that is built and running
 FAILED="$STATE_DIR/failed"              # commit whose build last failed
+RENAMING="$STATE_DIR/renaming"          # commit the switch to the new name was last tried for
 RETRY_AFTER_MIN=60                      # how long to wait before retrying a failed commit
 mkdir -p "$STATE_DIR"
 
@@ -28,28 +32,55 @@ if ! git fetch --quiet origin "$BRANCH" 2>/dev/null; then
 fi
 REMOTE="$(git rev-parse "origin/$BRANCH")"
 
-# Nothing new since the last successful build? Done. (On the very first run
-# there is no record yet, so it builds once to be sure what's running.)
-[ "$REMOTE" = "$(cat "$DEPLOYED" 2>/dev/null || echo none)" ] && exit 0
-
-# Don't hammer a commit that fails to build.
-if [ -f "$FAILED" ] && [ "$REMOTE" = "$(cat "$FAILED")" ] \
-   && [ -z "$(find "$FAILED" -mmin +"$RETRY_AFTER_MIN")" ]; then
-  exit 0
-fi
-
 # Use the tunnel profile if this machine has a tunnel token.
 COMPOSE=(docker compose)
 if grep -Eq '^TUNNEL_TOKEN=.+' .env 2>/dev/null; then COMPOSE+=(--profile tunnel); fi
 
+# The app's containers, whichever name they were started under.
+containers_of() { docker ps -q "${@:2}" --filter "label=com.docker.compose.service=$1" 2>/dev/null || true; }
+
+# True when a container from before the rename is still around although
+# docker-compose.yml no longer has a service by that name. It keeps port 8080,
+# so the renamed app can't start until it is cleared away. That happens when
+# the rename was pulled by an older copy of this script, or by hand.
+left_over() {
+  local services
+  [ -n "$(containers_of "$OLD_SERVICE" -a)" ] || return 1
+  services="$("${COMPOSE[@]}" config --services 2>/dev/null)" || return 1
+  ! grep -qx "$OLD_SERVICE" <<<"$services"
+}
+
+FINISH_RENAME=no
+if left_over && [ "$REMOTE" != "$(cat "$RENAMING" 2>/dev/null || echo none)" ]; then
+  FINISH_RENAME=yes   # once per commit; after that the usual retry wait applies
+fi
+
+if [ "$FINISH_RENAME" = no ]; then
+  # Nothing new since the last successful build? Done. (On the very first run
+  # there is no record yet, so it builds once to be sure what's running.)
+  [ "$REMOTE" = "$(cat "$DEPLOYED" 2>/dev/null || echo none)" ] && exit 0
+
+  # Don't hammer a commit that fails to build.
+  if [ -f "$FAILED" ] && [ "$REMOTE" = "$(cat "$FAILED")" ] \
+     && [ -z "$(find "$FAILED" -mmin +"$RETRY_AFTER_MIN")" ]; then
+    exit 0
+  fi
+fi
+
 # Is someone watching right now? Restarting would interrupt them, so wait.
 # (Asks the running app from inside its own container; older versions that
 # can't answer count as "not watching".)
-if "${COMPOSE[@]}" exec -T drivetest node -e \
-     "fetch('http://127.0.0.1:8080/internal/busy').then(r=>r.json()).then(j=>process.exit(j.busy?10:0)).catch(()=>process.exit(0))" \
-     >/dev/null 2>&1; then
-  :
-elif [ $? -eq 10 ]; then
+watching() {
+  local id
+  for id in $(containers_of "$SERVICE") $(containers_of "$OLD_SERVICE"); do
+    docker exec "$id" node -e \
+      "fetch('http://127.0.0.1:8080/internal/busy').then(r=>r.json()).then(j=>process.exit(j.busy?10:0)).catch(()=>process.exit(0))" \
+      >/dev/null 2>&1 && continue
+    [ $? -eq 10 ] && return 0
+  done
+  return 1
+}
+if watching; then
   log "Update to ${REMOTE:0:7} is waiting: a video is playing."
   exit 0
 fi
@@ -62,13 +93,28 @@ if ! git merge --ff-only --quiet "origin/$BRANCH" 2>"$STATE_DIR/git-error"; then
   exit 1
 fi
 
-if "${COMPOSE[@]}" up -d --build; then
+# --remove-orphans clears containers of services the compose file no longer
+# has. Your data is in a volume, which this never removes.
+UP=(up -d --build --remove-orphans)
+OLD_IMAGES=""
+if left_over; then
+  echo "$REMOTE" > "$RENAMING"
+  OLD_IMAGES="$(for id in $(containers_of "$OLD_SERVICE" -a); do docker inspect -f '{{.Config.Image}}' "$id" 2>/dev/null || true; done | sort -u)"
+  log "Clearing away the app's container from before it was renamed ($OLD_SERVICE)."
+fi
+# After a try that failed, make every container afresh. One that was created
+# but couldn't start (say, because the port was taken) has no network, and
+# would come up unreachable if it were simply started again.
+if [ -f "$RENAMING" ] || [ -f "$FAILED" ]; then UP+=(--force-recreate); fi
+
+if "${COMPOSE[@]}" "${UP[@]}"; then
   echo "$REMOTE" > "$DEPLOYED"
-  rm -f "$FAILED"
+  rm -f "$FAILED" "$RENAMING"
+  for image in $OLD_IMAGES; do docker image rm "$image" >/dev/null 2>&1 || true; done   # the build under the old name
   docker image prune -f >/dev/null 2>&1 || true   # old builds pile up on an SD card
   log "Now running ${REMOTE:0:7}: $(git log -1 --format=%s)"
 else
   echo "$REMOTE" > "$FAILED"
-  log "Build failed. The previous version keeps running. Will retry in ${RETRY_AFTER_MIN} minutes, or on the next push."
+  log "Update failed; the lines above say why. Will retry in ${RETRY_AFTER_MIN} minutes, or on the next push."
   exit 1
 fi

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /*
- * Builds the "Send to Car" iPhone Shortcut that DriveTest hands out from its
+ * Builds the "Send to Car" iPhone Shortcut that DrivePost hands out from its
  * Setup page (server/public/send-to-car.shortcut).
  *
  * The Shortcut is the same for everyone and holds nothing personal: when
- * someone adds it, their iPhone asks for their own DriveTest link and puts it
+ * someone adds it, their iPhone asks for their own DrivePost link and puts it
  * in. What it does:
  *
  *   1. takes whatever was shared (a link or text) from the share sheet,
- *   2. sends it to the DriveTest link as {"url": "..."},
+ *   2. sends it to the DrivePost link as {"url": "..."},
  *   3. shows the server's answer ("Added to Up Next: ...") as a notification.
  *
  * iPhones only open Shortcut files that carry Apple's signature. This script
@@ -41,7 +41,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const SHORTCUT_NAME = 'Send to Car';
-export const QUESTION = 'Paste your DriveTest link here. To copy it, open Setup & sharing in the DriveTest remote.';
+export const QUESTION = 'Paste your DrivePost link here. To copy it, open Setup & sharing in the DrivePost remote.';
 
 const SIGN_URL = 'https://sign.shortcuty.app/api/v1/sign'; // documented at github.com/Shortcuty/Signing-Server-API-Documentation
 
@@ -86,9 +86,9 @@ export function shortcutData() {
         WFWorkflowActionIdentifier: 'is.workflow.actions.comment',
         WFWorkflowActionParameters: {
           WFCommentActionText:
-            'Sends what you share to your DriveTest server, which plays it in the car or adds it to Up Next.\n\n' +
-            'The address below is your personal DriveTest link. If you make a new share token, copy the new link ' +
-            'from Setup & sharing in the DriveTest remote and paste it over the old one.',
+            'Sends what you share to your DrivePost server, which plays it in the car or adds it to Up Next.\n\n' +
+            'The address below is your personal DrivePost link. If you make a new share token, copy the new link ' +
+            'from Setup & sharing in the DrivePost remote and paste it over the old one.',
         },
       },
       {
@@ -112,7 +112,7 @@ export function shortcutData() {
       {
         WFWorkflowActionIdentifier: 'is.workflow.actions.notification',
         WFWorkflowActionParameters: {
-          WFNotificationActionTitle: 'DriveTest',
+          WFNotificationActionTitle: 'DrivePost',
           WFNotificationActionBody: variableText({
             Type: 'ActionOutput',
             OutputName: 'Contents of URL',
@@ -174,7 +174,7 @@ export function looksSigned(buf) {
 // ---- signing ----
 
 function signOnMac(plist) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivetest-shortcut-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-shortcut-'));
   const input = path.join(dir, `${SHORTCUT_NAME}.unsigned.shortcut`);
   const output = path.join(dir, `${SHORTCUT_NAME}.shortcut`);
   try {

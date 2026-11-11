@@ -40,7 +40,7 @@ export const config = {
   // Where the car's Feedback button sends people: a "new issue" page that
   // takes ?title= and ?body=. Set FEEDBACK_URL= (empty) to hide the button, or
   // point it at your own fork.
-  feedbackUrl: env.FEEDBACK_URL === undefined ? 'https://github.com/5w311/DriveTest/issues/new' : env.FEEDBACK_URL.trim(),
+  feedbackUrl: env.FEEDBACK_URL === undefined ? 'https://github.com/5w311/DrivePost/issues/new' : env.FEEDBACK_URL.trim(),
 
   // Where search suggestions come from (YouTube's own suggestion service).
   suggestUrl: env.SUGGEST_URL || 'https://suggestqueries.google.com/complete/search',
