@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Auth, OWNER, MAX_PROFILES } from '../src/auth.js';
+import { Auth, OWNER, MAX_PROFILES, MAX_REQUESTS } from '../src/auth.js';
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-auth-'));
@@ -157,4 +157,115 @@ test('each profile has its own Send to Car link', () => {
   assert.equal(auth.shareProfile({ headers: {} }, hers), null, 'the old link stops working');
   assert.equal(auth.shareProfile({ headers: {} }, fresh), maria);
   assert.equal(auth.shareProfile({ headers: {} }, 'env-token'), OWNER, 'the other profile\'s link is untouched');
+});
+
+// ---- asking for a profile from the sign-in page ----
+
+test('a new passcode opens nothing until the main profile allows it', () => {
+  const dir = tmp();
+  const auth = make(dir);
+  assert.equal(auth.canAsk(), true);
+  const asked = auth.askForProfile('  Maria ', 'maria-1234');
+  assert.equal(asked.name, 'Maria');
+  assert.match(asked.code, /^[1-9]\d\d$/, 'a three-digit number to compare on both screens');
+  assert.deepEqual(Object.keys(asked).sort(), ['at', 'code', 'id', 'name'], 'nothing about the passcode leaves the server');
+  assert.equal(auth.checkPasscode('maria-1234'), null, 'waiting is not signed in');
+  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main']);
+  assert.equal(auth.requestFor('maria-1234').id, asked.id);
+  assert.equal(auth.requestFor('maria-12345'), null);
+  assert.deepEqual(auth.listRequests(), [asked]);
+
+  // Kept across a restart, and never as typed.
+  assert.ok(!fs.readFileSync(path.join(dir, 'profiles.json'), 'utf8').includes('maria-1234'));
+  const again = make(dir);
+  assert.deepEqual(again.listRequests(), [asked]);
+
+  const id = again.approveRequest(asked.id);
+  assert.equal(again.checkPasscode('maria-1234'), id, 'the passcode they chose now signs them in');
+  assert.equal(again.profile(id).name, 'Maria');
+  assert.ok(again.shareTokenOf(id), 'with a Send to Car link of their own');
+  assert.deepEqual(again.listRequests(), []);
+  assert.equal(again.requestById(asked.id), null);
+  assert.throws(() => again.approveRequest(asked.id), /gone/, 'a request is answered once');
+});
+
+test('declined and cancelled requests leave nothing behind', () => {
+  const auth = make();
+  const asked = auth.askForProfile('Stranger', 'let-me-in');
+  assert.equal(auth.dropRequest(asked.id).name, 'Stranger');
+  assert.equal(auth.dropRequest(asked.id), null);
+  assert.equal(auth.requestFor('let-me-in'), null);
+  assert.equal(auth.checkPasscode('let-me-in'), null);
+  assert.throws(() => auth.approveRequest(asked.id), /gone/);
+  assert.deepEqual(auth.listProfiles().map((p) => p.name), ['Main']);
+});
+
+test('asking again with the same passcode is the same request', () => {
+  const auth = make();
+  const first = auth.askForProfile('Maria', 'maria-1234');
+  const second = auth.askForProfile('Maria again', 'maria-1234');
+  assert.deepEqual(second, first);
+  assert.equal(auth.listRequests().length, 1);
+});
+
+test('requests are checked and limited', () => {
+  const auth = make();
+  const taken = auth.addProfile('Kid', 'kid-pass-1');
+  assert.throws(() => auth.askForProfile('X', 'owner-pass'), /already opens a profile/);
+  assert.throws(() => auth.askForProfile('X', 'kid-pass-1'), /already opens a profile/);
+  assert.throws(() => auth.askForProfile('X', 'abc'), /at least 4/);
+  assert.throws(() => auth.askForProfile('X', 'x'.repeat(101)), /too long/);
+  assert.throws(() => auth.askForProfile('   ', 'fine-pass'), /name/);
+  assert.equal(auth.askForProfile('Line\nbreak\u0007 and a very long name indeed', 'fine-pass').name, 'Line break and a very lo', 'names are plain, short text');
+
+  // The owner can't hand out a passcode someone is waiting with.
+  assert.throws(() => auth.addProfile('Other', 'fine-pass'), /waiting for your OK/);
+  assert.throws(() => auth.setPasscode(taken, 'fine-pass'), /waiting for your OK/);
+
+  for (let i = auth.listRequests().length; i < MAX_REQUESTS; i++) auth.askForProfile(`P${i}`, `pass-${i}`);
+  assert.equal(new Set(auth.listRequests().map((r) => r.code)).size, MAX_REQUESTS, 'every waiting request has its own number');
+  assert.throws(() => auth.askForProfile('One more', 'one-more-1'), /already waiting/);
+  assert.equal(auth.askForProfile('P1 back', 'pass-1').name, 'P1', 'someone already waiting can still look theirs up');
+});
+
+test('asking can be switched off, and stays off', () => {
+  const dir = tmp();
+  const auth = make(dir);
+  const waiting = auth.askForProfile('Early', 'early-1234');
+  auth.setAllowRequests(false);
+  assert.equal(auth.canAsk(), false);
+  assert.throws(() => auth.askForProfile('Late', 'late-1234'), /isn't taking requests/);
+  const again = make(dir);
+  assert.equal(again.canAsk(), false);
+  assert.equal(again.approveRequest(waiting.id).length, 10, 'someone who asked before can still be allowed');
+  again.setAllowRequests(true);
+  assert.equal(make(dir).canAsk(), true);
+});
+
+test('a full server takes no requests, and old requests run out', () => {
+  const auth = make();
+  const early = auth.askForProfile('Early', 'early-1234');
+  for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `pass-${i}`);
+  assert.equal(auth.canAsk(), false);
+  assert.throws(() => auth.askForProfile('Late', 'late-1234'), /no room/);
+  assert.throws(() => auth.approveRequest(early.id), /most profiles/);
+  assert.equal(auth.listRequests().length, 1, 'the request waits for room');
+
+  // After a week without an answer, a request is dropped.
+  auth.requests[0].at = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  assert.deepEqual(auth.listRequests(), []);
+  assert.equal(auth.requestFor('early-1234'), null);
+  assert.throws(() => auth.approveRequest(early.id), /gone/);
+});
+
+test('a server from before requests existed starts with none and takes them', () => {
+  const dir = tmp();
+  const first = make(dir);
+  first.addProfile('Maria', 'maria-1234');
+  // What the previous version wrote: profiles only.
+  fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify({ profiles: first.profiles }));
+  const auth = make(dir);
+  assert.deepEqual(auth.listRequests(), []);
+  assert.equal(auth.canAsk(), true);
+  assert.equal(auth.listProfiles().length, 2);
 });

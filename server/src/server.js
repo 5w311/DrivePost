@@ -235,9 +235,54 @@ async function route(req, res) {
     const body = await readJson(req);
     // The passcode decides which profile this device joins.
     const matched = auth.checkPasscode(body.passcode);
-    if (!matched) return send(res, 401, { error: 'Wrong passcode' });
+    if (!matched) {
+      // The passcode of someone who asked for a profile and is still waiting.
+      const waiting = auth.requestFor(body.passcode);
+      if (waiting) return send(res, 202, { waiting: auth.showRequest(waiting) });
+      // canAsk: the sign-in page may offer asking for a profile with it.
+      return send(res, 401, { error: 'Wrong passcode', canAsk: auth.canAsk() });
+    }
     auth.issueCookie(req, res, matched);
     return send(res, 200, { ok: true });
+  }
+
+  // Asking for a profile, from the sign-in page. None of this needs a
+  // sign-in, and none of it opens anything: a request only becomes a profile
+  // when the main profile allows it.
+  if (p === '/api/join') {
+    if (req.method === 'GET') return send(res, 200, { open: auth.canAsk() });
+    if (req.method === 'POST') {
+      if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
+      const body = await readJson(req);
+      try {
+        const before = auth.requests.length;
+        const waiting = auth.askForProfile(body.name, body.passcode);
+        if (auth.requests.length > before) {
+          console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
+          tellRequests();
+          // The owner's phones list the request; their car just mentions it.
+          const note = JSON.stringify({ type: 'toast', message: `${waiting.name} is asking for a profile. Answer on your phone.` });
+          for (const c of controlClients) if (c.profile === OWNER && c.role === 'car' && c.ws.readyState === 1) c.ws.send(note);
+        }
+        return send(res, 200, { waiting });
+      } catch (err) {
+        return send(res, 400, { error: err.message });
+      }
+    }
+  }
+  // The waiting page asks whether its request is still open, and can cancel
+  // it. The id is long and random, and only the device that asked has it.
+  if (p.startsWith('/api/join/')) {
+    const id = p.slice('/api/join/'.length);
+    if (req.method === 'GET') return send(res, 200, { waiting: !!auth.requestById(id) });
+    if (req.method === 'DELETE') {
+      const gone = auth.dropRequest(id);
+      if (gone) {
+        console.log(`[profiles] ${gone.name} cancelled their request`);
+        tellRequests();
+      }
+      return send(res, 200, { ok: true });
+    }
   }
 
   // The ready-made iPhone Shortcut. It's the same file for everyone and holds
@@ -340,19 +385,30 @@ async function route(req, res) {
         // others, so it can add and remove them.
         profile: { id: profile, name: auth.profile(profile).name, owner: profile === OWNER },
         profiles: profile === OWNER ? auth.listProfiles() : undefined,
+        // People waiting for a profile, and whether new ones may ask.
+        requests: profile === OWNER ? auth.listRequests() : undefined,
+        allowRequests: profile === OWNER ? auth.allowRequests : undefined,
       });
     }
     if (req.method === 'POST' && p === '/api/share-token') {
       return send(res, 200, { shareToken: auth.rotateShareToken(profile) });
     }
 
-    // Adding, renaming and removing profiles: the main profile only.
+    // Adding, renaming and removing profiles, and answering people who asked
+    // for one: the main profile only.
     if (req.method === 'POST' && p === '/api/profiles') {
       if (profile !== OWNER) return send(res, 403, { error: 'Only the main profile can change profiles.' });
       const body = await readJson(req);
       const id = String(body.id || '');
       try {
         if (body.action === 'add') auth.addProfile(body.name, body.passcode);
+        else if (body.action === 'approve') {
+          const made = auth.approveRequest(id);
+          console.log(`[profiles] ${auth.profile(made).name} was allowed a profile`);
+        } else if (body.action === 'decline') {
+          const gone = auth.dropRequest(id);
+          if (gone) console.log(`[profiles] ${gone.name}'s request was declined`);
+        } else if (body.action === 'asking') auth.setAllowRequests(body.on === true);
         else if (body.action === 'rename') auth.renameProfile(id, body.name);
         else if (body.action === 'passcode') auth.setPasscode(id, body.passcode);
         else if (body.action === 'signout') {
@@ -374,7 +430,8 @@ async function route(req, res) {
         return send(res, 400, { error: err.message });
       }
       tellProfileNames();
-      return send(res, 200, { profiles: auth.listProfiles() });
+      tellRequests();
+      return send(res, 200, { profiles: auth.listProfiles(), requests: auth.listRequests(), allowRequests: auth.allowRequests });
     }
   }
 
@@ -414,6 +471,11 @@ function tellProfileNames() {
   for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c.profile)));
 }
 
+// The main profile's screens list who is waiting for a profile.
+function tellRequests() {
+  broadcast(OWNER, { type: 'requests', requests: auth.listRequests() });
+}
+
 function refreshCarOnline(profile) {
   storeFor(profile).setCarOnline([...controlClients].some((c) => c.profile === profile && c.role === 'car'));
 }
@@ -424,6 +486,7 @@ function handleControl(ws, profile) {
   controlClients.add(client);
   ws.send(JSON.stringify(hello(profile)));
   ws.send(JSON.stringify({ type: 'state', state: store.publicState() }));
+  if (profile === OWNER) ws.send(JSON.stringify({ type: 'requests', requests: auth.listRequests() }));
 
   ws.on('message', (raw) => {
     let msg;

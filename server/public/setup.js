@@ -5,14 +5,24 @@
 
   // ---------- profiles ----------
 
+  // Take in the server's answer after any change to profiles or requests.
+  function profilesChanged(r) {
+    cfg.profiles = r.profiles;
+    cfg.requests = r.requests;
+    cfg.allowRequests = r.allowRequests;
+    var me = r.profiles.filter(function (p) { return p.id === cfg.profile.id; })[0];
+    if (me) cfg.profile.name = me.name;
+    showProfiles();
+  }
+
   function profileAction(body, done) {
-    DT.api('/api/profiles', { body: body }).then(function (r) {
-      cfg.profiles = r.profiles;
-      var me = r.profiles.filter(function (p) { return p.id === cfg.profile.id; })[0];
-      if (me) cfg.profile.name = me.name;
-      showProfiles();
+    return DT.api('/api/profiles', { body: body }).then(function (r) {
+      profilesChanged(r);
       if (done) DT.toast(done);
-    }).catch(function (e) { DT.toast(e.message); });
+    }).catch(function (e) {
+      DT.toast(e.message);
+      showProfiles(); // put back anything on screen that didn't go through
+    });
   }
 
   function profileRow(p) {
@@ -52,13 +62,17 @@
     who.appendChild(document.createTextNode("This device is signed in to "));
     who.appendChild(DT.el('b', { text: me.name, style: 'color:var(--text)' }));
     who.appendChild(document.createTextNode(me.owner
-      ? ', the main profile. Add a profile for each person or car that should have its own.'
+      ? ', the main profile. It decides who else gets a profile.'
       : '. Its name and passcode are managed from the main profile.'));
     $('#ownerProfiles').classList.toggle('hidden', !me.owner);
     if (!me.owner) return;
     var list = $('#profileList');
     list.innerHTML = '';
     (cfg.profiles || []).forEach(function (p) { list.appendChild(profileRow(p)); });
+    // People who asked for a profile from the sign-in page.
+    $('#requestList').classList.toggle('hidden', !(cfg.requests || []).length);
+    DT.showRequests($('#requestList'), cfg.requests, profilesChanged);
+    $('#allowAsk').checked = cfg.allowRequests !== false;
   }
 
   function show() {
@@ -91,11 +105,38 @@
     });
   }
 
+  var live = null;
   DT.api('/api/setup').then(function (c) {
     cfg = c;
     show();
+    // The main profile hears right away when someone asks for a profile, or
+    // when a request was answered from another of its screens.
+    if (cfg.profile.owner && !live) {
+      live = new DT.Control('remote', {
+        requests: function (msg) {
+          var before = (cfg.requests || []).length;
+          cfg.requests = msg.requests;
+          // A request answered elsewhere may have become a profile.
+          if (msg.requests.length < before) refresh();
+          else showProfiles();
+        }
+      });
+    }
   }).catch(function (e) {
     DT.toast(e.message);
+  });
+
+  function refresh() {
+    return DT.api('/api/setup').then(function (c) {
+      cfg = c;
+      show();
+    }).catch(function () {});
+  }
+
+  $('#allowAsk').addEventListener('change', function () {
+    if (!cfg) return;
+    var on = this.checked;
+    profileAction({ action: 'asking', on: on }, on ? 'New people can ask for a profile' : 'Nobody new can ask for a profile');
   });
 
   $('#copyLink').addEventListener('click', copyLink);
@@ -113,8 +154,7 @@
     var name = $('#newName').value;
     var pass = $('#newPass').value;
     DT.api('/api/profiles', { body: { action: 'add', name: name, passcode: pass } }).then(function (r) {
-      cfg.profiles = r.profiles;
-      showProfiles();
+      profilesChanged(r);
       $('#newName').value = '';
       $('#newPass').value = '';
       DT.toast('Added. Their passcode is ' + pass);
@@ -136,10 +176,7 @@
     if (!confirm('Make a new share token? Your current Shortcut will stop working until you update it.')) return;
     DT.api('/api/share-token', { body: {} }).then(function (r) {
       DT.toast('New token ready');
-      return DT.api('/api/setup').then(function (c) {
-        cfg = c;
-        show();
-      });
+      return refresh();
     }).catch(function (e) { DT.toast(e.message); });
   });
 

@@ -12,6 +12,10 @@ import path from 'node:path';
  * The first profile, "main", belongs to whoever runs the server. Its passcode
  * is DRIVE_PASSCODE from .env, as it always was. It can add profiles for
  * other people, each with a passcode of its own.
+ *
+ * Someone new can also ask for a profile from the sign-in page, by typing a
+ * passcode nobody uses yet and giving a name. That request waits until the
+ * main profile allows it; until then the passcode opens nothing.
  */
 
 const COOKIE = 'dt_session';
@@ -19,6 +23,8 @@ const SESSION_DAYS = 400;
 const PAIR_TTL_MS = 10 * 60 * 1000;
 export const OWNER = 'main';
 export const MAX_PROFILES = 12;
+export const MAX_REQUESTS = 5; // people waiting for the main profile's OK at one time
+const REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function b64url(buf) {
   return Buffer.from(buf).toString('base64url');
@@ -79,9 +85,13 @@ export class Auth {
     this.secrets = { sessionSecret: saved.sessionSecret || b64url(crypto.randomBytes(32)) };
 
     let profiles = [];
+    this.requests = [];
+    this.allowRequests = true;
     try {
       const data = JSON.parse(fs.readFileSync(this.profilesFile, 'utf8'));
       if (Array.isArray(data.profiles)) profiles = data.profiles.filter((p) => p && typeof p.id === 'string');
+      if (Array.isArray(data.requests)) this.requests = data.requests.filter((r) => r && typeof r.id === 'string' && r.pass);
+      if (data.allowRequests === false) this.allowRequests = false;
     } catch {}
     let owner = profiles.find((p) => p.id === OWNER);
     if (!owner) {
@@ -100,7 +110,8 @@ export class Auth {
     const owner = this.profiles.find((p) => p.id === OWNER);
     this.secrets.shareToken = owner.shareToken;
     fs.writeFileSync(this.file, JSON.stringify(this.secrets, null, 2), { mode: 0o600 });
-    fs.writeFileSync(this.profilesFile, JSON.stringify({ profiles: this.profiles }, null, 2), { mode: 0o600 });
+    const data = { profiles: this.profiles, requests: this.requests, allowRequests: this.allowRequests };
+    fs.writeFileSync(this.profilesFile, JSON.stringify(data, null, 2), { mode: 0o600 });
   }
 
   // ---- profiles ----
@@ -115,7 +126,8 @@ export class Auth {
   }
 
   cleanName(name) {
-    const n = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    // Names are shown on other people's screens and in the log: plain text only.
+    const n = String(name || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24);
     if (!n) throw new Error('Give the profile a name.');
     return n;
   }
@@ -138,6 +150,7 @@ export class Auth {
     // The passcode is what tells profiles apart, so no two can share one.
     const taken = this.checkPasscode(typed);
     if (taken && taken !== exceptId) throw new Error('Another profile already uses that passcode. Pick a different one.');
+    if (this.requestFor(typed)) throw new Error('Someone waiting for your OK asked for that passcode. Answer them first, or pick a different one.');
     return typed;
   }
 
@@ -182,6 +195,114 @@ export class Auth {
     this.profiles.splice(i, 1);
     for (const [code, entry] of this.pairCodes) if (entry.profile === id) this.pairCodes.delete(code);
     this.persist();
+  }
+
+  // ---- asking for a profile ----
+  // Requests are kept in the same file as the profiles, so one made while the
+  // owner is away is still there after the server restarts or updates.
+
+  pruneRequests() {
+    const cutoff = Date.now() - REQUEST_TTL_MS;
+    const kept = this.requests.filter((r) => r.at > cutoff);
+    if (kept.length !== this.requests.length) {
+      this.requests = kept;
+      this.persist();
+    }
+  }
+
+  // What may be shown on screen about a request: no passcode.
+  showRequest(r) {
+    return { id: r.id, name: r.name, code: r.code, at: r.at };
+  }
+
+  listRequests() {
+    this.pruneRequests();
+    return this.requests.map((r) => this.showRequest(r));
+  }
+
+  // Whether the sign-in page should offer asking for a profile.
+  canAsk() {
+    return this.allowRequests && this.profiles.length < MAX_PROFILES;
+  }
+
+  setAllowRequests(on) {
+    this.allowRequests = !!on;
+    this.persist();
+  }
+
+  requestById(id) {
+    this.pruneRequests();
+    return this.requests.find((r) => r.id === id) || null;
+  }
+
+  // The waiting request that asked for this passcode, if any.
+  requestFor(passcode) {
+    const typed = String(passcode || '');
+    if (!typed) return null;
+    this.pruneRequests();
+    return this.requests.find((r) => safeEqual(scramble(typed, r.pass.salt), r.pass.hash)) || null;
+  }
+
+  // Someone new asks for a profile of their own. Nothing opens for them until
+  // the main profile allows it. Returns what to show while they wait.
+  askForProfile(name, passcode) {
+    if (!this.allowRequests) throw new Error("This DrivePost isn't taking requests for new profiles. Ask its owner for a passcode.");
+    const typed = String(passcode || '');
+    if (typed.length < 4) throw new Error('Use a passcode of at least 4 characters.');
+    if (typed.length > 100) throw new Error('That passcode is too long.');
+    if (this.checkPasscode(typed)) throw new Error('That passcode already opens a profile. Go back and sign in with it.');
+    const already = this.requestFor(typed);
+    if (already) return this.showRequest(already); // asked before with this passcode: still waiting
+    const clean = this.cleanName(name);
+    if (this.profiles.length >= MAX_PROFILES) throw new Error("This DrivePost has no room for another profile.");
+    if (this.requests.length >= MAX_REQUESTS) {
+      throw new Error('Several people are already waiting for an OK. Ask the owner to answer them, then try again.');
+    }
+    // A short number shown on both screens, so the owner can tell whose
+    // request this really is before allowing it.
+    let code;
+    do code = String(crypto.randomInt(100, 1000));
+    while (this.requests.some((r) => r.code === code));
+    const salt = b64url(crypto.randomBytes(16));
+    const request = {
+      id: b64url(crypto.randomBytes(16)),
+      name: clean,
+      code,
+      at: Date.now(),
+      pass: { salt, hash: scramble(typed, salt) },
+    };
+    this.requests.push(request);
+    this.persist();
+    return this.showRequest(request);
+  }
+
+  // The main profile said yes: the request becomes a profile, opened by the
+  // passcode the person chose. Returns the new profile's id.
+  approveRequest(id) {
+    const r = this.requestById(id);
+    if (!r) throw new Error('That request is gone: it was cancelled, answered already, or ran out.');
+    if (this.profiles.length >= MAX_PROFILES) throw new Error(`That's the most profiles this server keeps (${MAX_PROFILES}).`);
+    this.requests.splice(this.requests.indexOf(r), 1);
+    const profile = {
+      id: crypto.randomBytes(5).toString('hex'),
+      name: r.name,
+      epoch: 0,
+      shareToken: b64url(crypto.randomBytes(24)),
+      pass: r.pass,
+    };
+    this.profiles.push(profile);
+    this.persist();
+    return profile.id;
+  }
+
+  // Declined by the main profile, or cancelled by the person who asked.
+  // Returns the request that was dropped, or null if there was none.
+  dropRequest(id) {
+    const i = this.requests.findIndex((r) => r.id === id);
+    if (i < 0) return null;
+    const [r] = this.requests.splice(i, 1);
+    this.persist();
+    return this.showRequest(r);
   }
 
   // ---- sessions ----

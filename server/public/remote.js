@@ -26,6 +26,11 @@
     },
     toast: function (msg) {
       DT.toast(msg.message);
+    },
+    // Main profile only: people who asked for a profile from the sign-in page.
+    requests: function (msg) {
+      $('#askCard').classList.toggle('hidden', !msg.requests.length);
+      DT.showRequests($('#askList'), msg.requests);
     }
   });
 
