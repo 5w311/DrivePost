@@ -91,7 +91,8 @@
   DT.debug = {
     player: player,
     state: function () { return state; },
-    pairingLink: function () { return pairing && pairing.link; }
+    pairingLink: function () { return pairing && pairing.link; },
+    feedbackLink: function () { return feedbackLink; }
   };
 
   // Drop one quality level for the rest of this video and say why.
@@ -157,6 +158,7 @@
   var control = new DT.Control('car', {
     version: function (msg) {
       DT.noteVersion(msg.version);
+      $('#feedbackBtn').classList.toggle('hidden', msg.feedback === false);
     },
     state: function (msg) {
       state = msg.state;
@@ -447,28 +449,22 @@
     return line;
   }
 
-  function renderStats() {
-    var box = $('#stats');
-    var s = player.active;
-    var on = showStats && !!s;
-    box.classList.toggle('hidden', !on);
-    pressed($('#statsBtn'), showStats);
-    if (!on) return;
-    var i = s.info();
+  function decodingLine(i) {
+    if (!i.frames) return 'waiting';
+    if (i.codec === 'h264') return "by the browser's own decoder · " + i.ready + ' frames ready · skipped ' + i.dropped;
     var frameMs = 1000 / (i.fps || 30);
-    var decoding = 'waiting';
-    if (i.frames && i.codec === 'h264') {
-      decoding = "by the browser's own decoder · " + i.ready + ' frames ready · skipped ' + i.dropped;
-    } else if (i.frames) {
-      decoding = i.decodeMs.toFixed(1) + ' ms a frame (' + Math.round((i.decodeMs / frameMs) * 100) + '% of the time available) · peak ' + Math.round(i.decodeMax) + ' ms';
-    }
-    var rows = [
+    return i.decodeMs.toFixed(1) + ' ms a frame (' + Math.round((i.decodeMs / frameMs) * 100) + '% of the time available) · peak ' + Math.round(i.decodeMax) + ' ms';
+  }
+
+  function statsRows(s) {
+    var i = s.info();
+    return [
       ['Picture',
         (i.width ? i.width + '×' + i.height : s.quality + 'p') +
         (i.fps ? ' · ' + Math.round(i.fps * 100) / 100 + ' fps' : '') +
         (i.kbps ? ' · ' + (i.kbps / 1000).toFixed(1) + ' Mbps' : '')],
       ['Format', formatLine(s, i)],
-      ['Decoding', decoding],
+      ['Decoding', decodingLine(i)],
       ['Buffer', i.buffer.toFixed(1) + ' s ahead · ran dry ' + i.stalls + '× · fell behind ' + i.holds + '×'],
       ['Sound', i.audio + ' · realigned ' + i.resyncs + '×'],
       ['Server', i.serverSpeed
@@ -476,8 +472,17 @@
         : 'measuring…'],
       ['Browser', browserLine()]
     ];
+  }
+
+  function renderStats() {
+    var box = $('#stats');
+    var s = player.active;
+    var on = showStats && !!s;
+    box.classList.toggle('hidden', !on);
+    pressed($('#statsBtn'), showStats);
+    if (!on) return;
     box.innerHTML = '';
-    rows.forEach(function (r) {
+    statsRows(s).forEach(function (r) {
       box.appendChild(el('div', { class: 'stats-k', text: r[0] }));
       box.appendChild(el('div', { class: 'stats-v', text: r[1] }));
     });
@@ -526,7 +531,6 @@
     document.body.classList.toggle('has-now', !!(state && state.now));
     setIcon($('#fsToggle'), on ? 'compress' : 'expand');
     $('#fsToggle').setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
-    pressed($('#fullscreenBtn'), on);
     // Fill zooms the picture to cover the window (edges are cropped); Fit
     // shows all of it with black bars.
     var fill = !!(state && state.settings && state.settings.fill);
@@ -561,9 +565,6 @@
     if (on && state.now) showOverlay(true); // show where the exit button is
   }
 
-  $('#fullscreenBtn').addEventListener('click', function () {
-    setFullscreen(!isFullscreen());
-  });
   $('#fsToggle').addEventListener('click', function (e) {
     e.stopPropagation();
     setFullscreen(!isFullscreen());
@@ -582,6 +583,89 @@
     else if ((ev.key === 'f' || ev.key === 'F') && !typing && !ev.ctrlKey && !ev.metaKey && !ev.altKey) setFullscreen(!isFullscreen());
   });
 
+  // ---------- feedback ----------
+
+  // What goes into the feedback: the same technical details Stats shows, in
+  // plain characters so the QR code stays easy to scan. It ends up in a
+  // public GitHub issue, so nothing about the video or this server is in it.
+  function plain(text) {
+    return String(text).replace(/×/g, 'x').replace(/ · /g, ', ').replace(/…/g, '...').replace(/[^\x20-\x7E]/g, '');
+  }
+  function feedbackDetails() {
+    var s = player.active;
+    var h = DrivePlayer.h264();
+    var lines = ['Browser: ' + browserLine().replace('decodes ', ''), 'Window: ' + window.innerWidth + 'x' + window.innerHeight];
+    if (state) {
+      lines.push('Quality: ' + state.settings.quality + 'p' + (playQuality() !== state.settings.quality ? ' (stepped down to ' + playQuality() + 'p)' : ''));
+    }
+    if (!s) {
+      lines.push('Playing: nothing');
+      if (state && state.settings.format === 'mpeg1') lines.push('Format: MPEG-1 (chosen on the phone)');
+      else if (h.failedAt && !h.usable) lines.push('Format: MPEG-1 (H.264 failed: ' + h.reason + ')');
+      return lines.map(plain).join('\n');
+    }
+    var i = s.info();
+    var format = 'waiting';
+    if (i.codec === 'h264') format = 'H.264';
+    else if (i.codec) {
+      format = 'MPEG-1';
+      if (state && state.settings.format === 'mpeg1') format += ' (chosen on the phone)';
+      else if (i.asked === 'h264') format += s.live ? ' (live video)' : ' (no H.264 version)';
+      else if (h.supported === false) format += " (browser can't decode H.264)";
+      else if (h.failedAt && !h.usable) format += ' (H.264 failed: ' + h.reason + ')';
+    }
+    lines.push('Format: ' + format);
+    lines.push('Picture: ' + (i.width ? i.width + 'x' + i.height : 'none yet') +
+      (i.fps ? ' ' + Math.round(i.fps * 100) / 100 + 'fps' : '') + (i.kbps ? ' ' + (i.kbps / 1000).toFixed(1) + 'Mbps' : ''));
+    if (i.frames) {
+      lines.push('Decoding: ' + (i.codec === 'h264'
+        ? i.ready + ' ready, ' + i.dropped + ' skipped'
+        : i.decodeMs.toFixed(1) + 'ms a frame, peak ' + Math.round(i.decodeMax) + 'ms'));
+    }
+    lines.push('Buffer: ' + i.buffer.toFixed(1) + 's, ran dry ' + i.stalls + ', fell behind ' + i.holds);
+    lines.push('Sound: ' + i.audio.replace(' Hz', 'Hz') + ', realigned ' + i.resyncs + ', skipped ' + i.audioSkipped);
+    lines.push('Server: ' + (i.serverSpeed ? i.serverSpeed + 'x real time' + (i.serverLimited ? ', held back by the connection' : '') : 'measuring'));
+    lines.push('State: ' + i.state + (s.live ? ', live' : ''));
+    return lines.map(plain).join('\n');
+  }
+
+  var feedbackLink = null;
+  $('#feedbackBtn').addEventListener('click', function () {
+    var details = feedbackDetails();
+    var qr = el('div', { class: 'qr' }, [el('div', { class: 'spinner', style: 'margin-top:120px;border-color:#ddd;border-top-color:#333' })]);
+    openSheet('Send feedback', [
+      el('div', { class: 'feedback' }, [
+        qr,
+        el('div', { class: 'feedback-text' }, [
+          el('div', { text: 'Scan this with your phone camera. It opens a new issue on the DriveTest GitHub page, ready for you to say what happened.' }),
+          el('div', { class: 'muted', text: 'These details from the car are filled in for you. Nothing about what you watch or your server is included.' }),
+          el('div', { class: 'details', text: details })
+        ])
+      ])
+    ], true, true);
+    feedbackLink = null;
+    DT.api('/api/feedback', { body: { details: details } }).then(function (r) {
+      showQr(qr, r.svg);
+      feedbackLink = r.link;
+    }).catch(function (e) {
+      qr.textContent = e.message;
+    });
+  });
+
+  // Put a QR code in its box with every square a whole number of pixels
+  // wide, so the edges are sharp and cameras read it easily.
+  function showQr(box, svgText) {
+    box.innerHTML = svgText;
+    var svg = box.querySelector('svg');
+    if (!svg || !svg.viewBox || !svg.viewBox.baseVal.width) return;
+    var squares = svg.viewBox.baseVal.width;
+    var room = Math.min(box.clientWidth, box.clientHeight) - 24;
+    var px = Math.floor(room / squares);
+    if (px < 1) return; // too small to snap: leave it stretched to fit
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.style.width = svg.style.height = px * squares + 'px';
+  }
+
   $('#phoneBtn').addEventListener('click', function () {
     var qr = el('div', { class: 'qr' }, [el('div', { class: 'spinner', style: 'margin-top:90px;border-color:#ddd;border-top-color:#333' })]);
     var sheet = openSheet('Connect your phone', [
@@ -590,7 +674,7 @@
     ], true);
     pairing = null;
     DT.api('/api/pair').then(function (r) {
-      qr.innerHTML = r.svg;
+      showQr(qr, r.svg);
       pairing = { code: r.link.split('/p/')[1], link: r.link, sheet: sheet };
     }).catch(function (e) {
       qr.textContent = e.message;
@@ -668,9 +752,9 @@
     b.addEventListener('click', function () { setTab(b.getAttribute('data-tab')); });
   });
 
-  function openSheet(title, children, center) {
+  function openSheet(title, children, center, wide) {
     var scrim = el('div', { class: 'scrim' + (center ? ' center' : '') });
-    var sheet = el('div', { class: 'sheet' }, [el('div', { class: 'sheet-title', text: title })].concat(children || []));
+    var sheet = el('div', { class: 'sheet' + (wide ? ' wide' : '') }, [el('div', { class: 'sheet-title', text: title })].concat(children || []));
     sheet.appendChild(el('button', { class: 'ghost', text: 'Close', onclick: close }));
     scrim.appendChild(sheet);
     scrim.addEventListener('click', function (ev) { if (ev.target === scrim) close(); });

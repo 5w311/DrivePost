@@ -28,3 +28,50 @@ test('every real page gets a version and has no unversioned script or style left
     assert.doesNotMatch(out, /(?:src|href)="\/static\/[^"?]+\.(?:js|css)"/, name);
   }
 });
+
+// ---- the Feedback link ----
+import { feedbackLink } from '../src/pages.js';
+
+const DETAILS = [
+  'Browser: Chrome 148, H.264 yes, VP9 yes, AV1 no',
+  'Window: 1180x919',
+  'Quality: 1080p',
+  'Format: H.264',
+  'Picture: 1920x1080 25fps 4.1Mbps',
+  'Decoding: 12 ready, 0 skipped',
+  'Buffer: 6.8s, ran dry 0, fell behind 0',
+  'Sound: running 48000Hz, realigned 0, skipped 0',
+  'Server: 31x real time',
+  'State: playing',
+].join('\n');
+
+test('the feedback link opens a new issue with the details filled in', () => {
+  const link = feedbackLink('https://github.com/5w311/DriveTest/issues/new', DETAILS, 'abc123def456');
+  const url = new URL(link);
+  assert.equal(url.origin + url.pathname, 'https://github.com/5w311/DriveTest/issues/new');
+  assert.equal(url.searchParams.get('title'), 'Feedback: ');
+  const body = url.searchParams.get('body');
+  assert.ok(body.startsWith('**What happened?**\n'), 'room to write comes first');
+  for (const line of DETAILS.split('\n')) assert.ok(body.includes(`- ${line}\n`), line);
+  assert.ok(body.includes('- Build: abc123def456\n'));
+  assert.ok(link.length < 700, `short enough for an easy QR code (was ${link.length})`);
+});
+
+test('feedback details are cut down to plain, short lines', () => {
+  const messy = 'Fine: yes\n\n  spaced  \nsymbols × · … é \u0007\n' + 'x'.repeat(500) + '\n' + Array(40).fill('extra').join('\n');
+  const body = new URL(feedbackLink('https://example.com/new', messy, 'v')).searchParams.get('body');
+  const lines = body.split('\n').filter((l) => l.startsWith('- '));
+  assert.equal(lines[0], '- Fine: yes');
+  assert.equal(lines[1], '- spaced');
+  assert.equal(lines[2], '- symbols');
+  assert.equal(lines[3].length, 2 + 140, 'long lines are cut');
+  assert.equal(lines.length, 13, '12 lines of details at most, plus the build');
+  assert.equal(lines.at(-1), '- Build: v');
+  assert.match(body, /^[\x20-\x7E\n]*$/, 'plain characters only');
+});
+
+test('special characters survive the trip through the link', () => {
+  const body = new URL(feedbackLink('https://example.com/new?template=x', 'A&B=C+D #1 100%? "q"', 'v')).searchParams.get('body');
+  assert.ok(body.includes('- A&B=C+D #1 100%? "q"\n'));
+  assert.equal(new URL(feedbackLink('https://example.com/new?template=x', '', 'v')).searchParams.get('template'), 'x');
+});

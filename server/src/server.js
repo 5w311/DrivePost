@@ -9,7 +9,7 @@ import { config, QUALITIES } from './config.js';
 import { Auth, clientIp } from './auth.js';
 import { Store } from './state.js';
 import { handleStream } from './stream.js';
-import { stampPage } from './pages.js';
+import { stampPage, feedbackLink } from './pages.js';
 import {
   search,
   suggest,
@@ -281,6 +281,15 @@ async function route(req, res) {
       return send(res, 200, { link, svg });
     }
 
+    // The car's Feedback button: a QR code for a pre-filled GitHub issue.
+    if (req.method === 'POST' && p === '/api/feedback') {
+      if (!config.feedbackUrl) return send(res, 404, { error: 'Feedback is switched off on this server.' });
+      const body = await readJson(req);
+      const link = feedbackLink(config.feedbackUrl, body.details, VERSION);
+      const svg = await QRCode.toString(link, { type: 'svg', margin: 1, errorCorrectionLevel: 'L' });
+      return send(res, 200, { link, svg });
+    }
+
     if (req.method === 'GET' && p === '/api/setup') {
       return send(res, 200, {
         shareUrl: `${baseUrl(req)}/api/share`,
@@ -331,7 +340,7 @@ function refreshCarOnline() {
 function handleControl(ws) {
   const client = { ws, role: 'remote' };
   controlClients.add(client);
-  ws.send(JSON.stringify({ type: 'version', version: VERSION }));
+  ws.send(JSON.stringify({ type: 'version', version: VERSION, feedback: !!config.feedbackUrl }));
   ws.send(JSON.stringify({ type: 'state', state: store.publicState() }));
 
   ws.on('message', (raw) => {
