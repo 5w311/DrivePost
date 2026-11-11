@@ -192,6 +192,24 @@ test('each profile has its own Send to Car link', () => {
   assert.deepEqual(make(tmp(), { shareToken: 'env-token' }).listProfiles(), []);
 });
 
+test('SHARE_TOKEN from .env is only carried over once, so a new share token sticks', () => {
+  const old = oldServer();
+  const first = make(old.dir, { shareToken: 'env-token' });
+  assert.equal(first.shareTokenOf(ORIGINAL), 'env-token');
+  const fresh = first.rotateShareToken(ORIGINAL);
+  assert.notEqual(fresh, 'env-token');
+
+  // After a restart with the same .env, the new token is still the one that works.
+  const again = make(old.dir, { shareToken: 'env-token' });
+  assert.equal(again.shareTokenOf(ORIGINAL), fresh);
+  assert.equal(again.shareProfile({ headers: {} }, 'env-token'), null, 'the replaced token stays dead');
+  assert.equal(again.shareProfile({ headers: {} }, fresh), ORIGINAL);
+
+  // Changing or removing the line later makes no difference either.
+  assert.equal(make(old.dir, { shareToken: 'something-else' }).shareTokenOf(ORIGINAL), fresh);
+  assert.equal(make(old.dir).shareTokenOf(ORIGINAL), fresh);
+});
+
 // ---- asking for a profile from the sign-in page ----
 
 test('a new passcode opens nothing until the main profile allows it', () => {

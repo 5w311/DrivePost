@@ -109,11 +109,12 @@ export class Auth {
     } catch {}
     if (!hadProfiles && saved.sessionSecret) {
       // A server from before profiles existed: the car, phones and Shortcut
-      // it had become a profile called "Main", so they carry on working.
-      profiles.unshift({ id: ORIGINAL, name: 'Main', epoch: 0, shareToken: saved.shareToken || b64url(crypto.randomBytes(24)) });
+      // it had become a profile called "Main", so they carry on working. Its
+      // Shortcut used SHARE_TOKEN from .env if that was set. This is the only
+      // time that setting is read: from here on the token is kept with the
+      // profile like any other, so making a new one in Setup sticks.
+      profiles.unshift({ id: ORIGINAL, name: 'Main', epoch: 0, shareToken: shareToken || saved.shareToken || b64url(crypto.randomBytes(24)) });
     }
-    const original = profiles.find((p) => p.id === ORIGINAL);
-    if (shareToken && original) original.shareToken = shareToken; // SHARE_TOKEN in .env, as before
     this.profiles = profiles;
     this.persist();
   }
