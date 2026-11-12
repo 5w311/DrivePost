@@ -9,7 +9,8 @@
 #
 # Started by the timer, it doesn't leave when there is nothing to do: it
 # stays on the line to the app for a while, so that a tap on "Force update"
-# gets here at once, and looks at GitHub again every couple of minutes.
+# gets here at once, and looks at GitHub again every couple of minutes, or
+# every few seconds while someone has the app's Admin page open.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -26,10 +27,14 @@ STAMPED="$STATE_DIR/stamped"            # commit a rebuild just to record its ID
 RETRY_AFTER_MIN=60                      # how long to wait before retrying a failed commit
 # Staying on the line: the script asks the app something it may take ASK_FOR
 # seconds to answer (it answers at once when "Force update" is tapped on its
-# Admin page), then looks at GitHub again, for at most WAIT_AT_MOST seconds a
-# run (the timer gives one run 45 minutes, and a build needs its share).
+# Admin page, and sooner while that page is open), then looks at GitHub
+# again, for at most WAIT_AT_MOST seconds a run (the timer gives one run 45
+# minutes, and a build needs its share). Between runs nobody is on the line
+# until the timer starts the next, so the longer a run, the less of that.
 ASK_FOR="${DRIVEPOST_ASK_FOR:-100}"
-WAIT_AT_MOST="${DRIVEPOST_WAIT_AT_MOST:-900}"
+WAIT_AT_MOST="${DRIVEPOST_WAIT_AT_MOST:-1800}"
+LOOK_APART="${DRIVEPOST_LOOK_APART:-5}"   # never look at GitHub more often than this many seconds, whoever asks
+UP_WAIT="${DRIVEPOST_UP_WAIT:-30}"        # how many seconds a newly started app gets to answer
 # To look again, a run starts this script afresh, and hands these on:
 RUN_UNTIL="${DRIVEPOST_RUN_UNTIL:-$(( $(date +%s) + WAIT_AT_MOST ))}"   # when the run is over
 FORCED="${DRIVEPOST_FORCED:-no}"       # yes: "Force update" was tapped, so don't wait for a video or a retry time
@@ -68,17 +73,33 @@ containers_of() { docker ps -q "${@:2}" --filter "label=com.docker.compose.servi
 #   0   nothing is playing: go ahead
 #   11  install it now, video or not          12  a video is still playing
 #   20  look at GitHub now, and install       21  nothing was asked
+#   22  look at GitHub now (the Admin page is open); a video still comes first
 #   else: the app can't be asked like this (an older version, or it went away)
 tell_app() {
   local id title
   title="$(git log -1 --format='%h %s' "$REMOTE" 2>/dev/null | cut -c1-120)" || true
   for id in $(containers_of "$SERVICE"); do
     docker exec -e UPDATE_TITLE="$title" -e UPDATE_ABOUT="$1" -e UPDATE_HOLD="${2:-0}" "$id" node -e \
-      "const e=process.env;fetch('http://127.0.0.1:8080/internal/updater',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({about:e.UPDATE_ABOUT,commit:e.UPDATE_TITLE,hold:+e.UPDATE_HOLD||0})}).then(r=>r.ok?r.json():Promise.reject()).then(j=>process.exit(j.check===true?20:j.check===false?21:j.forced?11:j.busy?12:0)).catch(()=>process.exit(13))" \
+      "const e=process.env;fetch('http://127.0.0.1:8080/internal/updater',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({about:e.UPDATE_ABOUT,commit:e.UPDATE_TITLE,hold:+e.UPDATE_HOLD||0})}).then(r=>r.ok?r.json():Promise.reject()).then(j=>process.exit(j.check===true?20:j.look===true?22:j.check===false?21:j.forced?11:j.busy?12:0)).catch(()=>process.exit(13))" \
       >/dev/null 2>&1
     return $?
   done
   return 13
+}
+
+# The app that was just started needs a moment before it can be asked
+# anything. True once it answers, false if it hasn't within half a minute.
+app_is_up() {
+  local id tries=0
+  while [ "$tries" -lt "$UP_WAIT" ]; do
+    for id in $(containers_of "$SERVICE"); do
+      docker exec "$id" node -e \
+        "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+        >/dev/null 2>&1 && return 0
+    done
+    tries=$((tries + 1)); sleep 1
+  done
+  return 1
 }
 
 # There is nothing to install right now. Run by hand, that's the end of it.
@@ -99,6 +120,10 @@ idle() {
         export DRIVEPOST_FORCED=yes DRIVEPOST_LOOKS="$LOOKS" ;;
     21) # Nothing was asked. An app that says so straight away isn't one that waits on the line.
         if [ $((SECONDS - asked)) -lt $((ASK_FOR / 2)) ]; then exit 0; fi
+        export DRIVEPOST_FORCED=no ;;
+    22) # Someone has the Admin page open, which shows what is new as it happens: look
+        # again now. (The app spaces these out; this is in case it doesn't.)
+        if [ $((SECONDS - asked)) -lt "$LOOK_APART" ]; then sleep $((LOOK_APART - (SECONDS - asked))); fi
         export DRIVEPOST_FORCED=no ;;
     *)  exit 0 ;;
   esac
@@ -236,6 +261,13 @@ if "${COMPOSE[@]}" "${UP[@]}"; then
   for image in $OLD_IMAGES; do docker image rm "$image" >/dev/null 2>&1 || true; done   # the build under the old name
   docker image prune -f >/dev/null 2>&1 || true   # old builds pile up on an SD card
   log "Now running ${REMOTE:0:7}: $(git log -1 --format=%s)"
+  # Started by the timer: go straight back on the line, now to the new
+  # version, instead of leaving nobody there until the timer's next run. (A
+  # second update pushed right after this one is then found as quickly.)
+  if [ ! -t 1 ] && [ "$(date +%s)" -lt "$RUN_UNTIL" ] && app_is_up; then
+    export DRIVEPOST_FORCED=no
+    exec bash "$REPO/scripts/auto-update.sh"
+  fi
 else
   echo "$REMOTE" > "$FAILED"
   log "Update failed; the lines above say why. Will retry in ${RETRY_AFTER_MIN} minutes, or on the next push."

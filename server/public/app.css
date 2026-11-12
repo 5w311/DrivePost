@@ -347,6 +347,8 @@ body.remote .suggest-row.active, body.remote .suggest-row:active { background: v
 .update-box p { font-size: 14px; line-height: 1.5; margin: 10px 0 0; color: var(--rig-ink-2); }
 .update-box p + .code { font-size: 13px; }
 .update-box .btn-row { margin-top: 12px; }
+/* When the updater last looked at GitHub. */
+.update-box .update-seen { margin: 10px 0 0; font-size: 13px; color: var(--rig-ink-3); font-variant-numeric: tabular-nums; }
 .update-box .btn-row button { flex: 0 1 auto; min-height: 40px; }
 /* A commit's ID and title, and a command to run: wrap between words, not in the middle of one. */
 #commit, #updateCommit, #updateLook { word-break: normal; overflow-wrap: anywhere; }

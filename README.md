@@ -16,7 +16,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 - **Pauses when the browser is closed:** closing or leaving the browser in the car pauses the video, so the sound doesn't carry on out of sight. It stays paused until someone presses play. Opening the page again shows **Tap to play**, which carries on from the same spot. Pressing play on the phone while the car's browser is closed is respected, so you can still listen that way.
 - **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, reorder Up Next and control playback from your phone. To send a video, copy its link in any app and tap **Paste & Play** or **Paste & Up Next**.
 - **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, searches, recommendations, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it.
-- **Admin page:** `/admin`, opened with the passcode from `.env` and nothing else, shows who is waiting for a profile, every profile and its car, and the running build.
+- **Admin page:** `/admin`, opened with the passcode from `.env` and nothing else, shows who is waiting for a profile, every profile and its car, and the running build. It says what is new as it happens: an update shows up within seconds of being pushed, and the page loads the new version by itself once it is running.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
 - **Two video formats:** **H.264** passes YouTube's own video straight through, and the browser decodes it (WebCodecs). It's sharper, usually uses less data, and is almost no work for the server. **MPEG-1** is converted on the server and decoded in the page by [JSMpeg](https://github.com/phoboslab/jsmpeg), which works in any browser. The car uses H.264 when it can and switches to MPEG-1 by itself when it can't.
 - **Smooth playback:** the car runs its own clock. Each frame is shown at its timestamp and sound is scheduled against the same clock, so motion is even and lips stay in sync. Films keep their 24 fps.
@@ -252,15 +252,19 @@ It sets up a timer that keeps the updater running, and the updater looks at GitH
 
 | It says | Meaning |
 |---|---|
-| Updates | Nothing going on. The button is there for when you've just pushed something and don't want to wait for the next look. |
+| Updates | Nothing going on. Under the button it says when the server last looked on GitHub. |
 | Up to date | You tapped the button and there was nothing newer on GitHub. |
 | An update is waiting | An update, named by its ID and title, is being held back because a video is playing. Force update installs it now. |
-| Installing an update | The new version is being built. The server restarts when it is ready, and the page shows the new Version by itself. |
+| Installing an update | The new version is being built. The server restarts when it is ready. |
+| Restarting with the new version | The server has stopped answering in the middle of an install: the new version is starting. The page reloads by itself once it is up, and says which update is now running. |
 | An update couldn't be installed | The build failed and the old version is still running. The updater tries again in an hour; Force update tries again now. |
 | Force update is lined up / about to be installed | The button was tapped in the short gap between two of the updater's runs. It takes effect at the next one, within about two minutes, and can be taken back until then. |
 | Automatic updates aren't running | The updater hasn't been in touch for six minutes: it was never turned on, or the server can't reach GitHub. |
+| Can't reach the server | The page itself can't get an answer (no update was going in). It keeps trying and carries on by itself. |
 
-The button works at once because the updater doesn't just run every two minutes and leave. Started by its timer, it stays on the line to the app for up to 15 minutes at a time (a request the app answers the moment you tap), looking at GitHub again every 100 seconds, and then the timer starts it afresh. Run by hand in a terminal it doesn't stay, and isn't blocked by a run that is on the line.
+**The Admin page doesn't need reloading.** While it is open and in view, it keeps one request waiting on the server, which is answered the moment anything on the page changes: an update arriving, going in or failing, someone asking for a profile, a car coming or going. For as long as that page is open the server also looks on GitHub about every ten seconds instead of every couple of minutes (every thirty once the page has been open five minutes), so an update shows up within seconds of being pushed. When an update restarts the server, the page waits for the new version and loads its pages, unless you're in the middle of typing a name or passcode; then it waits for that. If the update didn't change the pages, it stays as it is and just says the server restarted.
+
+The button and the page work at once because the updater doesn't just run every two minutes and leave. Started by its timer, it stays on the line to the app for up to half an hour at a time (a request the app answers the moment you tap, or when it is time for another look), looking at GitHub again every 100 seconds when nobody has the Admin page open. After installing an update it goes straight back on the line, to the new version. When its half hour is up it leaves and the timer starts it afresh two minutes later; in that gap the page says how long ago the last look was, and a tap on Force update is taken up at the next run. Run by hand in a terminal it doesn't stay, and isn't blocked by a run that is on the line.
 
 To see which update is running, open **Admin** and look at **Version** under **Server**: it shows the commit's short ID and title, the same ones GitHub lists. The updater tells the build which commit it is. An image built by hand (`docker compose up -d --build`) isn't told, so Version says it wasn't recorded; the updater notices on its next run and builds once more to record it, which takes seconds because the code is the same.
 

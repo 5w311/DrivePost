@@ -103,7 +103,10 @@ const update = {
   goingInAt: 0, // when the updater was told it may restart the app
   checkedAt: 0, // when it last looked because it was asked to, and found nothing new
   heardAt: 0, // when it was last in touch
+  lookedAt: 0, // when it last came back from a look at GitHub
+  lookNow: false, // it is being told to look again now, because an Admin page is open
   held: new Set(), // its open requests: functions that answer them
+  idling: new Set(), // ...the ones among them that have nothing to install
 };
 const WAITING_FRESH_MS = 4 * 60 * 1000; // while it waits, the updater is back within this long
 const FORCED_FOR_MS = 10 * 60 * 1000; // long enough for the updater's next run, not for ever if that never comes
@@ -113,6 +116,13 @@ const CHECKING_FOR_MS = 30 * 1000; // a look at GitHub that takes longer than th
 const CHECKED_SHOWN_MS = 2 * 60 * 1000; // how long "nothing new" stays on the Admin page
 const SILENT_MS = Number(process.env.UPDATER_SILENT_MS) || 6 * 60 * 1000; // an updater that is running is in touch well within this
 const HOLD_AT_MOST_S = 110;
+// While an Admin page is open the updater looks at GitHub this often, so the
+// page can say what is new as it happens: eagerly at first, then at a pace
+// that a page left open all day can keep up without being a nuisance.
+const LOOK_EVERY_MS = Number(process.env.ADMIN_LOOK_MS) || 10 * 1000;
+const LOOK_EVERY_LATER_MS = Number(process.env.ADMIN_LOOK_LATER_MS) || 30 * 1000;
+const EAGER_FOR_MS = 5 * 60 * 1000;
+const LOOK_ON_OPENING_MS = 3 * 1000; // an Admin page being opened has it look at once, unless it just did
 
 const updateForced = () => !!update.forcedAt && Date.now() - update.forcedAt < FORCED_FOR_MS;
 const updateGoingIn = () => !!update.goingInAt && Date.now() - update.goingInAt < GOING_IN_FOR_MS;
@@ -138,24 +148,30 @@ function updateAnswer() {
 }
 // Keep the updater waiting for its answer: until "Force update" is tapped,
 // or `seconds` have gone by. Resolves to false if it hung up meanwhile.
-function keepOnTheLine(res, seconds) {
+// `idle` says it has nothing to install: then it can also be told to look
+// again, when an Admin page is open (askForLook).
+function keepOnTheLine(res, seconds, idle = false) {
   return new Promise((resolve) => {
     const answer = (there = true) => {
       clearTimeout(timer);
       update.held.delete(answer);
+      update.idling.delete(answer);
       res.off('close', hungUp);
       resolve(there);
+      adminChanged(); // whether it is on the line is something the Admin page shows
     };
     const hungUp = () => answer(false);
     const timer = setTimeout(answer, seconds * 1000);
     update.held.add(answer);
+    if (idle) update.idling.add(answer);
     res.on('close', hungUp);
   });
 }
 // For the Admin page: where things stand with updates.
 function updateView() {
   const now = Date.now();
-  const view = (state, commit = '') => ({ state, commit, playing: someonePlaying() });
+  // `lookedAgo`: how long ago the updater last looked at GitHub, in ms (null: not since this app started).
+  const view = (state, commit = '') => ({ state, commit, playing: someonePlaying(), lookedAgo: update.lookedAt ? now - update.lookedAt : null });
   const w = waitingUpdate();
   if (update.installing && now - update.installing.at < GOING_IN_FOR_MS) return view('installing', update.installing.commit);
   if (w && updateGoingIn()) return view('installing', w.commit);
@@ -186,9 +202,11 @@ function commitsUrl() {
 }
 
 // Everything the Admin page shows: the profiles and whether their cars are
-// on, who is waiting for a profile, and which build is running.
+// on, who is waiting for a profile, and which build is running. `etag` names
+// this state of things: a page that says which one it has is only answered
+// when there is another (watchAdmin).
 function adminView() {
-  return {
+  const view = {
     profiles: auth.listProfiles().map((p) => {
       const st = stores.get(p.id);
       const carOnline = !!(st && st.carOnline);
@@ -198,7 +216,80 @@ function adminView() {
     allowRequests: auth.allowRequests,
     server: { version: VERSION, commit: config.commit, commits: commitsUrl(), startedAt: STARTED, update: updateView() },
   };
+  // Time going by since the last look isn't news; a new look is.
+  const what = JSON.stringify({ ...view, server: { ...view.server, update: { ...view.server.update, lookedAgo: update.lookedAt } } });
+  return { ...view, etag: crypto.createHash('sha1').update(what).digest('base64url').slice(0, 16) };
 }
+
+// ---------- the Admin page, kept up to date ----------
+// An open Admin page keeps a request waiting here (GET /api/admin/watch) and
+// is answered the moment anything it shows changes: an update arriving, being
+// installed or failing, someone asking for a profile, a car coming or going.
+// While one is open, the updater is also kept looking at GitHub every few
+// seconds instead of every couple of minutes, so "an update arriving" means
+// seconds after it was pushed.
+const watchers = new Set(); // waiting Admin pages: functions that answer them if there is news
+let watchedAt = 0; // when a page was last waiting here
+let watchedSince = 0; // when the page that is open now was opened
+const WATCH_FOR_MS = 25 * 1000; // a waiting page is answered at least this often, news or not
+const WATCH_GAP_MS = 6 * 1000; // a page that asked this recently is still open: it is between two requests
+
+const adminWatched = (now = Date.now()) => watchers.size > 0 || now - watchedAt < WATCH_GAP_MS;
+
+// Something the Admin page shows has changed (or may have): tell the pages that are waiting.
+function adminChanged() {
+  for (const look of [...watchers]) look();
+}
+
+// Have the updater look at GitHub now, if it is on the line with nothing to
+// do and it is time: at once when an Admin page is opened, then at the pace
+// above for as long as one stays open.
+function askForLook(opening = false) {
+  const now = Date.now();
+  if (!update.idling.size || updateForced() || !adminWatched(now)) return;
+  const every = opening ? LOOK_ON_OPENING_MS : now - watchedSince < EAGER_FOR_MS ? LOOK_EVERY_MS : LOOK_EVERY_LATER_MS;
+  if (now - update.lookedAt < every) return;
+  update.lookNow = true;
+  for (const answer of [...update.idling]) answer();
+}
+
+function watchAdmin(res, seen) {
+  const now = Date.now();
+  const opening = !adminWatched(now);
+  if (opening) watchedSince = now;
+  watchedAt = now;
+  const first = adminView();
+  if (first.etag !== seen) {
+    send(res, 200, first);
+    if (opening) askForLook(true);
+    return;
+  }
+  const done = () => {
+    clearTimeout(timer);
+    watchers.delete(look);
+    res.off('close', done);
+    watchedAt = Date.now();
+  };
+  const look = (anyway = false) => {
+    const view = adminView();
+    if (!anyway && view.etag === seen) return;
+    done();
+    send(res, 200, view);
+  };
+  const timer = setTimeout(() => look(true), WATCH_FOR_MS);
+  watchers.add(look);
+  res.on('close', done);
+  if (opening) askForLook(true);
+}
+
+// What changes without anything here being told (a car going offline, a
+// video being paused, a wait running out) is noticed by looking once a second
+// while a page is waiting.
+setInterval(() => {
+  if (!watchers.size) return;
+  adminChanged();
+  askForLook();
+}, 1000).unref();
 
 // ---------- helpers ----------
 
@@ -352,6 +443,10 @@ async function route(req, res) {
     const hold = Math.min(Math.max(Number(body.hold) || 0, 0), HOLD_AT_MOST_S);
     const now = Date.now();
     update.heardAt = now;
+    update.lookedAt = now; // it says what it found on GitHub a moment ago
+    update.lookNow = false;
+    // Whatever it says next, an open Admin page hears of it at once.
+    setImmediate(adminChanged);
 
     if (about === 'failed') {
       Object.assign(update, { waiting: null, installing: null, forcedAt: 0, goingInAt: 0, failed: { commit, at: now } });
@@ -376,11 +471,14 @@ async function route(req, res) {
       Object.assign(update, { waiting: null, installing: null, goingInAt: 0 });
       if (about === 'checked') Object.assign(update, { forcedAt: 0, checkedAt: now, failed: null });
       // It stays on the line until "Force update" is tapped. (Tapped while it was away: it hears now.)
+      // With an Admin page open it is also sent off to look again every few seconds.
       if (hold && !updateForced()) {
-        if (!(await keepOnTheLine(res, hold))) return undefined;
+        if (!(await keepOnTheLine(res, hold, true))) return undefined;
         update.heardAt = Date.now();
       }
-      return send(res, 200, { check: updateForced() });
+      const look = update.lookNow && !updateForced();
+      update.lookNow = false;
+      return send(res, 200, { check: updateForced(), look });
     }
     // An update is held back because a video is playing.
     if (about === 'waiting') {
@@ -472,6 +570,12 @@ async function route(req, res) {
     if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
     return send(res, 200, adminView());
   }
+  // The same, for a page that is open: answered when it differs from what the
+  // page says it has (`seen`), which may be a while. See watchAdmin.
+  if (req.method === 'GET' && p === '/api/admin/watch') {
+    if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    return watchAdmin(res, url.searchParams.get('seen') || '');
+  }
   // "Force update": have the updater look at GitHub now and install what it
   // finds, video or not. Or take that back, while it hasn't heard yet.
   if (req.method === 'POST' && p === '/api/admin/update') {
@@ -491,6 +595,7 @@ async function route(req, res) {
       if (onTheLine && waitingUpdate()) update.goingInAt = Date.now();
       for (const answer of [...update.held]) answer();
     }
+    setImmediate(adminChanged); // any other Admin page that is open
     return send(res, 200, adminView());
   }
   // Adding, renaming and removing profiles, and answering people who asked for one.
