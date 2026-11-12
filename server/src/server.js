@@ -8,7 +8,8 @@ import QRCode from 'qrcode';
 import { config, QUALITIES } from './config.js';
 import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
-import { handleStream } from './stream.js';
+import { handleStream, canEncodeH264 } from './stream.js';
+import { SCREEN_ID, isScreenId, startShare, endShare, onShare, clearOldShares } from './mirror.js';
 import { stampPage, feedbackLink } from './pages.js';
 import { recommendFor } from './recommend.js';
 import {
@@ -74,7 +75,11 @@ function storeFor(id) {
     store.on('state', (state) => {
       broadcast(id, { type: 'state', state });
       // Look up what's playing and what's next ahead of time, so they start faster.
-      const warm = (id, quality) => (isLinkId(id) ? prewarmLink(id, quality) : prewarm(id, quality));
+      const warm = (id, quality) => {
+        if (isScreenId(id)) return; // a shared screen is already on this machine
+        if (isLinkId(id)) prewarmLink(id, quality);
+        else prewarm(id, quality);
+      };
       if (store.now) warm(store.now.id, store.playQuality());
       if (store.queue[0]) warm(store.queue[0].id, store.settings.quality);
     });
@@ -621,6 +626,7 @@ async function route(req, res) {
       } else if (body.action === 'remove') {
         auth.removeProfile(id);
         dropScreens(id);
+        endShare(id);
         const gone = stores.get(id);
         if (gone) {
           clearTimeout(gone.saveTimer);
@@ -717,6 +723,13 @@ async function route(req, res) {
       return send(res, 200, { ok: true });
     }
 
+    // Stop the screen being shared to this profile's car. From any of its
+    // devices: the one that shares it (as its page is closed), or a phone.
+    if (req.method === 'POST' && p === '/api/screen/stop') {
+      endShare(profile);
+      return send(res, 200, { ok: true });
+    }
+
     if (req.method === 'GET' && p === '/api/search') {
       try {
         const q = url.searchParams.get('q');
@@ -810,10 +823,18 @@ function broadcast(profile, msg) {
 // try to come back, find they're signed out, and show the sign-in page.
 function dropScreens(profile) {
   for (const c of controlClients) if (c.profile === profile) c.ws.close(4401, 'signed out');
+  for (const c of sharers) if (c.profile === profile) c.ws.close(4401, 'signed out');
 }
 
 function hello(profile) {
-  return { type: 'version', version: VERSION, feedback: !!config.feedbackUrl, otherSites: config.links.on, profile: profileLabel(profile) };
+  return {
+    type: 'version',
+    version: VERSION,
+    feedback: !!config.feedbackUrl,
+    otherSites: config.links.on,
+    screenShare: config.screen.on,
+    profile: profileLabel(profile),
+  };
 }
 
 // Profiles were added, renamed or removed: screens show whose they are once there's more than one.
@@ -876,9 +897,116 @@ function handleControl(ws, profile) {
   });
 }
 
+// ---------- screen sharing ----------
+// A device shares a tab, a window or its screen to the car: its browser
+// records what it captures and sends the recording up this socket as it is
+// made. mirror.js turns that into a live stream; the car plays it like any
+// live video.
+const screenWss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
+const sharers = new Set(); // { ws, profile }
+const SCREEN_STALL_MS = 12 * 1000; // a recording that stops arriving for this long has lost its connection
+const SCREEN_PLAY_OUT_MS = 12 * 1000; // how long a car gets to play out the end of a share before it is moved on
+let screenH264 = true; // whether this ffmpeg can make H.264 for the copy it keeps
+canEncodeH264().then((can) => (screenH264 = can));
+clearOldShares();
+
+function handleScreen(ws, profile) {
+  const client = { ws, profile };
+  sharers.add(client);
+  let share = null;
+  let stopped = false;
+  const say = (msg) => {
+    if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+  };
+  const who = profileLabel(profile);
+  const stall = setInterval(() => {
+    if (share && !share.done && Date.now() - share.lastDataAt > SCREEN_STALL_MS) ws.close(4408, 'nothing arriving');
+  }, 2000);
+
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      if (share) share.write(data);
+      return;
+    }
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (msg.type === 'start' && !share) {
+      try {
+        share = startShare(profile, { size: msg.size, audio: msg.audio, surface: msg.surface, again: msg.again === true, turn: msg.turn, h264: screenH264 });
+      } catch (err) {
+        console.error(`[screen] could not start: ${err.message}`);
+        say({ type: 'error', message: "This server couldn't start taking the screen in." });
+        return ws.close(4500, 'failed');
+      }
+      share.onReady = () => say({ type: 'ready' });
+      share.onFail = (message, wasPlaying) => {
+        // `again`: it was working until now, so a fresh recording is worth a try.
+        say({ type: 'error', message, again: wasPlaying });
+        ws.close(4500, 'failed');
+      };
+      share.onReplaced = () => {
+        say({ type: 'replaced' });
+        ws.close(4000, 'replaced');
+      };
+      // Stopped from another of the profile's devices.
+      share.onStopped = () => {
+        stopped = true;
+        console.log(`[screen${who ? ` ${who}` : ''}] sharing stopped from another device`);
+        say({ type: 'stopped' });
+        ws.close(1000, 'stopped');
+      };
+      console.log(`[screen${who ? ` ${who}` : ''}] ${share.again ? 'back: ' : ''}sharing a ${share.surface === 'browser' ? 'tab' : share.surface === 'window' ? 'window' : 'screen'} at ${share.size}p${share.audio ? '' : ', without sound'}${share.turn ? `, turned ${share.turn} degrees` : ''}`);
+      // Now the recording can begin: nothing of it is sent before this.
+      say({ type: 'go' });
+    } else if (msg.type === 'stop') {
+      stopped = true;
+      if (share && !share.done) {
+        console.log(`[screen${who ? ` ${who}` : ''}] sharing stopped`);
+        share.finish('stopped');
+      }
+      ws.close(1000, 'stopped');
+    }
+  });
+
+  ws.on('close', () => {
+    sharers.delete(client);
+    clearInterval(stall);
+    if (share && !share.done) {
+      console.log(`[screen${who ? ` ${who}` : ''}] ${stopped ? 'sharing stopped' : 'the share dropped'}`);
+      share.finish(stopped ? 'stopped' : 'dropped');
+    }
+  });
+}
+
+onShare((profile, what, share) => {
+  if (!auth.profile(profile)) return;
+  const store = storeFor(profile);
+  if (what === 'live') {
+    store.setScreen({ surface: share.surface });
+    // Sharing a screen is asking for it to be shown. One that only dropped
+    // and came back leaves alone whatever was put on in the meantime.
+    if (!share.again || !store.now) store.command('play', { item: { id: SCREEN_ID } });
+    return;
+  }
+  // Over. Stopped on purpose, a car that is showing it has a few seconds of
+  // it still to play, and moves on by itself when it has. This is for when
+  // it doesn't (or there is no car).
+  const showing = store.now && isScreenId(store.now.id) ? store.now.key : null;
+  if (share && share.done === 'stopped' && showing && !store.paused && store.carOnline) {
+    store.setScreen(null);
+    setTimeout(() => {
+      if (!store.screen && store.now && store.now.key === showing) store.screenOver();
+    }, SCREEN_PLAY_OUT_MS).unref();
+  } else store.screenOver();
+});
+
 // Keep sockets alive through proxies and drop dead ones.
 setInterval(() => {
-  for (const ws of wss.clients) {
+  for (const ws of [...wss.clients, ...screenWss.clients]) {
     if (ws.isAlive === false) {
       ws.terminate();
       continue;
@@ -891,9 +1019,22 @@ setInterval(() => {
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://local');
   const profile = auth.profileOf(req);
-  if (!profile || !['/ws/control', '/ws/stream'].includes(url.pathname)) {
+  if (!profile || !['/ws/control', '/ws/stream', '/ws/screen'].includes(url.pathname)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
+    return;
+  }
+  if (url.pathname === '/ws/screen') {
+    if (!config.screen.on) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    screenWss.handleUpgrade(req, socket, head, (ws) => {
+      ws.isAlive = true;
+      ws.on('pong', () => (ws.isAlive = true));
+      handleScreen(ws, profile);
+    });
     return;
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
@@ -901,7 +1042,7 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('pong', () => (ws.isAlive = true));
     if (url.pathname === '/ws/control') return handleControl(ws, profile);
     const id = url.searchParams.get('id');
-    if (!isPlayableId(id)) return ws.close(4400, 'bad id');
+    if (!isPlayableId(id) && !isScreenId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
     const quality = QUALITIES.includes(url.searchParams.get('q')) ? url.searchParams.get('q') : storeFor(profile).playQuality();
     const audioRate = parseInt(url.searchParams.get('ar'), 10) || 48000;

@@ -52,6 +52,25 @@
       </div>
     </section>
 
+    <section class="card hidden" id="shareCard">
+      <div class="card-head">Share this screen</div>
+      <div class="card-body">
+        <p id="shareSay" class="share-say"></p>
+        <div class="seg hidden" id="shareSize" aria-label="Picture">
+          <button data-s="480" type="button">480p</button>
+          <button data-s="720" type="button">720p</button>
+          <button data-s="1080" type="button">1080p</button>
+        </div>
+        <div class="btn-row send-row">
+          <button id="shareBtn" type="button" class="primary hidden">Share to the car</button>
+          <button id="shareShow" type="button" class="primary hidden">Show it in the car</button>
+          <button id="shareStop" type="button" class="hidden">Stop sharing</button>
+          <button id="shareTurn" type="button" class="hidden">Turn the picture</button>
+        </div>
+        <p id="shareNote" class="muted hint hidden"></p>
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-head">Search</div>
       <div class="card-body" style="padding-bottom:0">
@@ -120,6 +139,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="/static/common.js"></script>
+  <script src="/static/screen-share.js"></script>
   <script src="/static/remote.js"></script>
 </body>
 </html>

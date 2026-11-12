@@ -67,6 +67,16 @@ export const config = {
     extraArgs: words(env.OTHER_SITES_ARGS),
   },
 
+  // Screen sharing: a tab, a window or a screen shown in the car, sent by the
+  // browser of the device it is on (see mirror.js).
+  screen: {
+    // SCREEN_SHARE=off takes the "Share this screen" card away.
+    on: !/^(off|0|no|false)$/i.test((env.SCREEN_SHARE || '').trim()),
+    // Where the shared screen is kept while it plays (a few megabytes,
+    // rewritten every second). Memory by default; SCREEN_DIR= names a folder.
+    dir: (env.SCREEN_DIR || '').trim(),
+  },
+
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   ffprobeBin: env.FFPROBE_BIN || 'ffprobe',
   maxStreams: int('MAX_STREAMS', 3),

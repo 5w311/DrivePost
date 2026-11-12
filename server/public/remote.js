@@ -23,10 +23,13 @@
         ? "Copy a YouTube video's link, then tap a button."
         : "Copy a video's link in YouTube, X, Reddit, Instagram or on a web page, then tap a button.") +
         (apple ? ' A small Paste button then pops up: tap that too.' : '');
+      if (DT.screenShare) DT.screenShare.hello(msg);
     },
     state: function (msg) {
-      if (DT.stale && !typing() && DT.reloadIfStale()) return;
+      // (Nor while this device is sharing its screen: a fresh page would end that.)
+      if (DT.stale && !typing() && !(DT.screenShare && DT.screenShare.busy()) && DT.reloadIfStale()) return;
       state = msg.state;
+      if (DT.screenShare) DT.screenShare.state(state);
       render();
     },
     pos: function (msg) {
@@ -36,6 +39,8 @@
       DT.toast(msg.message);
     }
   });
+
+  if (DT.screenShare) DT.screenShare.use(control);
 
   // Message passed back after sharing from another app.
   var params = new URLSearchParams(location.search);

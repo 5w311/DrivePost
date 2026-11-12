@@ -682,3 +682,9 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
 .more[open] summary::before { transform: rotate(45deg); }
 .more[open] summary { margin-bottom: 6px; }
 .kv .k { color: var(--rig-ink-3); font-size: 13px; font-weight: 600; }
+
+/* "Share this screen" on the phone page: what is happening, then the choices. */
+.share-say { margin: 0 0 12px; font-size: 15px; line-height: 1.4; }
+#shareCard .seg { margin-bottom: 4px; }
+#shareCard .send-row { margin-top: 10px; }
+#shareCard .send-row:empty, #shareCard .send-row:not(:has(button:not(.hidden))) { display: none; }

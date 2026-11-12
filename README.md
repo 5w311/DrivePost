@@ -8,6 +8,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
 - **Other sites too:** paste or share a link to a post on X, Reddit or Instagram, to a page with a video player on it, or straight to a video file. It plays like any other video, with Up Next, Recent, resume and skipping. Search and For You stay YouTube's. See [Videos from other sites](#videos-from-other-sites) for what works and what a site can refuse.
+- **Share a screen:** show a browser tab, a window or a whole screen in the car, with its sound, the way a video call shares a screen. For whatever plays on your own device and can't be sent as a link. See [Sharing a screen](#sharing-a-screen).
 - **Skipping without waiting:** the car loads two minutes ahead (the lighter part of the seek bar, which keeps creeping forward as the video plays) and keeps the last few minutes played. A skip to anywhere in that happens at once; only a skip further away loads again.
 - **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
 - **For You:** videos like the ones you've been watching, on the car page and the phone remote.
@@ -133,6 +134,30 @@ The second line makes the file the app's own. yt-dlp keeps a cookies file up to 
 - `OTHER_SITES=off` makes this a YouTube-only server again.
 
 **Pictures in the lists** for these videos come from the other site, and your phone and car fetch them from it directly, without telling it which page asked. One that has stopped working is replaced by the site's name.
+
+### Sharing a screen
+
+A browser tab, a window or a whole screen can be shown in the car with its sound, the way a video call shares a screen. It is for whatever plays on a device of yours and can't be sent to the car as a link. Nothing is fetched from anywhere: the device plays what it plays, as it always does, and the car gets a picture of it.
+
+**Starting.** On the device whose screen you want in the car, open the phone page (`/remote`) at DrivePost's **https** address and sign in. A **Share this screen** card shows wherever the browser is able to capture a screen:
+
+- **A computer, in Chrome or Edge.** Click **Share to the car** and the browser asks what to share. Choose the **tab** the video is in and switch on **Also share tab audio**. A window or the whole screen works too, but a window comes without sound, and a whole screen has sound only where the browser offers it (Windows and ChromeOS).
+- **An iPhone or iPad, in Safari on iOS 27 or later**, which is the first iOS that lets a web page capture the screen. A phone shares its whole screen, so whatever you switch to is what the car shows. This path is built but has not been tried on a real iPhone, and Safari may send the picture without the sound. If the picture arrives on its side, **Turn the picture** on the card turns it a quarter turn at a time.
+- Chrome on Android can't capture a screen from a web page, so it gets no card.
+
+The car starts playing it by itself about four seconds later, as a live video named **Shared tab** (or window, or screen). It is not added to Recent and can't be put in Up Next.
+
+**While it is shared.** Keep the DrivePost page open on that device: it is the one sending. It can sit in a background tab while you look at the tab you are sharing. The sound plays in the car, not on the device. The car runs about four seconds behind the screen. Everything else works as usual from any phone: play something else, then **Show it in the car** to bring the screen back; **Stop sharing** from any device. Pause, then play, shows the screen as it is by then, since there is nothing to pick up from. When sharing stops, the car plays out the last few seconds and goes on to Up Next.
+
+**Picture.** 480p, 720p or 1080p is the size the screen is captured at, and the device uploads roughly 1.5, 3.5 or 6 Mbit/s for it. From a laptop on a phone's hotspot, choose what the hotspot can carry. A tall screen is fitted in with black at the sides. The car's own Quality setting still decides what the car is sent.
+
+**How it works.** The browser captures the screen, the page records the capture and sends the recording up a WebSocket as it is made. The server (`server/src/mirror.js`) has ffmpeg turn that into one fixed picture at 30 frames a second, kept in memory as a live stream of one-second pieces, and the car's stream is converted from it like any live video. A browser only hands over a new frame when something on the screen changes, and a recording with no picture in it stalls whoever plays it and leaves them that far behind for good. So the page sends the last frame again ten times a second while the screen is still (`server/public/screen-pump.js`).
+
+**When the connection misbehaves.** If the sharing device loses the server, its page reconnects by itself and the car waits up to 20 seconds for it before moving on. If the device can't upload as fast as it records, the page starts a fresh recording instead of falling further behind. A car that is more than 10 seconds behind the screen is started afresh from where the screen is now.
+
+**What it can't do.** Video that the device refuses to let be captured comes out black, on a computer and on a phone alike. That covers most paid streaming services and some apps, and DrivePost does nothing to get around it. The device has to stay awake. There is one share per profile.
+
+`SCREEN_SHARE=off` in `.env` takes the card away.
 
 ## Requirements
 
@@ -317,6 +342,10 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
 | Choppy picture at 1080p | Tap **Stats**. In MPEG-1, if decoding takes more than about half of the time available per frame, the screen is the limit. In H.264, a climbing "skipped" count means the same. Use 720p. |
 | A link from another site doesn't play | The car or phone says why in words. To look closer, run `docker compose exec -T drivepost node src/check-link.js "the link"` (see "Videos from other sites"). "Only shows that video to signed-in visitors" needs a cookies file, also described there. "No video was found at that link" means yt-dlp couldn't find a player on the page: a newer yt-dlp may (restart the container), and some sites it can't read at all. |
+| No **Share this screen** card on the phone page | The browser can't capture a screen from a web page (Chrome or Edge on a computer can; so can Safari from iOS 27; Chrome on Android can't), or the page was opened at an `http://` address: capturing only works over https. |
+| A shared screen has no sound in the car | The card says so when no sound is coming with it. In Chrome, stop, share again, choose a **tab** and switch on **Also share tab audio**. A shared window never has sound. |
+| A shared screen is black in the car | The device won't let that video be captured, which is how copy-protected video behaves. Other tabs and apps share normally. |
+| A shared screen keeps stopping and starting | The sharing device can't upload it fast enough: choose **480p** on the card. On the server, `docker compose logs drivepost` has a `[screen]` line for every start, drop and stop. |
 | It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |
 | H.264 misbehaves in the car | On the phone remote, set **Video format** to **MPEG-1**. Everything then works as it did before H.264 was added. |
 | No sound | Tap the screen once. Browsers only allow sound after a tap. |
@@ -345,7 +374,7 @@ The pages are drawn in the style of Rig UI, a component library by the same auth
 ```
 scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder and checker
 shortcut/        The iPhone Shortcut, unsigned, for reading
-server/src/      Node server: auth, state, yt-dlp, links to other sites, ffmpeg streaming, TS chunker
+server/src/      Node server: auth, state, yt-dlp, links to other sites, screen sharing, ffmpeg streaming, TS chunker
 server/public/   Car page, phone remote, setup page, Admin, the one stylesheet (app.css), JSMpeg
 server/test/     Unit tests (npm test)
 test/            The original side-by-side Drive test page
