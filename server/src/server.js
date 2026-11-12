@@ -16,12 +16,12 @@ import {
   suggest,
   videoMeta,
   extractVideoId,
-  isValidId,
   startAutoUpdate,
   prewarm,
   TEST_PATTERN_ID,
   TEST_PATTERN_ITEM,
 } from './youtube.js';
+import { isLinkId, isPlayableId, linkIn, linkItem, prewarmLink } from './links.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
@@ -74,8 +74,9 @@ function storeFor(id) {
     store.on('state', (state) => {
       broadcast(id, { type: 'state', state });
       // Look up what's playing and what's next ahead of time, so they start faster.
-      if (store.now) prewarm(store.now.id, store.playQuality());
-      if (store.queue[0]) prewarm(store.queue[0].id, store.settings.quality);
+      const warm = (id, quality) => (isLinkId(id) ? prewarmLink(id, quality) : prewarm(id, quality));
+      if (store.now) warm(store.now.id, store.playQuality());
+      if (store.queue[0]) warm(store.queue[0].id, store.settings.quality);
     });
     stores.set(id, store);
   }
@@ -271,12 +272,35 @@ function baseUrl(req) {
   return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
 }
 
-// Add a shared link to a profile's car: play it if nothing is on, otherwise queue it.
-async function shareText(store, text) {
+/*
+ * What a pasted or shared piece of text is a link to: { id } for a YouTube
+ * video (or the test pattern), { url } for anything else on the web, or
+ * { error } in words when it is neither or this server doesn't take it.
+ */
+function linkedTo(text) {
   const raw = String(text || '');
   const id = extractVideoId(raw) || (raw.trim() === TEST_PATTERN_ID ? TEST_PATTERN_ID : null);
-  if (!id) return { ok: false, message: "That doesn't look like a YouTube link." };
-  const meta = await videoMeta(id).catch(() => ({ id, title: 'YouTube video', channel: '' }));
+  if (id) return { id };
+  const url = linkIn(raw);
+  if (!url) return { error: "That doesn't look like a link to a video." };
+  if (!config.links.on) return { error: 'This server is set to play YouTube videos only.' };
+  return { url };
+}
+
+// Add a shared link to a profile's car: play it if nothing is on, otherwise queue it.
+async function shareText(store, text) {
+  const to = linkedTo(text);
+  if (to.error) return { ok: false, message: to.error };
+  let meta;
+  if (to.id) meta = await videoMeta(to.id).catch(() => ({ id: to.id, title: 'YouTube video', channel: '' }));
+  else {
+    // Another site's video: finding out what it is also finds out whether it can be played.
+    try {
+      meta = await linkItem(to.url);
+    } catch (err) {
+      return { ok: false, message: err.message };
+    }
+  }
   const wasIdle = !store.now;
   store.command('enqueue', { item: meta });
   return { ok: true, title: meta.title, message: wasIdle ? `Playing: ${meta.title}` : `Added to Up Next: ${meta.title}` };
@@ -612,13 +636,13 @@ async function route(req, res) {
 
     if (req.method === 'POST' && p === '/api/resolve') {
       const body = await readJson(req);
-      const text = String(body.text || '');
-      const id = extractVideoId(text) || (text.trim() === TEST_PATTERN_ID ? TEST_PATTERN_ID : null);
-      if (!id) return send(res, 400, { error: "That doesn't look like a YouTube link." });
+      const to = linkedTo(body.text);
+      if (to.error) return send(res, 400, { error: to.error });
       try {
-        return send(res, 200, { item: await videoMeta(id) });
+        return send(res, 200, { item: to.id ? await videoMeta(to.id) : await linkItem(to.url) });
       } catch (err) {
-        return send(res, 502, { error: `Couldn't look that up: ${err.message}` });
+        // A link to another site fails in words of its own (links.js).
+        return send(res, 502, { error: to.id ? `Couldn't look that up: ${err.message}` : err.message });
       }
     }
 
@@ -684,7 +708,7 @@ function dropScreens(profile) {
 }
 
 function hello(profile) {
-  return { type: 'version', version: VERSION, feedback: !!config.feedbackUrl, profile: profileLabel(profile) };
+  return { type: 'version', version: VERSION, feedback: !!config.feedbackUrl, otherSites: config.links.on, profile: profileLabel(profile) };
 }
 
 // Profiles were added, renamed or removed: screens show whose they are once there's more than one.
@@ -772,7 +796,7 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('pong', () => (ws.isAlive = true));
     if (url.pathname === '/ws/control') return handleControl(ws, profile);
     const id = url.searchParams.get('id');
-    if (!isValidId(id)) return ws.close(4400, 'bad id');
+    if (!isPlayableId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
     const quality = QUALITIES.includes(url.searchParams.get('q')) ? url.searchParams.get('q') : storeFor(profile).playQuality();
     const audioRate = parseInt(url.searchParams.get('ar'), 10) || 48000;

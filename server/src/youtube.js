@@ -42,7 +42,7 @@ function baseArgs() {
   return args.concat(config.ytdlp.extraArgs);
 }
 
-function run(bin, args, timeoutMs) {
+export function run(bin, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const out = [];
@@ -67,7 +67,7 @@ function run(bin, args, timeoutMs) {
   });
 }
 
-function ytdlp(args, timeoutMs = 45000) {
+export function ytdlp(args, timeoutMs = 45000) {
   return run(config.ytdlp.bin, baseArgs().concat(args), timeoutMs);
 }
 
@@ -146,7 +146,7 @@ export function videoMeta(id) {
   });
 }
 
-const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
+export const HEIGHTS = { 360: 360, 480: 480, 720: 720, 1080: 1080 };
 
 /*
  * The ways to get a video out of YouTube, first choice first.

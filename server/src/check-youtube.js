@@ -11,16 +11,25 @@
  *
  * With --details it also says what each stream is made of and tries the skip
  * in several ways, for working out why one misbehaves. Still no links.
+ *
+ * Given a link to another site instead of a YouTube video, it checks that
+ * link the same way (see links.js):
+ *
+ *   docker compose exec -T drivepost node src/check-link.js "https://x.com/..." [quality] [--details]
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { config } from './config.js';
-import { ROUTES, streamInfo, linkStatus } from './youtube.js';
+import { ROUTES, streamInfo, linkStatus, extractVideoId } from './youtube.js';
+import { linkIn, linkItem, linkStreamInfo, guardedFetch, siteOf } from './links.js';
 import { ffmpegArgs, chooseCodec, failureReason, refusalReason, cutLists } from './stream.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
 const words = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const details = process.argv.includes('--details');
-const id = words[0] || '9Yz3TdftSPs';
+const asked = words[0] || '9Yz3TdftSPs';
+// A link to somewhere other than YouTube, or a YouTube video (as its ID or its link).
+const link = extractVideoId(asked) ? null : linkIn(asked);
+const id = extractVideoId(asked) || asked;
 const quality = words[1] || '1080';
 
 // ffmpeg's own words with every link taken out, the last few different lines of them.
@@ -161,11 +170,92 @@ async function moreAbout(info, lists) {
   console.log(`${pad}  ffmpeg's own seeking:      ${outcome(await ffmpegReads(info, { startAt: to, cuts: null, forMs: 6000 }))}`);
 }
 
-console.log(`Checking video ${id} at ${quality}p from this machine\n`);
-if (details) {
+function sayVersion() {
+  if (!details) return;
   const version = spawnSync(config.ffmpegBin, ['-version'], { encoding: 'utf8' }).stdout || '';
   console.log(`${version.split('\n')[0].replace(/ Copyright.*/, '')}\n`);
 }
+
+/*
+ * Try out what one lookup came back with, the way the server would play it.
+ * `found` is the first line about it so far, `who` is whose media it is, and
+ * `fetchImpl` is what to ask for the first bytes with. True when it plays.
+ */
+async function tryOut(info, found, who, fetchImpl) {
+  // YouTube holds some files back for the length of an ad. Wait it out, as the server would.
+  const wait = (info.readyAt || 0) - Date.now();
+  if (wait > 0) {
+    found += `, usable after a ${Math.ceil(wait / 1000)}s wait`;
+    if (wait > 90000) {
+      console.log(`${found}\n        too long a wait: the server would not use this`);
+      return false;
+    }
+    await new Promise((done) => setTimeout(done, wait + 300));
+  }
+  const lists = new Map();
+  let answers;
+  try {
+    answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => linkStatus(i, fetchImpl, lists)));
+  } catch (e) {
+    console.log(`${found}\n        link check failed: ${String(e.cause?.message || e.message).slice(0, 90)}`);
+    return false;
+  }
+  const bad = answers.find((a) => a !== 200 && a !== 206);
+  if (bad !== undefined) {
+    console.log(`${found}\n        REFUSED: ${refusalReason(bad, who)}`);
+    return false;
+  }
+  const read = await ffmpegReads(info);
+  // From the top, picture and sound begin together, give or take a few frames.
+  let sound = '';
+  if (read.ok && hasSound(info)) {
+    if (read.firstSound === null) sound = ', BUT NO SOUND CAME THROUGH';
+    else if (Math.abs(read.firstSound - read.firstPicture) > 1) sound = `, BUT PICTURE AND SOUND BEGIN ${Math.abs(read.firstSound - read.firstPicture).toFixed(1)}s APART`;
+    else sound = ', with sound';
+  }
+  console.log(`${found}\n        link answers ${answers.join(', ')}; ffmpeg ${read.ok ? 'PLAYS it' : 'FAILS'}: ${read.note}${sound}`);
+  // A skip, where there is something to skip around in: not a live stream, or a clip a few seconds long.
+  if (read.ok && (who === 'YouTube' || (!info.live && (info.duration || 0) > 25))) console.log(`        ${await skipLands(info, lists)}`);
+  if (details) await moreAbout(info, lists);
+  return read.ok;
+}
+
+if (link) {
+  // Another site's video: there is one way to get it, the site's own.
+  const site = siteOf(link);
+  console.log(`Checking a link to ${site} at ${quality}p from this machine\n`);
+  sayVersion();
+  let started = Date.now();
+  let item;
+  try {
+    item = await linkItem(link);
+  } catch (e) {
+    console.log(`lookup failed: ${e.message}`);
+    process.exit(0);
+  }
+  if (!item.url) {
+    console.log(`That page shows a YouTube video (${item.id}), which plays as one. Check it with: node src/check-youtube.js ${item.id}`);
+    process.exit(0);
+  }
+  const length = item.live ? 'live' : item.duration ? `${Math.floor(item.duration / 60)}:${String(item.duration % 60).padStart(2, '0')}` : 'length not given';
+  console.log(`found a video (${length}${item.thumb ? ', with a picture for the lists' : ', no picture for the lists'}) in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  started = Date.now();
+  let info;
+  try {
+    info = await linkStreamInfo(item.id, quality);
+  } catch (e) {
+    console.log(`        nothing to play: ${e.message}`);
+    process.exit(0);
+  }
+  const how = info.live ? 'plays as live, converted' : info.convert ? `converted here, because ${info.convert}` : 'H.264 that can be passed straight on';
+  const found = `picked ${info.height}p ${info.vcodec || '?'} (${info.route.replace(/ from \S+$/, '').replace(/^[^:]+: /, '')}) in ${((Date.now() - started) / 1000).toFixed(1)}s: ${how}${info.seen ? '' : ' (ffprobe could not look at it, so that is going by what the site says)'}`;
+  const plays = await tryOut(info, found, site, guardedFetch);
+  console.log(plays ? '\nThe server can play this link.' : '\nThe server cannot play this link right now.');
+  process.exit(0);
+}
+
+console.log(`Checking video ${id} at ${quality}p from this machine\n`);
+sayVersion();
 let winner = null;
 for (const route of ROUTES) {
   const started = Date.now();
@@ -177,44 +267,8 @@ for (const route of ROUTES) {
     console.log(`lookup failed: ${String(e.message).slice(0, 110)}`);
     continue;
   }
-  let found = `found ${info.height}p ${info.vcodec || '?'} (${info.route.replace(/^\w+: /, '').replace(/ from \S+$/, '')}) in ${((Date.now() - started) / 1000).toFixed(1)}s`;
-  // YouTube holds some files back for the length of an ad. Wait it out, as the server would.
-  const wait = (info.readyAt || 0) - Date.now();
-  if (wait > 0) {
-    found += `, usable after a ${Math.ceil(wait / 1000)}s wait`;
-    if (wait > 90000) {
-      console.log(`${found}\n        too long a wait: the server would not use this`);
-      continue;
-    }
-    await new Promise((done) => setTimeout(done, wait + 300));
-  }
-  const lists = new Map();
-  let answers;
-  try {
-    answers = await Promise.all(info.inputs.filter((i) => i.url).map((i) => linkStatus(i, fetch, lists)));
-  } catch (e) {
-    console.log(`${found}\n        link check failed: ${String(e.cause?.message || e.message).slice(0, 90)}`);
-    continue;
-  }
-  const bad = answers.find((a) => a !== 200 && a !== 206);
-  if (bad !== undefined) {
-    console.log(`${found}\n        REFUSED: ${refusalReason(bad)}`);
-    continue;
-  }
-  const read = await ffmpegReads(info);
-  // From the top, picture and sound begin together, give or take a few frames.
-  let sound = '';
-  if (read.ok && hasSound(info)) {
-    if (read.firstSound === null) sound = ', BUT NO SOUND CAME THROUGH';
-    else if (Math.abs(read.firstSound - read.firstPicture) > 1) sound = `, BUT PICTURE AND SOUND BEGIN ${Math.abs(read.firstSound - read.firstPicture).toFixed(1)}s APART`;
-    else sound = ', with sound';
-  }
-  console.log(`${found}\n        link answers ${answers.join(', ')}; ffmpeg ${read.ok ? 'PLAYS it' : 'FAILS'}: ${read.note}${sound}`);
-  if (read.ok) {
-    console.log(`        ${await skipLands(info, lists)}`);
-    if (!winner) winner = route.name;
-  }
-  if (details) await moreAbout(info, lists);
+  const found = `found ${info.height}p ${info.vcodec || '?'} (${info.route.replace(/^\w+: /, '').replace(/ from \S+$/, '')}) in ${((Date.now() - started) / 1000).toFixed(1)}s`;
+  if ((await tryOut(info, found, 'YouTube', fetch)) && !winner) winner = route.name;
 }
 console.log(winner ? `\nThe server takes the first route in this list that is ready and plays: "${winner}".` : '\nNo route works right now.');
 process.exit(0);

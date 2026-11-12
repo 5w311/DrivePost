@@ -155,6 +155,13 @@
     } catch (e) {}
   }
 
+  // A video from another site is whatever that site's encoder made of it,
+  // and a browser can give up on one of those while playing YouTube's H.264
+  // without any trouble. So when one fails, only that video goes to the
+  // built-in player, for as long as this page stays open, and what is
+  // remembered above (which is about the browser) is left alone.
+  var gaveUpOn = {}; // video ID -> why
+
   // ---- video, MPEG-1: JSMpeg decodes and draws a frame the moment we feed it ----
 
   function Mpeg1Video(session) {
@@ -598,7 +605,7 @@
 
     // Open the stream once we know whether this browser can decode H.264.
     h264.probe.then(function () {
-      if (self.state !== 'done') self.open(o.format !== 'mpeg1' && h264Usable());
+      if (self.state !== 'done') self.open(o.format !== 'mpeg1' && h264Usable() && !gaveUpOn[o.id]);
     });
 
     function frame() {
@@ -719,6 +726,7 @@
         this.live = !!msg.live;
         this.startAt = msg.startAt || 0;
         this.hasAudio = msg.audio !== false;
+        this.why = msg.why || ''; // why another site's video is being converted, when it is
         this.stats.fps = msg.fps || null;
         this.stats.kbps = msg.kbps || null;
         this.setup(msg.codec);
@@ -823,7 +831,8 @@
   StreamSession.prototype.videoFailed = function (reason) {
     if (this.state === 'done') return;
     var pos = this.position();
-    h264Failed(reason);
+    if (this.o.elsewhere) gaveUpOn[this.o.id] = reason;
+    else h264Failed(reason);
     this.freeze();
     if (this.o.onState) this.o.onState(this);
     if (this.o.onVideoFail) this.o.onVideoFail(this, { reason: reason, position: pos });
@@ -1295,6 +1304,7 @@
       startAt: spec.startAt,
       quality: spec.quality,
       format: spec.format,
+      elsewhere: !!spec.elsewhere, // another site's video, not one of YouTube's
       paused: spec.paused,
       host: this.host,
       volume: this.volume,
@@ -1371,6 +1381,10 @@
       reason: h264.reason,
       retryAt: h264.failedAt ? h264.failedAt + H264_RETRY_MS : 0
     };
+  };
+  // Why this one video (from another site) is on the built-in player, if it is.
+  DrivePlayer.gaveUpOn = function (id) {
+    return gaveUpOn[id] || '';
   };
   // Try H.264 again now instead of waiting out the retry time.
   DrivePlayer.retryH264 = function () {

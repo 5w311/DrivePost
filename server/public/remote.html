@@ -40,14 +40,15 @@
     <section class="card">
       <div class="card-head">Send a video</div>
       <div class="card-body">
-        <form id="linkForm" class="field-row" autocomplete="off">
-          <input id="link" type="url" inputmode="url" placeholder="Paste a YouTube link">
+        <form id="linkForm" class="field-row link-field" autocomplete="off" novalidate>
+          <input id="link" type="url" inputmode="url" placeholder="Link to a video" aria-label="Link to a video" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button id="linkClear" type="button" class="icon-btn hidden" aria-label="Clear the link" title="Clear"></button>
         </form>
-        <div class="btn-row">
-          <button id="pasteBtn" type="button">Paste</button>
-          <button id="playNowBtn" type="button" class="primary">Play</button>
-          <button id="queueBtn" type="button">Up Next</button>
+        <div class="btn-row send-row">
+          <button id="playNowBtn" type="button" class="primary">Paste &amp; Play</button>
+          <button id="queueBtn" type="button">Paste &amp; Up Next</button>
         </div>
+        <p id="sendHint" class="muted hint">Copy a video's link in YouTube, X, Reddit, Instagram or on a web page, then tap a button.</p>
       </div>
     </section>
 
@@ -98,7 +99,7 @@
           <button data-v="auto" type="button">H.264</button>
           <button data-v="mpeg1" type="button">MPEG-1</button>
         </div>
-        <p class="muted" style="font-size:14px;margin:10px 0 0"><b>H.264</b> plays YouTube's own video: sharper, usually less data, and almost no work for your server. If the car can't play it, or a video has no H.264 version, DrivePost uses MPEG-1 by itself. <b>MPEG-1</b> always converts on your server, which works in any browser.</p>
+        <p class="muted" style="font-size:14px;margin:10px 0 0"><b>H.264</b> plays the video as YouTube (or the site it came from) made it: sharper, usually less data, and almost no work for your server. If the car can't play it, or a video has no H.264 version, DrivePost uses MPEG-1 by itself. <b>MPEG-1</b> always converts on your server, which works in any browser.</p>
       </div>
     </section>
 

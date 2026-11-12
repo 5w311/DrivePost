@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
+import { isLinkId, isLinkAddress, linkId, rememberLink, siteOf } from './links.js';
 import { QUALITIES } from './config.js';
 
 const HISTORY_MAX = 40;
@@ -26,16 +27,25 @@ export function cleanSearch(raw) {
 
 // Turn whatever a client sent into a clean item, or null.
 export function cleanItem(raw) {
-  if (!raw || typeof raw !== 'object' || !isValidId(raw.id)) return null;
+  if (!raw || typeof raw !== 'object') return null;
   const duration = Number(raw.duration);
-  return {
+  const row = {
     id: raw.id,
     title: clampStr(raw.title, 200) || 'Untitled',
     channel: clampStr(raw.channel, 100),
     duration: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : null,
     live: raw.live === true,
-    thumb: thumbFor(raw.id),
   };
+  if (isLinkId(raw.id)) {
+    // A video from another site (links.js). Its row carries its address,
+    // which is what its ID is made from, and the picture the site gave for it.
+    if (!isLinkAddress(raw.url) || linkId(raw.url) !== raw.id) return null;
+    rememberLink(raw.url);
+    const thumb = typeof raw.thumb === 'string' && raw.thumb.length <= 1000 && /^https:\/\/[^\s"'<>]+$/.test(raw.thumb) ? raw.thumb : '';
+    return { ...row, url: raw.url, site: siteOf(raw.url), thumb };
+  }
+  if (!isValidId(raw.id)) return null;
+  return { ...row, thumb: thumbFor(raw.id) };
 }
 
 export class Store extends EventEmitter {
@@ -318,7 +328,10 @@ export class Store extends EventEmitter {
     if (!this.now.live && this.now.id !== TEST_PATTERN_ID) this.progress[this.now.id] = Math.floor(t);
     let changed = false;
     if (Number.isFinite(duration) && duration > 0 && !this.now.duration) {
-      this.now = { ...this.now, duration: Math.round(duration) };
+      // A shared link often comes without its length. Now that the car knows it, the lists can show it too.
+      const length = Math.round(duration);
+      this.now = { ...this.now, duration: length };
+      this.history = this.history.map((h) => (h.id === this.now.id && !h.duration ? { ...h, duration: length } : h));
       changed = true;
     }
     this.scheduleSave();

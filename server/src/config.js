@@ -53,7 +53,22 @@ export const config = {
   // image when it is built by the updater; empty otherwise.
   commit: (env.DRIVEPOST_COMMIT || '').trim().slice(0, 160),
 
+  // Videos from other sites than YouTube: a pasted or shared link to a post
+  // on X, Reddit or Instagram, to a page with a video player on it, or
+  // straight to a video file (see links.js).
+  links: {
+    // OTHER_SITES=off makes this a YouTube-only server again.
+    on: !/^(off|0|no|false)$/i.test((env.OTHER_SITES || '').trim()),
+    // Links into this server's own network (a NAS, a camera) are refused
+    // unless OTHER_SITES_LOCAL=on.
+    local: /^(on|1|yes|true)$/i.test((env.OTHER_SITES_LOCAL || '').trim()),
+    // Extra yt-dlp arguments for other sites only, e.g. a cookies file for
+    // the ones that only show videos to signed-in visitors.
+    extraArgs: words(env.OTHER_SITES_ARGS),
+  },
+
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
+  ffprobeBin: env.FFPROBE_BIN || 'ffprobe',
   maxStreams: int('MAX_STREAMS', 3),
   defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',
 };

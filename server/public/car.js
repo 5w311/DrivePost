@@ -76,7 +76,10 @@
     onVideoFail: function (s, info) {
       // The browser's own H.264 decoder gave up. Carry on from the same spot
       // with the built-in player; the page stays on it for a couple of hours.
-      var message = "This browser couldn't play the H.264 video (" + info.reason + '). Switched to the built-in player.';
+      // (Another site's video is a one-off: only that video stays on it.)
+      var message = s.o.elsewhere
+        ? "This browser couldn't play this video as it came (" + info.reason + '). Playing it with the built-in player instead.'
+        : "This browser couldn't play the H.264 video (" + info.reason + '). Switched to the built-in player.';
       control.send({ type: 'carNote', message: message }); // shown on every screen, this one included
       if (state && state.now && state.now.seq === s.seq) startStream(state.now, info.position);
     },
@@ -129,6 +132,7 @@
       startAt: startAt,
       quality: playQuality(),
       format: state.settings.format,
+      elsewhere: !!now.url, // not YouTube's: a link to another site
       paused: state.paused
     });
     renderStage();
@@ -347,7 +351,7 @@
 
     $('#nowTitle').textContent = now.title;
     $('#fsTitle').textContent = now.title;
-    $('#nowSub').textContent = [now.channel, now.live ? 'Live' : null].filter(Boolean).join(' · ');
+    $('#nowSub').textContent = [now.channel, now.site, now.live ? 'Live' : null].filter(Boolean).join(' · ');
 
     if (errorMsg) {
       var box = el('div', {}, [
@@ -551,11 +555,13 @@
   // Which format is playing, and why it isn't H.264 when it isn't.
   function formatLine(s, i) {
     if (!i.codec) return 'waiting';
-    if (i.codec === 'h264') return "H.264 · YouTube's own video, decoded by this browser";
+    // Whose video it is as it stands: YouTube's, or the site a pasted link led to.
+    if (i.codec === 'h264') return 'H.264 · ' + (state && state.now && state.now.site ? state.now.site : 'YouTube') + "'s own video, decoded by this browser";
     var line = 'MPEG-1 · converted by your server';
     var h = DrivePlayer.h264();
     if (state && state.settings.format === 'mpeg1') return line + ' (H.264 is switched off on the phone remote)';
-    if (i.asked === 'h264') return line + (s.live ? ' (live videos are always converted)' : ' (no H.264 version of this video)');
+    if (i.asked === 'h264') return line + (s.live ? ' (live videos are always converted)' : s.why ? ' (' + s.why + ')' : ' (no H.264 version of this video)');
+    if (state && state.now && DrivePlayer.gaveUpOn(state.now.id)) return line + " (this browser couldn't decode this one as it came: " + DrivePlayer.gaveUpOn(state.now.id) + ')';
     if (h.supported === false) return line + " (this browser can't decode H.264)";
     if (h.failedAt && !h.usable) {
       var at = new Date(h.retryAt);
@@ -851,7 +857,8 @@
     searching = true;
     searchResults = null;
     renderLists();
-    var looksLikeLink = /youtu\.?be|youtube\.com/i.test(q);
+    // A link to anywhere is looked up rather than searched for.
+    var looksLikeLink = /^(https?:\/\/|www\.)|youtu\.?be|youtube\.com/i.test(q);
     var req = looksLikeLink
       ? DT.api('/api/resolve', { body: { text: q } }).then(function (r) { return [r.item]; })
       : DT.api('/api/search?q=' + encodeURIComponent(q)).then(function (r) { return r.results; });
@@ -988,7 +995,7 @@
     } else if (!recs.items.length) {
       f.appendChild(el('div', { class: 'empty', text: recs.failed
         ? "Couldn't get recommendations just now. Tap Refresh to try again."
-        : 'Play a video or two and videos like them show up here.' }));
+        : 'Play a YouTube video or two and videos like them show up here.' }));
     } else {
       recs.items.forEach(function (item) {
         // Not what is playing or already lined up, even if the list was fetched before that.

@@ -68,7 +68,8 @@
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(DT._toastTimer);
-    DT._toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3500);
+    // Long enough to read: a line and a half more for every extra line of words.
+    DT._toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3500 + Math.min(5000, Math.max(0, String(msg).length - 60) * 45));
   };
 
   // ---- staying on the current version ----
@@ -177,15 +178,36 @@
     return span;
   };
 
+  // The small picture of a video. One from another site (it has a `site`) may
+  // come without a picture, or with one that has since stopped working: the
+  // site's name stands in. The picture is asked for without saying which page
+  // wants it, so the other site isn't told this server's address.
+  DT.thumbOf = function (item, lazy) {
+    function standIn() {
+      return item.site
+        ? DT.el('div', { class: 'thumb-site' }, [DT.icon('play'), DT.el('span', { text: item.site })])
+        : DT.el('div', { class: 'thumb-pattern' });
+    }
+    if (!item.thumb) return standIn();
+    var img = DT.el('img', { src: item.thumb, alt: '', loading: lazy ? 'lazy' : null, referrerpolicy: 'no-referrer' });
+    if (item.site) {
+      img.addEventListener('error', function () {
+        if (img.parentNode) img.parentNode.replaceChild(standIn(), img);
+      });
+    }
+    return img;
+  };
+
   // One row in a video list.
   DT.itemRow = function (item, opts) {
     opts = opts || {};
     var progress = opts.progress || 0;
-    var sub = [item.channel, item.live ? 'LIVE' : item.duration ? DT.fmt(item.duration) : null]
+    // Who posted it, where (for a video that isn't YouTube's), and how long it is.
+    var sub = [item.channel, item.site, item.live ? 'LIVE' : item.duration ? DT.fmt(item.duration) : null]
       .filter(Boolean)
       .join(' · ');
     var thumb = DT.el('div', { class: 'thumb' }, [
-      item.thumb ? DT.el('img', { src: item.thumb, alt: '', loading: 'lazy' }) : DT.el('div', { class: 'thumb-pattern' }),
+      DT.thumbOf(item, true),
       progress && item.duration
         ? DT.el('div', { class: 'thumb-progress' }, [
             DT.el('div', { style: 'width:' + Math.min(100, (progress / item.duration) * 100) + '%' })

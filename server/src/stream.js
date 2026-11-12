@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
 import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, NO_SUCH_FORMAT, TEST_PATTERN_ID } from './youtube.js';
+import { isLinkId, linkStreamInfo, forgetLink, guardedFetch, LINK_PROTOCOLS } from './links.js';
 import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
@@ -82,6 +83,8 @@ export function streamPlan(info, quality) {
 export function chooseCodec(want, info, canEncodeH264 = true) {
   if (want !== 'h264' || info.live) return 'mpeg1';
   if (info.inputs.some((i) => i.lavfi)) return canEncodeH264 ? 'h264' : 'mpeg1'; // the test pattern
+  // Another site's video that can't be passed on as it is (links.js says why).
+  if (info.convert) return 'mpeg1';
   return /^avc1/i.test(info.vcodec || '') ? 'h264' : 'mpeg1';
 }
 
@@ -115,6 +118,8 @@ function inputArgs(input, startAt, live, cut) {
   // for a dropped connection and pause to "reconnect", crawling along slower
   // than the video plays. Its own reader moves from segment to segment.
   if (!input.list) a.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5');
+  // Another site's link: whatever it leads to, ffmpeg reads from the web and nothing else.
+  if (input.other) a.push('-protocol_whitelist', LINK_PROTOCOLS);
   const headers = Object.entries(input.headers || {})
     .map(([k, v]) => `${k}: ${v}\r\n`)
     .join('');
@@ -152,7 +157,8 @@ export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'm
   const a = info.inputs.findIndex((i) => i.hasAudio);
   if (v < 0) throw new Error('This video has no picture');
   args.push('-map', `${v}:v:0`);
-  if (a >= 0) args.push('-map', `${a}:a:0`);
+  // Another site's file may turn out to have no sound in it after all: "?" plays it silent instead of failing.
+  if (a >= 0) args.push('-map', `${a}:a:0${info.inputs[a].other ? '?' : ''}`);
 
   const max = Math.round(plan.kbps * 1.3);
   if (codec === 'h264' && info.inputs[v].lavfi) {
@@ -164,13 +170,16 @@ export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'm
     );
   } else if (codec === 'h264') {
     // Pass YouTube's H.264 through as it is; only the container changes.
-    args.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
+    // Another site's goes through without the notes some encoders put in
+    // beside the picture (SEI). Nothing here needs them, and a browser's
+    // decoder gives up on a stream that has one ahead of what it refers to.
+    args.push('-c:v', 'copy', '-bsf:v', info.inputs[v].other ? 'h264_mp4toannexb,filter_units=remove_types=6' : 'h264_mp4toannexb');
   } else {
     // Converted picture from a cut list: leave out the frames before the spot asked for.
     const early = cuts ? Math.max(0, startAt - cuts.get(info.inputs[v]).begins) : 0;
     const fromSpot = early > 0 ? `select='gte(t-start_t,${early.toFixed(3)})',` : '';
     args.push(
-      '-vf', `${fromSpot}scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
+      '-vf', `${fromSpot}scale=-2:'${info.inputs[v].other ? `trunc(min(${plan.height},ih)/2)*2` : `min(${plan.height},ih)`}':flags=bicubic,fps=${plan.rate.expr},format=yuv420p`,
       '-c:v', 'mpeg1video', '-b:v', `${plan.kbps}k`, '-maxrate', `${max}k`, '-bufsize', `${max}k`,
       '-bf', '0', '-g', String(Math.round(plan.rate.fps * 2))
     );
@@ -194,13 +203,13 @@ function sendJson(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-// What YouTube's answer to a request means, in words.
-export function refusalReason(status) {
-  if (status === 403) return 'YouTube refused to send it (403 Forbidden)';
-  if (status === 429) return 'YouTube is turning this server away for now (429 Too Many Requests)';
-  if (status === 404 || status === 410) return `the link YouTube gave for it has stopped working (${status})`;
-  if (status >= 500) return `YouTube's server had a problem (${status})`;
-  return `YouTube answered ${status}`;
+// What a site's answer to a request means, in words. `who` is the site: YouTube, unless it is someone else's link.
+export function refusalReason(status, who = 'YouTube') {
+  if (status === 403) return `${who} refused to send it (403 Forbidden)`;
+  if (status === 429) return `${who} is turning this server away for now (429 Too Many Requests)`;
+  if (status === 404 || status === 410) return `the link ${who} gave for it has stopped working (${status})`;
+  if (status >= 500) return `${who}'s server had a problem (${status})`;
+  return `${who} answered ${status}`;
 }
 
 // When a lower quality than asked for is all there is, say so, but not for every video.
@@ -229,6 +238,7 @@ const WAIT_AT_MOST = 90 * 1000; // an ad break longer than this is treated as a 
  * called when it has to sit out a wait.
  */
 export async function findPlayable(id, quality, deps = {}) {
+  if (isLinkId(id)) return findLinked(id, quality, deps);
   const lookup = deps.streamInfo || streamInfo;
   const status = deps.linkStatus || linkStatus;
   const sleep = deps.sleep || ((ms) => new Promise((done) => setTimeout(done, ms)));
@@ -311,11 +321,46 @@ export async function findPlayable(id, quality, deps = {}) {
   return { message: `Couldn't load this video: ${nothingThere ? 'YouTube has no version of it that this server can play' : 'nothing playable was found'}` };
 }
 
+/*
+ * The same for a video from another site (links.js). There are no routes to
+ * choose between: the site has it or it doesn't. Its media links are still
+ * tried before they are used, and looked up afresh once if they have gone
+ * stale. Every request is kept to addresses out on the internet.
+ */
+async function findLinked(id, quality, deps = {}) {
+  const lookup = deps.linkStreamInfo || linkStreamInfo;
+  const status = deps.linkStatus || linkStatus;
+  const fetchImpl = deps.fetch || guardedFetch;
+  const now = deps.now || Date.now;
+  const lists = new Map();
+  // A plain "no": anything less clear is left for ffmpeg to find out.
+  const refusal = (a) => a === 401 || a === 403 || a === 404 || a === 410 || a === 429 || a >= 500;
+  const check = async (info) => (await Promise.all(info.inputs.map((i) => status(i, fetchImpl, lists)))).find(refusal);
+  let site = 'the site';
+  try {
+    let info = await lookup(id, quality);
+    site = info.site || site;
+    let bad = await check(info);
+    if (bad !== undefined && now() - (info.at || 0) > 60000) {
+      forgetLink(id);
+      info = await lookup(id, quality);
+      bad = await check(info);
+    }
+    if (bad === undefined) return { info, lists };
+    forgetLink(id);
+    return { message: `Couldn't play this video: ${refusalReason(bad, site)}` };
+  } catch (err) {
+    forgetLink(id);
+    const said = String((err && err.message) || '');
+    return { message: `Couldn't load this video: ${/fetch failed|timed out|aborted|terminated/i.test(said) ? `this server couldn't reach ${site}` : said}` };
+  }
+}
+
 // Why ffmpeg gave up, in words. Its own last line starts with the whole
 // media link, which is hundreds of characters long, means nothing on a car
 // screen, and has this server's home address in it. So links are taken out
 // and the part that says what happened is kept.
-export function failureReason(stderr, code) {
+export function failureReason(stderr, code, who = 'YouTube') {
   const lines = String(stderr || '')
     .split('\n')
     .map((l) => l.replace(/https?:\/\/\S+/g, '').replace(/^\[[^\]]*\]\s*/, '').replace(/^[\s:]+/, '').trim())
@@ -327,11 +372,11 @@ export function failureReason(stderr, code) {
   const all = lines.join('\n');
   const status = (all.match(/HTTP error (\d{3})/i) || all.match(/returned (\d{3})\b/i) || [])[1];
   let said;
-  if (status === '403') said = 'YouTube refused to send it (403 Forbidden)';
-  else if (status === '429') said = 'YouTube is turning this server away for now (429 Too Many Requests)';
-  else if (status === '404' || status === '410') said = `the link YouTube gave for it has stopped working (${status})`;
-  else if (status && status[0] === '5') said = `YouTube's server had a problem (${status})`;
-  else if (/timed out|refused|reset|unreachable|resolve|network/i.test(raw)) said = `this server couldn't reach YouTube (${raw.slice(0, 80)})`;
+  if (status === '403') said = `${who} refused to send it (403 Forbidden)`;
+  else if (status === '429') said = `${who} is turning this server away for now (429 Too Many Requests)`;
+  else if (status === '404' || status === '410') said = `the link ${who} gave for it has stopped working (${status})`;
+  else if (status && status[0] === '5') said = `${who}'s server had a problem (${status})`;
+  else if (/timed out|refused|reset|unreachable|resolve|network/i.test(raw)) said = `this server couldn't reach ${who} (${raw.slice(0, 80)})`;
   else said = raw.slice(0, 140);
   return { said, raw: raw.slice(0, 300) };
 }
@@ -366,6 +411,9 @@ export async function cutLists(info, startAt, lists, handedOver = []) {
 // One car connection = one ffmpeg process.
 export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
   const handedOver = []; // lists made fetchable for this stream's ffmpeg
+  // YouTube's videos come by one of several routes, which are kept score of. The test pattern and other sites' links don't.
+  const byRoute = id !== TEST_PATTERN_ID && !isLinkId(id);
+  const forget = () => (isLinkId(id) ? forgetLink(id) : forgetStream(id, quality));
   if (!AUDIO_RATES.includes(audioRate)) audioRate = 48000;
   let ff = null;
   let closed = false;
@@ -423,7 +471,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     const now = Date.now();
     for (const [key, when] of startedOverForSound) if (now - when > 10 * 60 * 1000) startedOverForSound.delete(key);
     console.warn(`[stream ${id}] no sound is coming through | ${quality}p ${codec}, ${info.route || 'unknown route'}, starting at ${Math.round(startAt)}s`);
-    if (startedOverForSound.has(id)) return;
+    // Another site's video has no other route to come by: it plays as it is.
+    if (!byRoute || startedOverForSound.has(id)) return;
     startedOverForSound.set(id, now);
     routeRefused(info.routeName, 'no sound came through');
     sendJson(ws, { type: 'notice', message: 'No sound was coming through, so the server is getting this video another way.' });
@@ -450,7 +499,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       // Picture is flowing, and sound with it if the video has any: this route delivers.
       if (!delivered && baseSent && (soundPieces || !info.inputs.some((i) => i.hasAudio))) {
         delivered = true;
-        if (id !== TEST_PATTERN_ID) routeWorked(info.routeName);
+        if (byRoute) routeWorked(info.routeName);
       }
       frame.writeDoubleLE(pts, 0);
       frame.writeUInt8(kind, 8);
@@ -533,12 +582,14 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     startAt: info.live ? 0 : startAt,
     codec,
     audio: info.inputs.some((i) => i.hasAudio),
+    // Another site's video that has to be converted: why, for the car's Stats.
+    why: (codec === 'mpeg1' && want === 'h264' && !info.live && info.convert) || undefined,
     // Passed-through video keeps YouTube's own frame rate and bitrate.
     fps: passthrough ? info.fps || null : codec === 'h264' ? 30 : plan.rate.fps,
     kbps: passthrough ? (info.tbr ? Math.round(info.tbr) : null) : plan.kbps,
   });
-  const notice = routeNotice(info.routeName);
-  if (notice && id !== TEST_PATTERN_ID && noticeDue(group, info.routeName)) sendJson(ws, { type: 'notice', message: notice });
+  const notice = byRoute ? routeNotice(info.routeName) : '';
+  if (notice && noticeDue(group, info.routeName)) sendJson(ws, { type: 'notice', message: notice });
 
   // Starting partway through a segmented stream: give ffmpeg lists that begin there.
   const cuts = await cutLists(info, startAt, playable.lists, handedOver);
@@ -574,14 +625,14 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     splitter.flush();
     logSpeed();
     if (code !== 0) {
-      const why = failureReason(stderr, code);
+      const why = failureReason(stderr, code, info.site || 'YouTube');
       // For whoever reads the log: what failed and which way the video was being fetched.
       console.warn(`[stream ${id}] ffmpeg exited ${code} ${lastSentPts === null ? 'before sending anything' : 'partway'}: ${why.raw} | ${quality}p ${codec}, ${info.route || 'unknown route'}, starting at ${Math.round(startAt)}s`);
       // Media links expire; make the next attempt fetch fresh ones.
-      forgetStream(id, quality);
+      forget();
       if (lastSentPts === null) {
         // Checked out fine, yet ffmpeg couldn't use it: the next try takes another route.
-        if (id !== TEST_PATTERN_ID) routeRefused(info.routeName, why.raw);
+        if (byRoute) routeRefused(info.routeName, why.raw);
         sendJson(ws, { type: 'error', message: `Couldn't play this video: ${why.said}` });
         ws.close();
         return;

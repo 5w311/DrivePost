@@ -15,6 +15,14 @@
     version: function (msg) {
       DT.noteVersion(msg.version);
       $('#who').textContent = msg.profile || ''; // whose profile, once there's more than one
+      // A server can be set to take YouTube links only. And an iPhone asks
+      // before it hands over what was copied: a small "Paste" button of its
+      // own shows up where the tap was.
+      var apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      $('#sendHint').textContent = (msg.otherSites === false
+        ? "Copy a YouTube video's link, then tap a button."
+        : "Copy a video's link in YouTube, X, Reddit, Instagram or on a web page, then tap a button.") +
+        (apple ? ' A small Paste button then pops up: tap that too.' : '');
     },
     state: function (msg) {
       if (DT.stale && !typing() && DT.reloadIfStale()) return;
@@ -61,10 +69,10 @@
     np.innerHTML = '';
     if (state.now) {
       var n = state.now;
-      np.appendChild(el('div', { class: 'thumb' }, [n.thumb ? el('img', { src: n.thumb, alt: '' }) : el('div', { class: 'thumb-pattern' })]));
+      np.appendChild(el('div', { class: 'thumb' }, [DT.thumbOf(n)]));
       np.appendChild(el('div', { style: 'min-width:0' }, [
         el('div', { class: 'np-title', text: n.title }),
-        el('div', { class: 'np-sub', text: [n.channel, n.live ? 'LIVE' : null, state.paused ? 'Paused' : null].filter(Boolean).join(' · ') })
+        el('div', { class: 'np-sub', text: [n.channel, n.site, n.live ? 'LIVE' : null, state.paused ? 'Paused' : null].filter(Boolean).join(' · ') })
       ]));
     } else {
       np.appendChild(el('div', { class: 'muted', text: 'Nothing playing. Search below or paste a link.' }));
@@ -144,49 +152,78 @@
   })();
 
   // ---------- send a link ----------
+  // Copy a video's link in another app, come here, and tap once: "Paste &
+  // Play" takes what was copied and plays it, "Paste & Up Next" lines it up.
+  // With something in the box (typed, or pasted by hand where the phone won't
+  // let a page read what was copied) the same two buttons send that instead,
+  // and say so: "Play" and "Up Next".
 
-  function resolveLink() {
-    var text = $('#link').value.trim();
-    if (!text) {
-      DT.toast('Paste a YouTube link first');
-      return Promise.reject(new Error('empty'));
-    }
-    return DT.api('/api/resolve', { body: { text: text } }).catch(function (e) {
-      DT.toast(e.message);
-      throw e;
+  var linkBox = $('#link');
+  var sendBtn = { play: $('#playNowBtn'), queue: $('#queueBtn') };
+  var asking = false; // a tap is being dealt with
+  var finding = null; // which button's video the server is looking up
+  $('#linkClear').appendChild(DT.icon('x'));
+
+  function labelSend() {
+    var typed = !!linkBox.value.trim();
+    sendBtn.play.textContent = finding === 'play' ? 'Finding it…' : typed ? 'Play' : 'Paste & Play';
+    sendBtn.queue.textContent = finding === 'queue' ? 'Finding it…' : typed ? 'Up Next' : 'Paste & Up Next';
+    sendBtn.play.disabled = sendBtn.queue.disabled = !!finding;
+    $('#linkClear').classList.toggle('hidden', !typed || !!finding);
+  }
+
+  // What was copied. A phone only hands it over when asked straight from a
+  // tap, and an iPhone shows its own little "Paste" button first.
+  function copied() {
+    if (!navigator.clipboard || !navigator.clipboard.readText) return Promise.reject(new Error('no clipboard'));
+    return navigator.clipboard.readText();
+  }
+
+  function send(how) {
+    if (asking) return;
+    asking = true;
+    var typed = linkBox.value.trim();
+    (typed ? Promise.resolve(typed) : copied()).then(function (text) {
+      text = String(text || '').trim();
+      if (!text) {
+        DT.toast("Nothing is copied yet. Copy a video's link first.");
+        return null;
+      }
+      finding = how;
+      labelSend();
+      // Finding out what a link is can take a few seconds for a site that isn't YouTube.
+      return DT.api('/api/resolve', { body: { text: text } }).then(function (r) {
+        var lined = how === 'queue' && state && state.now;
+        control.cmd(how === 'play' ? 'play' : 'enqueue', { item: r.item });
+        linkBox.value = '';
+        DT.toast((lined ? 'Added to Up Next: ' : 'Playing: ') + r.item.title);
+      }, function (e) {
+        // Leave what was pasted in the box, to see what it was and to try again.
+        if (!typed) linkBox.value = text.slice(0, 500);
+        DT.toast(e.message);
+      });
+    }, function () {
+      DT.toast("Couldn't read what you copied. Long-press the box and choose Paste.");
+      linkBox.focus();
+    }).then(function () {
+      asking = false;
+      finding = null;
+      labelSend();
     });
   }
-  $('#playNowBtn').addEventListener('click', function () {
-    resolveLink().then(function (r) {
-      control.cmd('play', { item: r.item });
-      $('#link').value = '';
-      DT.toast('Playing: ' + r.item.title);
-    }).catch(function () {});
-  });
-  $('#queueBtn').addEventListener('click', function () {
-    resolveLink().then(function (r) {
-      control.cmd('enqueue', { item: r.item });
-      $('#link').value = '';
-      DT.toast(state && state.now ? 'Added to Up Next' : 'Playing: ' + r.item.title);
-    }).catch(function () {});
+  sendBtn.play.addEventListener('click', function () { send('play'); });
+  sendBtn.queue.addEventListener('click', function () { send('queue'); });
+  linkBox.addEventListener('input', labelSend);
+  $('#linkClear').addEventListener('click', function () {
+    linkBox.value = '';
+    labelSend();
+    linkBox.focus();
   });
   $('#linkForm').addEventListener('submit', function (ev) {
     ev.preventDefault();
-    $('#queueBtn').click();
+    if (linkBox.value.trim()) send('queue');
   });
-  $('#pasteBtn').addEventListener('click', function () {
-    if (!navigator.clipboard || !navigator.clipboard.readText) {
-      DT.toast('Long-press the box and choose Paste');
-      $('#link').focus();
-      return;
-    }
-    navigator.clipboard.readText().then(function (t) {
-      $('#link').value = t.trim();
-    }).catch(function () {
-      DT.toast('Long-press the box and choose Paste');
-      $('#link').focus();
-    });
-  });
+  labelSend();
 
   // ---------- search ----------
 
@@ -304,7 +341,7 @@
     if (!items.length) {
       box.appendChild(el('div', { class: 'empty', text: recs.failed
         ? "Couldn't get recommendations just now. Tap Refresh to try again."
-        : 'Play a video or two and videos like them show up here.' }));
+        : 'Play a YouTube video or two and videos like them show up here.' }));
       return;
     }
     items.slice(0, recs.all ? items.length : 6).forEach(function (item) { box.appendChild(resultRow(item)); });

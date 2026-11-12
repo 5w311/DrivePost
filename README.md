@@ -1,19 +1,20 @@
 # DrivePost
 
-A self-hosted YouTube player for the Tesla browser that keeps playing after you shift out of Park, for passengers.
+A self-hosted YouTube player for the Tesla browser that keeps playing after you shift out of Park, for passengers. It also plays the video behind a link to somewhere else: a post on X, Reddit or Instagram, a page with a video player on it, or a video file.
 
 Tesla's browser pauses its built-in video player when the car leaves Park. DrivePost never uses that player. A small server at home fetches the video, and the car page decodes it itself and draws it on a `<canvas>`, with sound through Web Audio. The [proof of concept](test/) confirmed that canvas playback keeps going in Drive.
 
 ## What it does
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
+- **Other sites too:** paste or share a link to a post on X, Reddit or Instagram, to a page with a video player on it, or straight to a video file. It plays like any other video, with Up Next, Recent, resume and skipping. Search and For You stay YouTube's. See [Videos from other sites](#videos-from-other-sites) for what works and what a site can refuse.
 - **Skipping without waiting:** the car loads two minutes ahead (the lighter part of the seek bar, which keeps creeping forward as the video plays) and keeps the last few minutes played. A skip to anywhere in that happens at once; only a skip further away loads again.
 - **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
 - **For You:** videos like the ones you've been watching, on the car page and the phone remote.
 - **Theater button:** shows or hides the lists (Up Next, For You, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
 - **Fullscreen:** tap the video and use the corner button, or switch it from the phone. The video then fills the whole browser window while something plays, with controls on tap. **Fill** zooms the picture to cover the window, and **Fit** shows all of it. When nothing is playing, the normal page comes back so you can search. The phone can switch it too.
 - **Pauses when the browser is closed:** closing or leaving the browser in the car pauses the video, so the sound doesn't carry on out of sight. It stays paused until someone presses play. Opening the page again shows **Tap to play**, which carries on from the same spot. Pressing play on the phone while the car's browser is closed is respected, so you can still listen that way.
-- **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, paste links, reorder Up Next and control playback from your phone.
+- **Phone remote:** scan a QR code on the car screen to pair, no passcode needed. The code closes by itself once the phone is in. Search, reorder Up Next and control playback from your phone. To send a video, copy its link in any app and tap **Paste & Play** or **Paste & Up Next**.
 - **Profiles:** each person or car can have its own passcode, and with it its own now playing, Up Next, Recent, searches, recommendations, settings, paired phones and Send to Car link, all at the same address. Someone new asks for a profile from the sign-in page, and it works once you allow it.
 - **Admin page:** `/admin`, opened with the passcode from `.env` and nothing else, shows who is waiting for a profile, every profile and its car, and the running build.
 - **Share from any app:** use an iPhone Shortcut in the share sheet, or install the remote on Android so it appears in the share menu.
@@ -85,6 +86,53 @@ The car asks for H.264 when its browser can decode it. That needs WebCodecs, whi
 A copied H.264 stream can only begin on a keyframe, which may be several seconds before the spot you seek to. The car decodes that lead-in without showing it, so playback still starts exactly where you asked.
 
 If the browser's H.264 decoder reports an error, stops returning pictures, or can't keep up even at 360p, the car carries on from the same spot in MPEG-1 and says so. It stays on MPEG-1 for two hours, so a browser that blocks its own decoder in some situations doesn't interrupt every video. Choosing **H.264** under **Video format** on the phone remote tries it again right away, and choosing **MPEG-1** there turns H.264 off. **Stats** shows which format is playing, and why when it isn't H.264.
+
+A video from another site is the exception. If the decoder gives up on one of those, only that video goes to MPEG-1, for as long as the car page stays open: it says something about that site's file, not about the browser, and YouTube videos keep playing in H.264.
+
+### Videos from other sites
+
+A link that isn't YouTube's is handed to yt-dlp, which knows how to find the video behind the links of hundreds of sites and reads any other page for a player the way a browser would. It answers with what the video is called and every version of it the site has. The server picks one, has ffprobe look at what it really is, and from there it is played like any other video. See `server/src/links.js`.
+
+**Sending one.** On the phone remote, copy the link in any app and tap **Paste & Play** (plays now) or **Paste & Up Next**. An iPhone shows a small **Paste** button of its own first: tap that too. With a link typed or pasted into the box, the same two buttons read **Play** and **Up Next** and send that instead. The car's search box takes a pasted link as well, and so do the iPhone Shortcut and Android's share menu. A page with several videos plays the first.
+
+**Which version.** One with sound over one without; one that fits the quality you chose; H.264, which can be passed straight on to the car, over anything that has to be converted; then the biggest picture. A plain file with picture and sound together comes before separate files, and those before lists of segments, because that is the order of how simple they are to play and to skip around in.
+
+**Passed on or converted.** The picture goes to the car as it is when it is H.264 that a browser decodes: 8-bit, not interlaced, not stored on its side, and no bigger than the quality chosen. Anything else is converted to MPEG-1 on your server, and **Stats** says why ("it is vp9", "it is bigger than 720p"). A stream with no end in sight plays as live. On the way through, the server leaves out the notes some encoders put beside the picture (SEI): nothing here uses them, and a browser's decoder gives up on a file that has one ahead of what it refers to.
+
+**What to expect.** Tried from a test machine in November 2026, with real links:
+
+| Link | Result |
+|---|---|
+| A post on X with a video | Plays, passed through as H.264, with the post's picture and who posted it in the lists |
+| A link straight to a video file | Plays. Its length shows once it has started |
+| A page with an ordinary video player | Plays |
+| Reddit, Instagram | Refused from that machine: "only shows that video to signed-in visitors". These sites decide by where the request comes from, so a home connection may do better. Otherwise see below |
+| Anything copy-protected (Netflix and the like) | Never: it can only be played on the site itself |
+| Sound with no picture, or a video a site only delivers in many small pieces (DASH) with nothing else on offer | Not played |
+
+To find out about a link from your own server:
+
+```bash
+docker compose exec -T drivepost node src/check-link.js "https://x.com/someone/status/123"
+```
+
+It looks the link up, says what it picked and whether that is passed on or converted, asks for the first bytes, has ffmpeg read some of it and tries a skip. There are no links in the output.
+
+**A site that wants a sign-in.** yt-dlp can use your sign-in from a browser, as a cookies file. Sign in to the site in a browser on your computer, export its cookies with an extension that saves a `cookies.txt` (the Netscape format), copy the file to the server, and then:
+
+```bash
+docker compose cp cookies.txt drivepost:/data/cookies-sites.txt
+docker compose exec -u root drivepost chown node /data/cookies-sites.txt
+```
+
+The second line makes the file the app's own. yt-dlp keeps a cookies file up to date as it goes, and a lookup fails if it can't write to it. Then add `OTHER_SITES_ARGS=--cookies /data/cookies-sites.txt` to `.env` and run `docker compose up -d`. This is for other sites only, so YouTube is still fetched without a sign-in. That file is your sign-in: whoever has it is you on that site, so an account made for the purpose is the safer choice.
+
+**Only out onto the internet.** Your server sits on your home network and can reach things the internet can't: the router's settings page, other machines, itself. Fetching whatever link someone pastes would be a way to reach those through it. So a link is only followed when it is http or https and leads to an address out on the internet, by every address its name leads to. That is checked for the link that was pasted, for every media address yt-dlp hands back, and for each hop of the server's own requests, and ffmpeg is kept to web addresses. What isn't covered: yt-dlp and ffmpeg follow redirects by themselves, so a page out on the internet could still send them to an address on your network. Only someone signed in to your DrivePost can send a link at all, and nothing that comes back from such a request is shown to anyone beyond a page's title.
+
+- `OTHER_SITES_LOCAL=on` lets links lead to your own network, for a video on a NAS. Leave it off unless you want that.
+- `OTHER_SITES=off` makes this a YouTube-only server again.
+
+**Pictures in the lists** for these videos come from the other site, and your phone and car fetch them from it directly, without telling it which page asked. One that has stopped working is replaced by the site's name.
 
 ## Requirements
 
@@ -264,6 +312,7 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | The picture is only 360p and a notice says so | YouTube is refusing the better routes from your connection, and the basic file is all that gets through. The server tries the better ones again after half an hour, then less often, and switches back by itself. |
 | Frequent buffering | The car steps down by itself after three stalls in two minutes. To find the cause, tap **Stats**: a server speed under 1.1x means the machine can't convert that quality fast enough (MPEG-1) or can't fetch it fast enough (H.264). Otherwise it's the car's connection. |
 | Choppy picture at 1080p | Tap **Stats**. In MPEG-1, if decoding takes more than about half of the time available per frame, the screen is the limit. In H.264, a climbing "skipped" count means the same. Use 720p. |
+| A link from another site doesn't play | The car or phone says why in words. To look closer, run `docker compose exec -T drivepost node src/check-link.js "the link"` (see "Videos from other sites"). "Only shows that video to signed-in visitors" needs a cookies file, also described there. "No video was found at that link" means yt-dlp couldn't find a player on the page: a newer yt-dlp may (restart the container), and some sites it can't read at all. |
 | It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |
 | H.264 misbehaves in the car | On the phone remote, set **Video format** to **MPEG-1**. Everything then works as it did before H.264 was added. |
 | No sound | Tap the screen once. Browsers only allow sound after a tap. |
@@ -276,7 +325,7 @@ Tesla only lets its browser take over the entire display in Park. While driving,
 ## Notes
 
 - A screen showing video in view of the driver while the car is moving is illegal in many places, including Florida (§316.303). This is built for passengers.
-- YouTube's terms don't allow downloading videos outside their own apps. Keep this for your own use, not as a public service.
+- YouTube's terms don't allow downloading videos outside their own apps, and other sites' terms say much the same. Keep this for your own use, not as a public service.
 - Cloudflare's terms limit using its network mainly for video. A personal tunnel for one car is low volume, but if that's a concern, use a port forward with a reverse proxy such as Caddy instead.
 
 ## The look
@@ -292,7 +341,7 @@ The pages are drawn in the style of Rig UI, a component library by the same auth
 ```
 scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder and checker
 shortcut/        The iPhone Shortcut, unsigned, for reading
-server/src/      Node server: auth, state, yt-dlp, ffmpeg streaming, TS chunker
+server/src/      Node server: auth, state, yt-dlp, links to other sites, ffmpeg streaming, TS chunker
 server/public/   Car page, phone remote, setup page, Admin, the one stylesheet (app.css), JSMpeg
 server/test/     Unit tests (npm test)
 test/            The original side-by-side Drive test page
