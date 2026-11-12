@@ -132,40 +132,70 @@
     showUpdate(view.server.update);
   }
 
-  // ---- an update that hasn't been installed because a video is playing ----
+  // ---- updates: what the server's updater is doing, and Force update ----
+  // For each state: the heading, what it says, which button it has ('force',
+  // 'cancel' or none), and how the box is drawn ('on' while something is
+  // happening, 'bad' when something went wrong).
   var UPDATE_SAYS = {
+    idle: ['Updates',
+      'The server looks for updates every couple of minutes and installs them by itself, waiting while a video is playing. Force update looks right now and installs what it finds, even if a video is playing.',
+      'force', ''],
+    checking: ['Checking for updates…',
+      'Looking on GitHub for anything newer than the version below.',
+      '', 'on'],
+    asked: ['Force update is lined up',
+      'The server takes it up at its next look, within about two minutes, and installs anything new right away, video or not.',
+      'cancel', 'on'],
+    uptodate: ['Up to date',
+      'Checked GitHub just now: there is nothing newer than the version below.',
+      'force', ''],
     waiting: ['An update is waiting',
-      "It hasn't been installed because a video is playing. It goes in by itself within a couple of minutes of the video being paused or ending. Force update installs it now: the video keeps playing while the new version is built, stops when the server restarts, and then waits for a tap in the car."],
+      "It hasn't been installed because a video is playing. It goes in by itself within a couple of minutes of the video being paused or ending. Force update installs it now: the video keeps playing while the new version is built, stops when the server restarts, and then waits for a tap in the car.",
+      'force', 'on'],
     next: ['An update is waiting',
-      'Nothing is playing now, so it goes in by itself within a couple of minutes.'],
+      'Nothing is playing now, so it goes in by itself within a couple of minutes. Force update installs it now.',
+      'force', 'on'],
     forced: ['An update is about to be installed',
-      'It goes in at the server\'s next check, within about two minutes. The video stops when the server restarts, then waits for a tap in the car.'],
+      "It goes in at the server's next look, within about two minutes. The video stops when the server restarts, then waits for a tap in the car.",
+      'cancel', 'on'],
     installing: ['Installing an update',
-      'The new version is being built. When it is ready the server restarts: a video that is playing stops then and waits for a tap in the car. This page shows the new version by itself.'],
+      'The new version is being built. When it is ready the server restarts: a video that is playing stops then and waits for a tap in the car. This page shows the new version by itself.',
+      '', 'on'],
     failed: ["An update couldn't be installed",
-      'The version below is still running. The server tries again in an hour, or when the next update arrives. Its log says what went wrong. To read it, run this on the server:']
+      'The version below is still running. The server tries again in an hour, or when the next update arrives; Force update tries again now. Its log says what went wrong. To read it, run this on the server:',
+      'force', 'bad', 'journalctl -u drivepost-update -n 30 --no-pager'],
+    off: ["Automatic updates aren't running",
+      "The updater on this server hasn't been in touch for a while. Either automatic updates were never turned on, or the server can't reach GitHub. To turn them on, run this on the server, in the DrivePost folder:",
+      '', 'bad', './scripts/install-auto-update.sh']
   };
-  var UPDATE_LOG = 'journalctl -u drivepost-update -n 30 --no-pager';
   function showUpdate(u) {
-    $('#updateBox').classList.toggle('hidden', !u);
-    if (!u) return;
-    var says = UPDATE_SAYS[u.state] || UPDATE_SAYS.waiting;
-    $('#updateBox').classList.toggle('bad', u.state === 'failed');
+    u = u || { state: 'idle', commit: '' };
+    var says = UPDATE_SAYS[u.state] || UPDATE_SAYS.idle;
+    var box = $('#updateBox');
+    box.classList.toggle('on', says[3] === 'on');
+    box.classList.toggle('bad', says[3] === 'bad');
     $('#updateTitle').textContent = says[0];
-    $('#updateCommit').textContent = u.commit;
+    $('#updateCommit').textContent = u.commit || '';
+    $('#updateCommit').classList.toggle('hidden', !u.commit);
     $('#updateWhy').textContent = says[1];
-    $('#updateLook').textContent = UPDATE_LOG;
-    $('#updateLook').classList.toggle('hidden', u.state !== 'failed');
-    var canForce = u.state === 'waiting' || u.state === 'next';
-    $('#forceUpdate').textContent = u.state === 'next' ? 'Update now' : 'Force update';
-    $('#forceUpdate').classList.toggle('hidden', !canForce);
-    $('#cancelForce').classList.toggle('hidden', u.state !== 'forced');
-    $('#updateBtns').classList.toggle('hidden', !canForce && u.state !== 'forced');
+    $('#updateLook').textContent = says[4] || '';
+    $('#updateLook').classList.toggle('hidden', !says[4]);
+    $('#forceUpdate').classList.toggle('hidden', says[2] !== 'force');
+    $('#cancelForce').classList.toggle('hidden', says[2] !== 'cancel');
+    $('#cancelForce').textContent = u.state === 'forced' ? 'Wait for the video after all' : 'Never mind';
+    $('#updateBtns').classList.toggle('hidden', !says[2]);
+  }
+  // After a tap things move within a second or two: look more often than every five for a while.
+  function lookSoon() {
+    [700, 1500, 2500, 4000, 6000, 9000].forEach(function (ms) {
+      setTimeout(function () { refresh().catch(signedOut); }, ms);
+    });
   }
   function forceUpdate(on) {
     DT.api('/api/admin/update', { body: { force: on } }).then(function (v) {
       took(v);
-      DT.toast(on ? 'Installing the update' : 'The update will wait for the video');
+      if (!on) DT.toast('Force update taken back');
+      lookSoon();
     }).catch(function (e) {
       if (signedOut(e)) return;
       DT.toast(e.message);
@@ -173,10 +203,14 @@
     });
   }
   $('#forceUpdate').addEventListener('click', function () {
-    var u = view && view.server.update;
-    if (!u) return;
+    var u = (view && view.server.update) || {};
     // Only ask when it would interrupt someone.
-    if (u.state === 'waiting' && !confirm('Install the update now? The video that is playing will stop when the server restarts, and wait for a tap in the car.')) return;
+    if (u.playing) {
+      var known = u.state === 'waiting' || u.state === 'failed';
+      var ask = (known ? 'Install the update now?' : 'Look for an update now, and install it if there is one?') +
+        ' A video is playing: it will stop when the server restarts, and wait for a tap in the car.';
+      if (!confirm(ask)) return;
+    }
     forceUpdate(true);
   });
   $('#cancelForce').addEventListener('click', function () { forceUpdate(false); });

@@ -191,14 +191,20 @@ body.remote .suggest-row { min-height: 48px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Admin: an update that is waiting for a video to stop. */
-.update-box { border: 1px solid var(--accent); border-radius: 12px; padding: 14px; margin-bottom: 16px; background: rgba(62, 139, 255, 0.08); }
-.update-box .update-title { font-weight: 700; margin-bottom: 8px; }
+/* Admin: what the updater is doing, with the Force update button. Drawn
+   plain when nothing is going on, in the accent colour while an update is
+   waiting or going in, and in red when something went wrong. */
+.update-box { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; background: var(--panel-2); }
+.update-box.on { border-color: var(--accent); background: rgba(62, 139, 255, 0.08); }
+.update-box.bad { border-color: var(--stop); background: rgba(239, 83, 80, 0.08); }
+.update-box .update-title { font-weight: 700; }
+.update-box .code { margin-top: 10px; background: var(--panel); }
 .update-box p { font-size: 14px; margin: 10px 0 0; }
-.update-box p + .code { margin-top: 10px; font-size: 13px; }
+.update-box p + .code { font-size: 13px; }
 .update-box .btn-row { margin-top: 12px; }
 .update-box .btn-row button { flex: 0 1 auto; }
-.update-box.bad { border-color: var(--stop); background: rgba(239, 83, 80, 0.08); }
+/* A commit's ID and title, and a command to run: wrap between words, not in the middle of one. */
+#commit, #updateCommit, #updateLook { word-break: normal; overflow-wrap: anywhere; }
 
 /* Pull down from the top of the page to reload it (the Admin page). The tip
    slides out from under the top bar as the finger moves down. */
