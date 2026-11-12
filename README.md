@@ -7,7 +7,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 ## What it does
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
-- **Skipping without waiting:** the car keeps what it has loaded, about 45 seconds ahead (the lighter part of the seek bar) and the last 30 seconds played. A skip to anywhere in that happens at once; only a skip further away loads again.
+- **Skipping without waiting:** the car loads two minutes ahead (the lighter part of the seek bar, which keeps creeping forward as the video plays) and keeps the last few minutes played. A skip to anywhere in that happens at once; only a skip further away loads again.
 - **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
 - **For You:** videos like the ones you've been watching, on the car page and the phone remote.
 - **Theater button:** shows or hides the lists (Up Next, For You, Search, Recent). Blue means they're showing; off leaves just the video and the search bar.
@@ -66,7 +66,13 @@ To start partway through (a skip, a resume, a change of quality), the server doe
 
 ### Skipping within what has loaded
 
-The server reads up to 45 seconds ahead of where the car is playing and then waits until that is down to 30. The car keeps all of it, played or not, until it is 30 seconds behind (and never more than 160 MB). ±10 s, the seek bar and skips from a phone first try to go there within what the car holds: the decoder starts over at the keyframe before the spot, the frames up to the spot are decoded without being shown, the sound already queued is cut, and playback carries on. No request is made and the stream that is open stays open; the server just hears the new position. A spot that isn't on hand opens a new stream there, as before. This works for H.264; in MPEG-1 every skip opens a new stream.
+In H.264 the server reads two minutes ahead of where the car is playing and tops that up every few seconds, so the loaded part of the seek bar keeps creeping ahead as the video plays instead of filling in jumps. After a skip back there is more than two minutes ahead already, so it waits until playback is within two minutes of the loaded edge again and then carries on.
+
+The car keeps everything it has received, played or not, for as long as there is room: at most 160 MB in all, with the oldest let go first and what is still to come never touched. At 1080p that is the two minutes ahead plus the last two to four minutes played. On the seek bar, the played part that is no longer on hand is drawn dimmer.
+
+±10 s, the seek bar and skips from a phone first try to go there within what the car holds: the decoder starts over at the keyframe before the spot, the frames up to the spot are decoded without being shown, the sound already queued is cut, and playback carries on. No request is made and the stream that is open stays open; the server just hears the new position. A spot that isn't on hand opens a new stream there, as before.
+
+In MPEG-1 every skip opens a new stream, and the server reads only about 25 seconds ahead, because converting is real work for it.
 
 ### Where the recommendations come from
 

@@ -504,6 +504,13 @@
       var s = player.active;
       var buf = s && d ? Math.min(100, ((t + s.buffered()) / d) * 100) : pct;
       $('#scrubBuf').style.width = buf + '%';
+      // The played part that is still on hand (a skip back into it happens at
+      // once) is drawn at full strength; what has been let go is dimmer.
+      var held = s && s.onHand ? s.onHand() : null;
+      var gone = held && t > 0 && preview === null ? Math.max(0, Math.min(100, (held.from / t) * 100)) : 0;
+      $('#scrubFill').style.background = gone > 0.5
+        ? 'linear-gradient(to right, var(--accent-gone) 0, var(--accent-gone) ' + gone + '%, var(--accent) ' + gone + '%)'
+        : '';
       scrub.style.visibility = live ? 'hidden' : 'visible';
     };
   })();

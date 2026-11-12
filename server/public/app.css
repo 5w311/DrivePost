@@ -217,7 +217,7 @@ body.remote .suggest-row { min-height: 48px; }
 /* Shown only if it lasts: a skip within what has loaded is over before this appears. */
 .after-a-moment { animation: after-a-moment 0.01s linear 0.45s both; }
 @keyframes after-a-moment { from { opacity: 0; } to { opacity: 1; } }
-.scrub-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); }
+.scrub-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); --accent-gone: rgba(62, 139, 255, 0.45); }
 .scrub-knob {
   position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%; background: #fff;
   transform: translate(-50%, -50%);

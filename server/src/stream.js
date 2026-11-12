@@ -5,10 +5,17 @@ import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
 // How far ahead of the car's playback the server reads before pausing
-// ffmpeg, and where it starts again. This is the loaded stretch on the car's
-// seek bar: the car can skip anywhere in it without a new stream.
-const AHEAD_HIGH = 45;
-const AHEAD_LOW = 30;
+// ffmpeg, and where it starts again.
+//
+// H.264: this is the loaded stretch on the car's seek bar, which the car can
+// skip around in without a new stream. Two minutes of it, topped up every few
+// seconds, so the bar keeps creeping ahead as the video plays.
+// MPEG-1: the car can't skip within what it holds, and converting is real
+// work for the server, so only enough to ride out a bad patch of signal.
+const AHEAD = {
+  h264: { high: 120, low: 117 },
+  mpeg1: { high: 25, low: 12 },
+};
 // This much picture sent and still no sound, on a video that has sound: the route isn't delivering it.
 const SILENT_AFTER = 20;
 // Videos already started over for that, and when: once is enough, in case the video really is silent there.
@@ -467,11 +474,12 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     if (!ff) return;
     const a = ahead();
     const backlog = ws.bufferedAmount;
-    if (!flowPaused && (a > AHEAD_HIGH || backlog > BACKLOG_HIGH)) {
+    const limit = AHEAD[codec] || AHEAD.mpeg1;
+    if (!flowPaused && (a > limit.high || backlog > BACKLOG_HIGH)) {
       logSpeed(backlog > BACKLOG_HIGH ? "held back by the car's connection, not the CPU" : '');
       ff.stdout.pause();
       flowPaused = true;
-    } else if (flowPaused && a < AHEAD_LOW && backlog < BACKLOG_LOW) {
+    } else if (flowPaused && a < limit.low && backlog < BACKLOG_LOW) {
       ff.stdout.resume();
       flowPaused = false;
     }

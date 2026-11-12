@@ -48,8 +48,11 @@
   // Skipping around in what has already arrived (H.264 only), the way a
   // video site does within its loaded bar, instead of asking the server for
   // a new stream every time.
-  var KEEP_BEHIND = 30; // seconds already played that stay on hand for skipping back
-  var KEEP_BYTES = 160 * 1024 * 1024; // and never more than this in all
+  // What has been played stays on hand for skipping back, for as long as
+  // there is room: everything held, played and still to come, is kept under
+  // `bytes`, and the oldest goes first. (At 1080p that is the two minutes the
+  // server reads ahead plus the last two to four minutes played.)
+  var KEEP = { behind: 600, bytes: 160 * 1024 * 1024 };
   var JUMP_NEEDS = 1.5; // seconds on hand past a spot for a skip to go there at once
   var JUMP_BUFFER = 0.25; // how much of that has to be lined up before it plays
   var VIDEO_STREAM = 0xe0;
@@ -913,13 +916,13 @@
     var k = this.kept;
     var v = k.v;
     if (!v.length || this.clock === null) return;
-    var limit = this.clock - KEEP_BEHIND;
+    var limit = this.clock - KEEP.behind;
     var size = 0; // bytes of the frames before the one being looked at
     var cut = 0;
     var cutSize = 0;
     for (var i = 0; i < v.length; i++) {
       if (i > 0 && v[i].key) {
-        var tooMuch = k.bytes - cutSize > KEEP_BYTES;
+        var tooMuch = k.bytes - cutSize > KEEP.bytes;
         if (v[i].pts <= limit || (tooMuch && v[i].pts < this.clock - 1)) {
           cut = i;
           cutSize = size;
@@ -1378,6 +1381,8 @@
       localStorage.removeItem('dt.h264reason');
     } catch (e) {}
   };
+
+  DrivePlayer.keep = KEEP; // how much stays on hand (see above)
 
   window.DrivePlayer = DrivePlayer;
 })();
