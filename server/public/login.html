@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0d10">
+<meta name="theme-color" content="#f2f3ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101316" media="(prefers-color-scheme: dark)">
 <title>Sign in · DrivePost</title>
 <link rel="icon" href="/static/icon-192.png">
 <link rel="stylesheet" href="/static/app.css">
@@ -11,7 +12,7 @@
 <body>
   <div class="center-page">
     <div class="login-box">
-      <h1>Drive<span style="color:var(--accent)">Post</span></h1>
+      <h1 class="brand">Drive<span>Post</span></h1>
 
       <div id="signIn">
         <p id="intro">Enter your passcode. This device stays signed in.</p>
@@ -38,7 +39,7 @@
       </div>
 
       <div id="waiting" class="hidden">
-        <p><b id="waitName" style="color:var(--text)"></b>, your profile is waiting for an OK from whoever runs this DrivePost. They'll see your name and this number on its Admin page:</p>
+        <p><b id="waitName" style="color:var(--rig-ink)"></b>, your profile is waiting for an OK from whoever runs this DrivePost. They'll see your name and this number on its Admin page:</p>
         <div id="waitCode" class="wait-code"></div>
         <p>This page signs you in by itself once they allow it. You can also close it and come back later with your passcode.</p>
         <button id="waitCancel" type="button" class="ghost" style="width:100%">Cancel my request</button>

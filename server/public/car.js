@@ -509,7 +509,7 @@
       var held = s && s.onHand ? s.onHand() : null;
       var gone = held && t > 0 && preview === null ? Math.max(0, Math.min(100, (held.from / t) * 100)) : 0;
       $('#scrubFill').style.background = gone > 0.5
-        ? 'linear-gradient(to right, var(--accent-gone) 0, var(--accent-gone) ' + gone + '%, var(--accent) ' + gone + '%)'
+        ? 'linear-gradient(to right, var(--accent-gone) 0, var(--accent-gone) ' + gone + '%, var(--rig-accent) ' + gone + '%)'
         : '';
       scrub.style.visibility = live ? 'hidden' : 'visible';
     };

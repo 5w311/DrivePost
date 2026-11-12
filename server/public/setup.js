@@ -8,7 +8,7 @@
     var who = $('#whoAmI');
     who.innerHTML = '';
     who.appendChild(document.createTextNode('This device is signed in to '));
-    who.appendChild(DT.el('b', { text: cfg.profile.name, style: 'color:var(--text)' }));
+    who.appendChild(DT.el('b', { text: cfg.profile.name, style: 'color:var(--rig-ink)' }));
     who.appendChild(document.createTextNode('. Everything on this page is for this profile only.'));
   }
 

@@ -279,13 +279,21 @@ Tesla only lets its browser take over the entire display in Park. While driving,
 - YouTube's terms don't allow downloading videos outside their own apps. Keep this for your own use, not as a public service.
 - Cloudflare's terms limit using its network mainly for video. A personal tunnel for one car is low volume, but if that's a concern, use a port forward with a reverse proxy such as Caddy instead.
 
+## The look
+
+The pages are drawn in the style of Rig UI, a component library by the same author: its colours, corner radii and shadows, with buttons, fields, cards, tabs, the toggle group, the alert and the player's bar each drawn the way the matching Rig UI component is. It is the style only. The pages are still plain HTML with one stylesheet, `server/public/app.css`, and don't load the component library, so there is none of its motion or sound.
+
+- The tokens at the top of `app.css` (`--rig-bg`, `--rig-accent` and so on) are copied from Rig UI's `rig.css`. To pick up a change there, copy the three token blocks across again: light, dark by the device's setting, and dark by `data-theme`.
+- Rig UI's amber "signal" colour is left out on purpose. The seek bar, watched-so-far marks and focus rings are the accent blue.
+- The phone pages (remote, setup, sign-in, Admin) follow the phone's light or dark setting. The car page is always dark, because it is a video player on a screen next to the driver: `car.html` says `data-theme="dark"`. Take that attribute off and it follows the car's browser instead.
+
 ## Project layout
 
 ```
 scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder and checker
 shortcut/        The iPhone Shortcut, unsigned, for reading
 server/src/      Node server: auth, state, yt-dlp, ffmpeg streaming, TS chunker
-server/public/   Car page, phone remote, setup page, JSMpeg
+server/public/   Car page, phone remote, setup page, Admin, the one stylesheet (app.css), JSMpeg
 server/test/     Unit tests (npm test)
 test/            The original side-by-side Drive test page
 ```

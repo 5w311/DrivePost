@@ -54,6 +54,7 @@
   function render() {
     if (!state) return;
     $('#carDot').classList.toggle('on', state.carOnline);
+    $('#carDot').parentNode.classList.toggle('on', state.carOnline);   // the badge around it turns green too
     $('#carText').textContent = state.carOnline ? 'Car connected' : 'Car offline';
 
     var np = $('#np');
@@ -198,7 +199,7 @@
   }
 
   function resultRow(item) {
-    var wrap = el('div', { style: 'border-bottom:1px solid var(--line)' });
+    var wrap = el('div', { style: 'border-bottom:1px solid var(--rig-line)' });
     var row = DT.itemRow(item, { progress: state && state.progress[item.id] });
     row.style.borderBottom = '0';
     wrap.appendChild(row);
