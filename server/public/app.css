@@ -505,6 +505,12 @@ body.theater .stage { max-height: calc(100vh - 150px); width: min(100%, calc((10
   .layout { grid-template-columns: 1fr; }
   /* Tall enough to scroll right up under the top bar. */
   .side { border-left: 0; border-top: 1px solid var(--rig-line); min-height: calc(100vh - 69px); scroll-margin-top: 69px; }
+  /* Here a list is as tall as its rows and the page does the scrolling. Left
+     as a scrolling box of its own that keeps scrolling to itself (as it is
+     beside the video, on a wide screen), it would have nothing to scroll and
+     still hold on to every swipe that starts on it: the page wouldn't move
+     under a finger put down on a row. */
+  .panel { overflow-y: visible; overscroll-behavior: auto; }
   /* As wide as fits, but short enough that the title under it stays in view. */
   .stage, body.theater .stage {
     max-height: calc(100vh - 170px);
