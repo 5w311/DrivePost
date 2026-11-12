@@ -120,6 +120,12 @@
     $('#noProfiles').classList.toggle('hidden', !!view.profiles.length);
 
     $('#build').textContent = view.server.version;
+    // "3faa11d Title of the update", when the server was told as it was built.
+    $('#commit').textContent = view.server.commit || 'Not recorded for this build. It shows after the next automatic update.';
+    if (view.server.commits) {
+      $('#commitsLink').href = view.server.commits;
+      $('#commitsLink').textContent = view.server.commits.replace(/^https:\/\//, '');
+    }
     $('#since').textContent = new Date(view.server.startedAt).toLocaleString([], {
       weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
     });

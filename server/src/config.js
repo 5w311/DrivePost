@@ -49,6 +49,10 @@ export const config = {
   // makes to fill the list beside a video. No account, no key.
   relatedUrl: env.RELATED_URL || 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false',
 
+  // Which update is running: "3faa11d Title of the commit". Baked into the
+  // image when it is built by the updater; empty otherwise.
+  commit: (env.DRIVEPOST_COMMIT || '').trim().slice(0, 160),
+
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   maxStreams: int('MAX_STREAMS', 3),
   defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',

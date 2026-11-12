@@ -1,6 +1,11 @@
 services:
   drivepost:
-    build: ./server
+    build:
+      context: ./server
+      args:
+        # Set by scripts/auto-update.sh; empty when built by hand, and the
+        # Admin page then shows the build code only.
+        COMMIT: "${DRIVEPOST_COMMIT:-}"
     container_name: drivepost
     restart: unless-stopped
     env_file: .env

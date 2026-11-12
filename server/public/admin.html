@@ -39,7 +39,7 @@
           </form>
           <p class="muted" style="font-size:14px;margin-bottom:0">Tell the person their passcode: they type it once in their car at this same address.</p>
         </details>
-        <p class="muted" style="font-size:14px;margin-bottom:0">Each profile has its own passcode, Up Next, Recent, settings, paired phones and Send to Car link. Phones pair from their own car's screen.</p>
+        <p class="muted" style="font-size:14px;margin-bottom:0">Each profile has its own passcode, Up Next, Recent, searches, recommendations, settings, paired phones and Send to Car link. Phones pair from their own car's screen.</p>
       </div>
     </section>
 
@@ -47,10 +47,11 @@
       <div class="card-head"><h2>Server</h2></div>
       <div class="card-body">
         <div class="kv" style="margin-top:0">
-          <div class="k muted">Build</div><div class="code" id="build">…</div>
+          <div class="k muted">Version</div><div class="code" id="commit">…</div>
           <div class="k muted">Running since</div><div class="code" id="since">…</div>
+          <div class="k muted">Build</div><div class="code" id="build">…</div>
         </div>
-        <p class="muted" style="font-size:14px">The build changes whenever an update changes the app's pages, and the time is when the server last started, so both tell you an update went in.</p>
+        <p class="muted" style="font-size:14px"><b>Version</b> is the update that is running: its ID on GitHub, then its title. The newest one is at the top of the list at <a id="commitsLink" href="https://github.com/5w311/DrivePost/commits" target="_blank" rel="noopener">github.com/5w311/DrivePost/commits</a>, so if the IDs match, you're up to date. <b>Running since</b> is when the server last started. <b>Build</b> is a code the server works out from its own pages; it changes when they do, and isn't the same as the ID.</p>
         <button id="adminOut" type="button">Sign out of Admin on this device</button>
         <p class="muted" style="font-size:14px;margin-bottom:0">Admin is opened with the passcode set as <b>DRIVE_PASSCODE</b> in the server's <b>.env</b> file. That passcode opens only this page: it isn't a profile's passcode and can't be used as one. Changing it there signs every device out of Admin.</p>
       </div>

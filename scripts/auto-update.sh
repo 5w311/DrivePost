@@ -17,6 +17,7 @@ STATE_DIR="$REPO/.auto-update"          # ignored by git
 DEPLOYED="$STATE_DIR/deployed"          # commit that is built and running
 FAILED="$STATE_DIR/failed"              # commit whose build last failed
 RENAMING="$STATE_DIR/renaming"          # commit the switch to the new name was last tried for
+STAMPED="$STATE_DIR/stamped"            # commit a rebuild just to record its ID was last tried for
 RETRY_AFTER_MIN=60                      # how long to wait before retrying a failed commit
 mkdir -p "$STATE_DIR"
 
@@ -51,14 +52,34 @@ left_over() {
 }
 
 FINISH_RENAME=no
+STAMP_ONLY=no   # nothing new to install; only telling the app which commit it is
 if left_over && [ "$REMOTE" != "$(cat "$RENAMING" 2>/dev/null || echo none)" ]; then
   FINISH_RENAME=yes   # once per commit; after that the usual retry wait applies
 fi
 
+# Does the running app know which commit it is? It shows that on its Admin
+# page, and only knows if it was told when its image was built (below). An
+# image built by hand, or by a copy of this script from before it did the
+# telling, wasn't. No running app, or one that can't be asked, counts as yes.
+knows_its_commit() {
+  local id said
+  for id in $(containers_of "$SERVICE"); do
+    said="$(docker exec "$id" sh -c 'printf %s "${DRIVEPOST_COMMIT:-}"' 2>/dev/null)" || continue
+    said="${said%% *}"   # the ID is the first word
+    [ -n "$said" ] && [ "${REMOTE#"$said"}" != "$REMOTE" ] || return 1
+  done
+  return 0
+}
+
 if [ "$FINISH_RENAME" = no ]; then
   # Nothing new since the last successful build? Done. (On the very first run
   # there is no record yet, so it builds once to be sure what's running.)
-  [ "$REMOTE" = "$(cat "$DEPLOYED" 2>/dev/null || echo none)" ] && exit 0
+  if [ "$REMOTE" = "$(cat "$DEPLOYED" 2>/dev/null || echo none)" ]; then
+    # ...unless the app doesn't know its commit: then build once more to tell
+    # it. The code is the same, so that takes seconds. Once per commit.
+    if knows_its_commit || [ "$REMOTE" = "$(cat "$STAMPED" 2>/dev/null || echo none)" ]; then exit 0; fi
+    STAMP_ONLY=yes
+  fi
 
   # Don't hammer a commit that fails to build.
   if [ -f "$FAILED" ] && [ "$REMOTE" = "$(cat "$FAILED")" ] \
@@ -81,11 +102,16 @@ watching() {
   return 1
 }
 if watching; then
-  log "Update to ${REMOTE:0:7} is waiting: a video is playing."
+  [ "$STAMP_ONLY" = yes ] || log "Update to ${REMOTE:0:7} is waiting: a video is playing."
   exit 0
 fi
 
-log "Updating ${BRANCH} to ${REMOTE:0:7}..."
+if [ "$STAMP_ONLY" = yes ]; then
+  echo "$REMOTE" > "$STAMPED"
+  log "Building ${REMOTE:0:7} once more so its Admin page can say which update it is..."
+else
+  log "Updating ${BRANCH} to ${REMOTE:0:7}..."
+fi
 if ! git merge --ff-only --quiet "origin/$BRANCH" 2>"$STATE_DIR/git-error"; then
   log "Can't update: files in this folder were changed by hand and clash with the update."
   log "Run 'git status' in $REPO to see them. $(head -1 "$STATE_DIR/git-error")"
@@ -106,6 +132,10 @@ fi
 # but couldn't start (say, because the port was taken) has no network, and
 # would come up unreachable if it were simply started again.
 if [ -f "$RENAMING" ] || [ -f "$FAILED" ]; then UP+=(--force-recreate); fi
+
+# Tell the build which commit this is, for the Admin page: "3faa11d Title".
+DRIVEPOST_COMMIT="$(git log -1 --format='%h %s' | cut -c1-120)"
+export DRIVEPOST_COMMIT
 
 if "${COMPOSE[@]}" "${UP[@]}"; then
   echo "$REMOTE" > "$DEPLOYED"

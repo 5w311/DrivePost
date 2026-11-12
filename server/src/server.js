@@ -87,6 +87,13 @@ function profileLabel(id) {
   return auth.profiles.length > 1 && p ? p.name : '';
 }
 
+// Where the list of updates is, to compare the running one against: the
+// repo the Feedback button points at (so a fork points at itself).
+function commitsUrl() {
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/new/.exec(config.feedbackUrl || '');
+  return `https://github.com/${m ? m[1] : '5w311/DrivePost'}/commits`;
+}
+
 // Everything the Admin page shows: the profiles and whether their cars are
 // on, who is waiting for a profile, and which build is running.
 function adminView() {
@@ -98,7 +105,7 @@ function adminView() {
     }),
     requests: auth.listRequests(),
     allowRequests: auth.allowRequests,
-    server: { version: VERSION, startedAt: STARTED },
+    server: { version: VERSION, commit: config.commit, commits: commitsUrl(), startedAt: STARTED },
   };
 }
 
@@ -625,5 +632,5 @@ process.on('SIGINT', shutdown);
 if (auth.profile(ORIGINAL)) storeFor(ORIGINAL); // a server from before profiles: its one car, ready as before
 startAutoUpdate();
 server.listen(config.port, () => {
-  console.log(`DrivePost listening on :${config.port}`);
+  console.log(`DrivePost listening on :${config.port}${config.commit ? ` (${config.commit})` : ''}`);
 });

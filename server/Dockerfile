@@ -26,5 +26,12 @@ USER node
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Which update this is: the commit's short ID and title, when whoever builds
+# the image says so (scripts/auto-update.sh does). Shown on the Admin page.
+# Last, so that a new commit with the same code rebuilds nothing above.
+ARG COMMIT=""
+ENV DRIVEPOST_COMMIT="$COMMIT"
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "src/server.js"]

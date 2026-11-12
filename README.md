@@ -190,6 +190,8 @@ To have the machine update itself whenever something is pushed to the repo, run 
 
 It sets up a timer that checks GitHub every 2 minutes. When there are new commits and nobody is watching a video, it pulls them and rebuilds. If a build fails, the version that was running stays up. An open car page reloads itself once the new version is running.
 
+To see which update is running, open **Admin** and look at **Version** under **Server**: it shows the commit's short ID and title, the same ones GitHub lists. The updater tells the build which commit it is. An image built by hand (`docker compose up -d --build`) isn't told, so Version says it wasn't recorded; the updater notices on its next run and builds once more to record it, which takes seconds because the code is the same.
+
 | To do this | Run |
 |---|---|
 | See what it did | `journalctl -u drivepost-update -n 30 --no-pager` |
