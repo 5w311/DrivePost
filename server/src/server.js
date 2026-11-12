@@ -87,6 +87,64 @@ function profileLabel(id) {
   return auth.profiles.length > 1 && p ? p.name : '';
 }
 
+// ---------- an update that is waiting for a video to stop ----------
+// The updater on this machine (scripts/auto-update.sh) won't restart the app
+// while a video is playing. While it holds an update back for that, it keeps
+// a request open here saying so. The Admin page then shows the update, with
+// a button to let it in anyway, and pressing that answers the updater at once.
+const update = {
+  waiting: null, // { commit: "abc1234 Title", since, at }: the update being held back
+  forcedAt: 0, // when Admin said to install it regardless
+  goingInAt: 0, // when the updater was told to go ahead
+  failed: null, // { commit, at }: an update that couldn't be installed
+  held: new Set(), // the updater's open requests: functions that answer them
+};
+const WAITING_FRESH_MS = 4 * 60 * 1000; // while it waits, the updater is back within this long
+const FORCED_FOR_MS = 10 * 60 * 1000; // long enough for the updater's next run, not for ever if that never comes
+const GOING_IN_FOR_MS = 20 * 60 * 1000; // a build that hasn't replaced this app by then didn't
+const FAILED_SHOWN_MS = 60 * 60 * 1000; // the updater tries a failed update again after an hour
+const HOLD_AT_MOST_S = 110;
+
+const updateForced = () => !!update.forcedAt && Date.now() - update.forcedAt < FORCED_FOR_MS;
+const updateGoingIn = () => !!update.goingInAt && Date.now() - update.goingInAt < GOING_IN_FOR_MS;
+// The update being held back, for as long as the updater keeps saying so
+// (or is on the line, or is busy installing it).
+function waitingUpdate() {
+  const w = update.waiting;
+  if (!w) return null;
+  if (update.held.size || updateGoingIn() || Date.now() - w.at <= WAITING_FRESH_MS) return w;
+  return null;
+}
+// Is a video playing on any profile's car?
+const someonePlaying = () => [...stores.values()].some((st) => !!st.now && !st.paused && st.carOnline);
+
+// What the updater is told when it asks whether it may restart the app.
+// "Not busy" is its go-ahead: it starts installing straight away.
+function updateAnswer() {
+  const forced = updateForced();
+  const busy = someonePlaying() && !forced;
+  if (!busy) update.goingInAt = Date.now();
+  return { busy, forced };
+}
+// For the Admin page: the update that is waiting (or that failed), and how far along it is.
+function updateView() {
+  const w = waitingUpdate();
+  if (w) {
+    const state = updateGoingIn() ? 'installing' : updateForced() ? 'forced' : someonePlaying() ? 'waiting' : 'next';
+    return { commit: w.commit, since: w.since, state };
+  }
+  const f = update.failed;
+  if (f && Date.now() - f.at < FAILED_SHOWN_MS) return { commit: f.commit, since: f.at, state: 'failed' };
+  return null;
+}
+// Only this machine itself may ask (the updater does, from inside the
+// container): never anything that came in through the tunnel.
+function fromThisMachine(req) {
+  const from = req.socket.remoteAddress || '';
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from);
+  return local && !req.headers['x-forwarded-for'] && !req.headers['cf-connecting-ip'];
+}
+
 // Where the list of updates is, to compare the running one against: the
 // repo the Feedback button points at (so a fork points at itself).
 function commitsUrl() {
@@ -105,7 +163,7 @@ function adminView() {
     }),
     requests: auth.listRequests(),
     allowRequests: auth.allowRequests,
-    server: { version: VERSION, commit: config.commit, commits: commitsUrl(), startedAt: STARTED },
+    server: { version: VERSION, commit: config.commit, commits: commitsUrl(), startedAt: STARTED, update: updateView() },
   };
 }
 
@@ -224,11 +282,48 @@ async function route(req, res) {
   // For the update script on this machine: is a video playing right now?
   // Only answered from inside the container itself, never through the tunnel.
   if (req.method === 'GET' && p === '/internal/busy') {
-    const from = req.socket.remoteAddress || '';
-    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from);
-    if (!local || req.headers['x-forwarded-for'] || req.headers['cf-connecting-ip']) return send(res, 404, { error: 'Not found' });
-    // Busy if any profile's car is playing.
-    return send(res, 200, { busy: [...stores.values()].some((st) => !!st.now && !st.paused && st.carOnline) });
+    if (!fromThisMachine(req)) return send(res, 404, { error: 'Not found' });
+    // Busy if any profile's car is playing, unless Admin said to update anyway.
+    return send(res, 200, updateAnswer());
+  }
+  // From the same script, about an update it has: either that it is holding
+  // it back because a video is playing, or that it couldn't install it.
+  if (req.method === 'POST' && p === '/internal/update') {
+    if (!fromThisMachine(req)) return send(res, 404, { error: 'Not found' });
+    const body = await readJson(req);
+    const commit = String(body.commit || '').replace(/\s+/g, ' ').trim().slice(0, 160) || 'An update';
+    const now = Date.now();
+    if (body.failed) {
+      Object.assign(update, { waiting: null, forcedAt: 0, goingInAt: 0, failed: { commit, at: now } });
+      return send(res, 200, { ok: true });
+    }
+    const since = update.waiting && update.waiting.commit === commit ? update.waiting.since : now;
+    // (An updater that says it is waiting isn't installing anything, whatever it was told before.)
+    Object.assign(update, { waiting: { commit, since, at: now }, failed: null, goingInAt: 0 });
+    // It can ask to be kept waiting for the answer: then it hears the moment
+    // Admin says to go ahead, and otherwise how things stand when the time is up.
+    const hold = Math.min(Math.max(Number(body.hold) || 0, 0), HOLD_AT_MOST_S);
+    if (hold && someonePlaying() && !updateForced()) {
+      let gone = false; // the updater hung up
+      await new Promise((resolve) => {
+        const answer = () => {
+          clearTimeout(timer);
+          update.held.delete(answer);
+          res.off('close', hungUp);
+          resolve();
+        };
+        const hungUp = () => {
+          gone = true;
+          answer();
+        };
+        const timer = setTimeout(answer, hold * 1000);
+        update.held.add(answer);
+        res.on('close', hungUp);
+      });
+      if (gone) return undefined;
+      if (update.waiting) update.waiting.at = Date.now();
+    }
+    return send(res, 200, updateAnswer());
   }
 
   // Admin is opened by typing the server's own passcode (DRIVE_PASSCODE).
@@ -305,6 +400,35 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && p === '/api/admin') {
     if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    return send(res, 200, adminView());
+  }
+  // Let a waiting update in although a video is playing, or take that back
+  // while the updater hasn't heard yet.
+  if (req.method === 'POST' && p === '/api/admin/update') {
+    if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    const body = await readJson(req);
+    const w = waitingUpdate();
+    if (!w) return send(res, 409, { error: 'No update is waiting right now.' });
+    if (!body.force) {
+      if (updateGoingIn()) return send(res, 409, { error: 'It is already being installed.' });
+      update.forcedAt = 0;
+    } else if (!updateForced()) {
+      update.forcedAt = Date.now();
+      console.log(`[admin] told the updater to install ${w.commit} now${someonePlaying() ? ', although a video is playing' : ''}`);
+      // Every screen is told, and the ones it will interrupt are told what happens to their video.
+      for (const [id, st] of stores) {
+        const playing = !!st.now && !st.paused && st.carOnline;
+        broadcast(id, {
+          type: 'toast',
+          message: playing
+            ? 'DrivePost is updating. The video will stop when the server restarts, then wait for a tap.'
+            : 'DrivePost is updating. It will be back in a moment.',
+        });
+      }
+      // If the updater is waiting on the line, it hears now.
+      if (update.held.size) update.goingInAt = Date.now();
+      for (const answer of [...update.held]) answer();
+    }
     return send(res, 200, adminView());
   }
   // Adding, renaming and removing profiles, and answering people who asked for one.

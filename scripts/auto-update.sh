@@ -3,8 +3,9 @@
 # pull them and rebuild. Meant to be run every couple of minutes by the timer
 # that scripts/install-auto-update.sh sets up. Safe to run by hand too.
 #
-# It waits while someone is watching, never touches your .env or data, and
-# leaves the running version alone if the new one fails to build.
+# It waits while someone is watching (unless "Force update" is tapped on the
+# app's Admin page), never touches your .env or data, and leaves the running
+# version alone if the new one fails to build.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -19,13 +20,24 @@ FAILED="$STATE_DIR/failed"              # commit whose build last failed
 RENAMING="$STATE_DIR/renaming"          # commit the switch to the new name was last tried for
 STAMPED="$STATE_DIR/stamped"            # commit a rebuild just to record its ID was last tried for
 RETRY_AFTER_MIN=60                      # how long to wait before retrying a failed commit
+# While a video is playing, an update waits. This script then stays on the
+# line to the app, so that "Force update" on its Admin page takes effect at
+# once instead of at the timer's next run. It asks for an answer within
+# ASK_FOR seconds, over and over, for at most WAIT_AT_MOST seconds a run
+# (the timer gives one run 45 minutes, and a build needs its share of that).
+ASK_FOR="${DRIVEPOST_ASK_FOR:-100}"
+WAIT_AT_MOST="${DRIVEPOST_WAIT_AT_MOST:-900}"
 mkdir -p "$STATE_DIR"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
-# One run at a time (a first build on a Pi can outlast the timer).
+# One run at a time (a first build on a Pi can outlast the timer, and a run
+# that is waiting for a video to stop stays for a while).
 exec 9>"$STATE_DIR/lock"
-flock -n 9 || exit 0
+if ! flock -n 9; then
+  if [ -t 1 ]; then echo "The updater is already running: installing an update, or waiting for a video to stop."; fi
+  exit 0
+fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if ! git fetch --quiet origin "$BRANCH" 2>/dev/null; then
@@ -101,9 +113,53 @@ watching() {
   done
   return 1
 }
+# Tell the app about the update it isn't running yet, so its Admin page can
+# show it. "$1" is how many seconds the app may take to answer, or "failed".
+# Asked to wait, the app answers early if Admin says to install anyway.
+#   0   nothing is playing any more: go ahead
+#   11  Admin said to install it anyway: go ahead
+#   12  a video is still playing
+#   else: the app can't be asked like this (an older version, or it went away)
+tell_app() {
+  local id title
+  title="$(git log -1 --format='%h %s' "$REMOTE" 2>/dev/null | cut -c1-120)" || true
+  for id in $(containers_of "$SERVICE"); do
+    docker exec -e UPDATE_TITLE="$title" -e UPDATE_ABOUT="$1" "$id" node -e \
+      "const a=process.env.UPDATE_ABOUT;fetch('http://127.0.0.1:8080/internal/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(a==='failed'?{commit:process.env.UPDATE_TITLE,failed:true}:{commit:process.env.UPDATE_TITLE,hold:+a||0})}).then(r=>r.ok?r.json():Promise.reject()).then(j=>process.exit(j.forced?11:j.busy?12:0)).catch(()=>process.exit(13))" \
+      >/dev/null 2>&1
+    return $?
+  done
+  return 13
+}
+
 if watching; then
-  [ "$STAMP_ONLY" = yes ] || log "Update to ${REMOTE:0:7} is waiting: a video is playing."
-  exit 0
+  [ "$STAMP_ONLY" = yes ] && exit 0
+  log "Update to ${REMOTE:0:7} is waiting: a video is playing."
+  # Run by hand: say so, let the Admin page know, and leave it to the timer.
+  if [ -t 1 ]; then tell_app 0 || true; exit 0; fi
+  WAIT_UNTIL=$((SECONDS + WAIT_AT_MOST))
+  while :; do
+    ASKED_AT=$SECONDS
+    SAID=0; tell_app "$ASK_FOR" || SAID=$?
+    case "$SAID" in
+      0)  log "The video has stopped."; break ;;
+      11) log "Admin said to install it now, video or not."; break ;;
+      12) ;;
+      *)  exit 0 ;;
+    esac
+    # Still playing. An app that answered straight away isn't one that waits
+    # on the line: leave it to the timer rather than ask in a tight loop.
+    [ $((SECONDS - ASKED_AT)) -ge $((ASK_FOR / 2)) ] || exit 0
+    [ "$SECONDS" -lt "$WAIT_UNTIL" ] || exit 0
+    # Something newer may have been pushed in the meantime.
+    if git fetch --quiet origin "$BRANCH" 2>/dev/null; then
+      NEWER="$(git rev-parse "origin/$BRANCH")"
+      if [ "$NEWER" != "$REMOTE" ]; then
+        REMOTE="$NEWER"
+        log "Update to ${REMOTE:0:7} is waiting: a video is playing."
+      fi
+    fi
+  done
 fi
 
 if [ "$STAMP_ONLY" = yes ]; then
@@ -116,6 +172,7 @@ if ! git merge --ff-only --quiet "origin/$BRANCH" 2>"$STATE_DIR/git-error"; then
   log "Can't update: files in this folder were changed by hand and clash with the update."
   log "Run 'git status' in $REPO to see them. $(head -1 "$STATE_DIR/git-error")"
   echo "$REMOTE" > "$FAILED"
+  tell_app failed || true
   exit 1
 fi
 
@@ -146,5 +203,6 @@ if "${COMPOSE[@]}" "${UP[@]}"; then
 else
   echo "$REMOTE" > "$FAILED"
   log "Update failed; the lines above say why. Will retry in ${RETRY_AFTER_MIN} minutes, or on the next push."
+  tell_app failed || true   # if the app that was running still is, its Admin page says so
   exit 1
 fi

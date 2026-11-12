@@ -155,6 +155,7 @@ Each car that's playing needs its own share of the server and of your upload. Pa
 - People asking for a profile show up in Admin within a few seconds while the page is open. There is no notification anywhere else, so open Admin when someone tells you they've asked.
 - From the profile list you can rename a profile, give it a new passcode, sign its devices out, or remove it. Removing a profile deletes its Up Next, history and settings.
 - Pull down from the top of the page to reload it. That is for when Admin is on a phone's home screen, where there is no browser button to do it with.
+- When an update hasn't been installed because a video is playing, **Server** says so, with the update's ID and title and a **Force update** button. See "Automatic updates" below.
 - To stop taking requests, untick **Let new people ask for a profile**. The sign-in page then only takes passcodes that already work.
 - You can also add a profile yourself: open **Add a profile yourself instead**, enter a name and a passcode, and tell the person the passcode.
 
@@ -196,6 +197,10 @@ To have the machine update itself whenever something is pushed to the repo, run 
 ```
 
 It sets up a timer that checks GitHub every 2 minutes. When there are new commits and nobody is watching a video, it pulls them and rebuilds. If a build fails, the version that was running stays up. An open car page reloads itself once the new version is running.
+
+**An update never interrupts a video by itself.** While one is playing, the update waits, and goes in within a couple of minutes of the video being paused or ending. Meanwhile **Admin** shows it under **Server**: "An update is waiting", with the update's ID and title. Tap **Force update** there to install it right away. The video plays on while the new version is built, stops when the server restarts, and then waits for a tap in the car, at the spot it had reached. The car and the phone get a notice saying why. If the video is only paused, the button reads **Update now** and does the same without asking.
+
+For that to be immediate, the updater doesn't just look every two minutes while an update is waiting: it stays on the line to the app (for up to 15 minutes a run), which answers it the moment you tap the button. In the short gap between two runs, the page says the update goes in at the next check, and offers to take it back until then. If an update can't be installed, the same place says so and where the reason is; the version that was running stays up.
 
 To see which update is running, open **Admin** and look at **Version** under **Server**: it shows the commit's short ID and title, the same ones GitHub lists. The updater tells the build which commit it is. An image built by hand (`docker compose up -d --build`) isn't told, so Version says it wasn't recorded; the updater notices on its next run and builds once more to record it, which takes seconds because the code is the same.
 

@@ -46,6 +46,16 @@
     <section class="card">
       <div class="card-head"><h2>Server</h2></div>
       <div class="card-body">
+        <div id="updateBox" class="update-box hidden">
+          <div class="update-title" id="updateTitle">An update is waiting</div>
+          <div class="code" id="updateCommit"></div>
+          <p id="updateWhy" class="muted"></p>
+          <div class="code hidden" id="updateLook"></div>
+          <div class="btn-row" id="updateBtns">
+            <button id="forceUpdate" class="primary" type="button">Force update</button>
+            <button id="cancelForce" type="button">Wait for the video after all</button>
+          </div>
+        </div>
         <div class="kv" style="margin-top:0">
           <div class="k muted">Version</div><div class="code" id="commit">…</div>
           <div class="k muted">Running since</div><div class="code" id="since">…</div>

@@ -129,7 +129,57 @@
     $('#since').textContent = new Date(view.server.startedAt).toLocaleString([], {
       weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
     });
+    showUpdate(view.server.update);
   }
+
+  // ---- an update that hasn't been installed because a video is playing ----
+  var UPDATE_SAYS = {
+    waiting: ['An update is waiting',
+      "It hasn't been installed because a video is playing. It goes in by itself within a couple of minutes of the video being paused or ending. Force update installs it now: the video keeps playing while the new version is built, stops when the server restarts, and then waits for a tap in the car."],
+    next: ['An update is waiting',
+      'Nothing is playing now, so it goes in by itself within a couple of minutes.'],
+    forced: ['An update is about to be installed',
+      'It goes in at the server\'s next check, within about two minutes. The video stops when the server restarts, then waits for a tap in the car.'],
+    installing: ['Installing an update',
+      'The new version is being built. When it is ready the server restarts: a video that is playing stops then and waits for a tap in the car. This page shows the new version by itself.'],
+    failed: ["An update couldn't be installed",
+      'The version below is still running. The server tries again in an hour, or when the next update arrives. Its log says what went wrong. To read it, run this on the server:']
+  };
+  var UPDATE_LOG = 'journalctl -u drivepost-update -n 30 --no-pager';
+  function showUpdate(u) {
+    $('#updateBox').classList.toggle('hidden', !u);
+    if (!u) return;
+    var says = UPDATE_SAYS[u.state] || UPDATE_SAYS.waiting;
+    $('#updateBox').classList.toggle('bad', u.state === 'failed');
+    $('#updateTitle').textContent = says[0];
+    $('#updateCommit').textContent = u.commit;
+    $('#updateWhy').textContent = says[1];
+    $('#updateLook').textContent = UPDATE_LOG;
+    $('#updateLook').classList.toggle('hidden', u.state !== 'failed');
+    var canForce = u.state === 'waiting' || u.state === 'next';
+    $('#forceUpdate').textContent = u.state === 'next' ? 'Update now' : 'Force update';
+    $('#forceUpdate').classList.toggle('hidden', !canForce);
+    $('#cancelForce').classList.toggle('hidden', u.state !== 'forced');
+    $('#updateBtns').classList.toggle('hidden', !canForce && u.state !== 'forced');
+  }
+  function forceUpdate(on) {
+    DT.api('/api/admin/update', { body: { force: on } }).then(function (v) {
+      took(v);
+      DT.toast(on ? 'Installing the update' : 'The update will wait for the video');
+    }).catch(function (e) {
+      if (signedOut(e)) return;
+      DT.toast(e.message);
+      refresh().catch(signedOut);
+    });
+  }
+  $('#forceUpdate').addEventListener('click', function () {
+    var u = view && view.server.update;
+    if (!u) return;
+    // Only ask when it would interrupt someone.
+    if (u.state === 'waiting' && !confirm('Install the update now? The video that is playing will stop when the server restarts, and wait for a tap in the car.')) return;
+    forceUpdate(true);
+  });
+  $('#cancelForce').addEventListener('click', function () { forceUpdate(false); });
 
   // Pull down from the top to reload: the only way to, when this page is on a phone's home screen.
   DT.pullToReload();
