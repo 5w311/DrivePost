@@ -147,13 +147,14 @@ Each car that's playing needs its own share of the server and of your upload. Pa
 
 ### Admin
 
-`https://your-address/admin` is where you run the server: it lists people waiting for a profile, every profile and whether its car is connected, and which build is running and since when.
+`https://your-address/admin` is where you run the server: it lists people waiting for a profile, every profile and whether its car is connected, and which update is running and since when.
 
 - **Admin is opened with `DRIVE_PASSCODE`**, the passcode in `.env`, and that passcode opens nothing else. It isn't a profile's passcode and can't be chosen as one. Typed on the ordinary sign-in page, it takes you to Admin.
 - **Being signed in to a profile doesn't open Admin.** A phone paired from a car's QR code is on that car's profile without ever having typed a passcode, so profiles and Admin are kept apart. The car page, the remote and Setup & sharing show nothing of Admin, and Admin has nothing of theirs.
 - It works from any device and doesn't touch the profile that device is on. The device stays signed in to Admin for 30 days, or until you tap **Sign out of Admin on this device**. Changing `DRIVE_PASSCODE` signs every device out of Admin.
 - People asking for a profile show up in Admin within a few seconds while the page is open. There is no notification anywhere else, so open Admin when someone tells you they've asked.
 - From the profile list you can rename a profile, give it a new passcode, sign its devices out, or remove it. Removing a profile deletes its Up Next, history and settings.
+- Pull down from the top of the page to reload it. That is for when Admin is on a phone's home screen, where there is no browser button to do it with.
 - To stop taking requests, untick **Let new people ask for a profile**. The sign-in page then only takes passcodes that already work.
 - You can also add a profile yourself: open **Add a profile yourself instead**, enter a name and a passcode, and tell the person the passcode.
 

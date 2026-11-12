@@ -212,6 +212,78 @@
   // titles to match on the spot (recently played); the rest come from
   // YouTube through the server. `opts.onPick(text)` runs when one is chosen.
   // `opts.max` limits the rows; `opts.reveal` scrolls the box into view on focus.
+  /*
+   * Pull down from the top of the page to reload it. A phone's own browser
+   * does this already, but a page added to the home screen has no browser
+   * around it, and so no way to reload at all.
+   *
+   * Nothing is held back from the page's own scrolling: this only watches a
+   * finger that starts at the very top and moves down, shows how far it has
+   * come, and reloads if it is let go past the mark.
+   */
+  DT.pullToReload = function () {
+    var NEED = 90; // how far down, in px of finger travel, counts as meaning it
+    var words = DT.el('span', { text: 'Pull to reload' });
+    var tip = DT.el('div', { class: 'pull-tip', 'aria-hidden': 'true' }, [DT.el('div', { class: 'pull-ring' }), words]);
+    document.body.appendChild(tip);
+    document.documentElement.classList.add('pulls-to-reload');
+    var startY = null;
+    var pulled = 0;
+    var going = false;
+
+    function atTop() {
+      return (window.pageYOffset || document.documentElement.scrollTop || 0) <= 0;
+    }
+    function show(px) {
+      pulled = px;
+      // Follows the finger at half speed, like the edge of the page does.
+      tip.style.transform = 'translate(-50%, ' + Math.min(px * 0.5, 70) + 'px)';
+      tip.style.opacity = px > 6 ? Math.min(1, px / (NEED * 0.6)) : 0;
+      tip.classList.toggle('ready', px >= NEED);
+      words.textContent = px >= NEED ? 'Release to reload' : 'Pull to reload';
+    }
+    function settle() {
+      startY = null;
+      tip.classList.add('settling');
+      show(0);
+    }
+
+    document.addEventListener('touchstart', function (ev) {
+      var a = document.activeElement;
+      var typing = !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+      // One finger, at the top, with nothing open over the page.
+      if (going || ev.touches.length !== 1 || !atTop() || typing || document.querySelector('.scrim')) {
+        startY = null;
+        return;
+      }
+      startY = ev.touches[0].clientY;
+      tip.classList.remove('settling');
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function (ev) {
+      if (startY === null || going) return;
+      if (ev.touches.length !== 1) return settle();
+      var dy = ev.touches[0].clientY - startY;
+      // Scrolled away from the top, or moving up: this is ordinary scrolling.
+      if (!atTop() || dy < -8) return settle();
+      show(Math.max(0, dy));
+    }, { passive: true });
+
+    function end() {
+      if (startY === null || going) return;
+      if (pulled >= NEED) {
+        going = true;
+        startY = null;
+        tip.classList.add('going');
+        words.textContent = 'Reloading\u2026';
+        // A moment for the words to show, then a fresh copy of the page.
+        setTimeout(function () { location.reload(); }, 250);
+      } else settle();
+    }
+    document.addEventListener('touchend', end, { passive: true });
+    document.addEventListener('touchcancel', function () { if (!going) settle(); }, { passive: true });
+  };
+
   // Rows for searches made before: tap one to run it again, × to forget it.
   DT.searchRows = function (searches, opts) {
     return searches.map(function (text) {

@@ -191,6 +191,27 @@ body.remote .suggest-row { min-height: 48px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Pull down from the top of the page to reload it (the Admin page). The tip
+   slides out from under the top bar as the finger moves down. */
+.pull-tip {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 58px); z-index: 30;
+  transform: translate(-50%, 0); opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 10px; padding: 9px 16px 9px 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45); font-size: 15px; color: var(--muted); white-space: nowrap;
+}
+.pull-tip.settling { transition: transform 0.2s ease, opacity 0.2s ease; }
+.pull-tip .pull-ring {
+  width: 18px; height: 18px; border-radius: 50%; flex: none;
+  border: 2.5px solid rgba(255,255,255,0.2); border-top-color: var(--muted);
+}
+.pull-tip.ready { color: var(--text); border-color: var(--accent); }
+.pull-tip.ready .pull-ring { border-color: rgba(62, 139, 255, 0.3); border-top-color: var(--accent); }
+.pull-tip.going { opacity: 1 !important; color: var(--text); }
+.pull-tip.going .pull-ring { animation: spin 0.7s linear infinite; border-top-color: var(--accent); }
+/* The page's own "pull to refresh", where the browser has one, would do the same thing twice. */
+html.pulls-to-reload, html.pulls-to-reload body { overscroll-behavior-y: contain; }
+
 .overlay {
   position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
   background: linear-gradient(transparent 45%, rgba(0,0,0,0.75));

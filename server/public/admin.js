@@ -131,6 +131,9 @@
     });
   }
 
+  // Pull down from the top to reload: the only way to, when this page is on a phone's home screen.
+  DT.pullToReload();
+
   $('#allowAsk').addEventListener('change', function () {
     var on = this.checked;
     act({ action: 'asking', on: on }, on ? 'New people can ask for a profile' : 'Nobody new can ask for a profile');
