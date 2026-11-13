@@ -86,6 +86,14 @@ test('the recording is turned into one fixed picture, whatever it comes as', () 
   assert.doesNotMatch(old, /libx264/);
 });
 
+test("the browser's own film of its screen is kept as it comes", () => {
+  const s = ingestArgs({ list: '/x/y/index.m3u8', size: '720', copy: true }).join(' ');
+  assert.match(s, /-i pipe:0 -map 0:v:0 -map 0:a:0\? -c copy -f hls -hls_time 1 /, 'cut into pieces, nothing converted');
+  assert.doesNotMatch(s, /libx264|scale=|-vf|aac/);
+  assert.match(s, /-hls_flags delete_segments\+independent_segments\+temp_file -hls_segment_filename \/x\/y\/s%06d\.ts \/x\/y\/index\.m3u8$/);
+  assert.match(ingestArgs({ list: '/x/index.m3u8', copy: true, audio: false }).join(' '), / -an -c copy /);
+});
+
 test('a list is read for how much of the stream there is', () => {
   assert.deepEqual(readList(''), { pieces: 0, ended: false });
   assert.deepEqual(readList('#EXTM3U\n#EXTINF:1.0,\na.ts\n#EXTINF:1.0,\nb.ts\n'), { pieces: 2, ended: false });
@@ -206,7 +214,15 @@ test('a recording that never becomes video fails in words', async () => {
 
 test('the car reads a page as live video from this machine', () => {
   const info = { inputs: [{ url: '/dev/shm/x/index.m3u8', list: true, mirror: true, hasVideo: true, hasAudio: true }], live: true, mirror: true, height: 720, fps: 30, duration: null };
-  assert.equal(chooseCodec('h264', info), 'mpeg1', 'converted, as live video is');
+  assert.equal(chooseCodec('mpeg1', info), 'mpeg1', 'the built-in player is sent MPEG-1');
+  assert.equal(chooseCodec('h264', info), 'h264', 'a car that can play H.264 is sent that: about half the data');
+  assert.equal(chooseCodec('h264', info, false), 'mpeg1', 'unless this machine has nothing to make it with');
+  const h = ffmpegArgs(info, 0, '720', 48000, 'h264').join(' ');
+  assert.match(h, /-c:v libx264 -preset superfast -tune zerolatency .*-maxrate 1600k -bufsize 3200k/, 'made here, at a rate a car on mobile data can take');
+  assert.match(h, /scale=-2:'min\(720,ih\)':flags=bicubic,fps=30,format=yuv420p/);
+  assert.doesNotMatch(h, /-c:v copy|mpeg1video/);
+  assert.match(ffmpegArgs(info, 0, '360', 48000, 'h264').join(' '), /-maxrate 450k/, 'and less at a lower quality');
+  assert.match(ffmpegArgs(info, 0, '1080', 48000, 'mpeg1').join(' '), /min\(720,ih\).* -b:v 2600k /, 'asked for at 1080p, a page filmed at 720p is sent as 720p is');
   const args = ffmpegArgs(info, 0, '480', 48000, 'mpeg1');
   const s = args.join(' ');
   assert.match(s, /-live_start_index -3 -max_reload 24 -m3u8_hold_counters 24 -i \/dev\/shm\/x\/index\.m3u8/);
@@ -289,6 +305,37 @@ test('pausing a page and playing it again starts a fresh stream', () => {
   s.command('pause');
   s.command('resume');
   assert.equal(s.now.seq, other);
+});
+
+test("the car's own buttons pause, play and skip in a page's video", () => {
+  const s = makeStore();
+  const asked = [];
+  s.on('pageMedia', (what, by) => asked.push(`${what} ${by}`));
+  s.setPage({ ...TV, phase: 'live' });
+  s.command('play', { item: { id: PAGE_ID } });
+  assert.deepEqual(asked.splice(0), ['show 0'], 'put on: a video that was paused from here plays on');
+  s.command('pause');
+  s.command('pause');
+  assert.deepEqual(asked.splice(0), ['pause 0'], 'paused once, however often it is pressed');
+  s.command('resume');
+  assert.deepEqual(asked.splice(0), ['play 0']);
+  s.command('toggle');
+  s.command('toggle');
+  assert.deepEqual(asked.splice(0), ['pause 0', 'play 0']);
+  const seq = s.now.seq;
+  s.command('skip', { by: -10 });
+  s.command('skip', { by: 10 });
+  assert.deepEqual(asked.splice(0), ['seek -10', 'seek 10'], 'ten seconds back and on are asked of the page');
+  assert.equal(s.now.seq, seq, 'and the car keeps the stream it has');
+  s.command('seek', { to: 50 });
+  assert.deepEqual(asked, [], 'a page has no place of its own to go to');
+
+  // Any other video is this server's to pause and skip in.
+  s.command('play', { item: A });
+  s.command('pause');
+  s.command('resume');
+  s.command('skip', { by: 10 });
+  assert.deepEqual(asked, []);
 });
 
 test('when the page is closed the car moves on', () => {

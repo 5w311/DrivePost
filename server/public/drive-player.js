@@ -24,6 +24,9 @@
 
   var START_BUFFER = 1.5; // seconds buffered before starting
   var REBUFFER = 3; // seconds buffered before resuming after running dry
+  // ...and for a live stream, which can't be loaded ahead: what it waits for
+  // here is all it has in hand when the connection dips again.
+  var LIVE_REBUFFER = 6;
   var STALL_TIMEOUT = 20; // seconds with no data before giving up on a socket
   var PREROLL = 0.1; // start the clock this far before the first frame
   var VIDEO_LEAD = 0.02; // show a frame this long before it's due (about one repaint)
@@ -1019,7 +1022,7 @@
       // Sound arrives a little behind the picture, so count whichever is shorter.
       var have = this.audioArriving() ? Math.min(this.lastVideoPts, this.lastAudioPts) : this.lastVideoPts;
       var from = fresh ? Math.max(this.clock, start - PREROLL) : this.clock;
-      var need = this.jump !== null ? JUMP_BUFFER : this.everPlayed ? REBUFFER : START_BUFFER;
+      var need = this.jump !== null ? JUMP_BUFFER : this.everPlayed ? (this.live ? LIVE_REBUFFER : REBUFFER) : START_BUFFER;
       var enough = have - from >= need || this.noMore();
       if (this.noMore()) video.flush();
       if (this.sink && enough && video.readyFor(start)) {

@@ -43,6 +43,10 @@ services:
       - drivepost
     networks:
       - fence
+    environment:
+      # The browser's clock. With TZ in .env (say TZ=America/New_York) a
+      # site's TV guide shows your hours; without it, the browser is on UTC.
+      TZ: "${TZ:-}"
     volumes:
       - browser-key:/run/drivepost-browser:ro
       # What each profile is signed in to on the sites it has opened.

@@ -426,14 +426,21 @@
     control.cmd('toggle');
     bump();
   });
+  // Ten seconds back or on. A page's video isn't here to skip in: it is in
+  // the server's browser, which is asked to (and the car shows it a few
+  // seconds later, as it does everything on a page).
+  function skipBy(by) {
+    if (state && state.now && state.now.id === 'page') control.cmd('skip', { by: by });
+    else skipTo(currentTime() + by);
+  }
   $('#back10').addEventListener('click', function (e) {
     e.stopPropagation();
-    skipTo(currentTime() - 10);
+    skipBy(-10);
     bump();
   });
   $('#fwd10').addEventListener('click', function (e) {
     e.stopPropagation();
-    skipTo(currentTime() + 10);
+    skipBy(10);
     bump();
   });
   $('#nextBtn').addEventListener('click', function (e) {
@@ -555,6 +562,8 @@
   // Which format is playing, and why it isn't H.264 when it isn't.
   function formatLine(s, i) {
     if (!i.codec) return 'waiting';
+    // A page is filmed in the server's browser and made into H.264 there.
+    if (i.codec === 'h264' && state && state.now && state.now.id === 'page') return "H.264 · the page in your server's browser, decoded by this browser";
     // Whose video it is as it stands: YouTube's, or the site a pasted link led to.
     if (i.codec === 'h264') return 'H.264 · ' + (state && state.now && state.now.site ? state.now.site : 'YouTube') + "'s own video, decoded by this browser";
     var line = 'MPEG-1 · converted by your server';

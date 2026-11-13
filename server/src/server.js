@@ -10,7 +10,7 @@ import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
 import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
-import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, watchPage, dropWatchers } from './webpage.js';
+import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, pageMedia, watchPage, dropWatchers } from './webpage.js';
 import { startGuard } from './guard.js';
 import { stampPage, feedbackLink } from './pages.js';
 import { recommendFor } from './recommend.js';
@@ -85,6 +85,7 @@ function storeFor(id) {
       if (store.now) warm(store.now.id, store.playQuality());
       if (store.queue[0]) warm(store.queue[0].id, store.settings.quality);
     });
+    store.on('pageMedia', (what, by) => pageMedia(id, what, by));
     stores.set(id, store);
   }
   return store;

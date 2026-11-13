@@ -57,9 +57,14 @@
       <div class="card-head">Page <span id="pageSite" class="muted page-site"></span></div>
       <div class="card-body">
         <p id="pageSay" class="page-say"></p>
-        <div id="pageView" class="page-view" role="application" aria-label="The page. Tap to click, drag to scroll.">
+        <div id="pageView" class="page-view" role="application" aria-label="The page. Tap to click, drag to scroll, press and hold to point.">
           <img id="pageImg" alt="" draggable="false">
           <div id="pageVeil" class="page-veil">Tap to see the page</div>
+          <button id="pageDone" type="button" class="page-done hidden">Done</button>
+        </div>
+        <div class="page-under">
+          <p class="hint page-hint">Tap to click, drag to scroll. Press and hold to point without clicking: that wakes a player's buttons.</p>
+          <button id="pageBig" type="button">Bigger</button>
         </div>
         <form id="pageTypeForm" class="field-row page-type" autocomplete="off" novalidate>
           <input id="pageText" type="text" placeholder="Type into the page" aria-label="Type into the page" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -68,11 +73,15 @@
         <div class="btn-row page-keys">
           <button id="pageEnter" type="button">Enter</button>
           <button id="pageDel" type="button">Delete</button>
+          <button id="pageEsc" type="button">Esc</button>
           <button id="pageBack" type="button">Back</button>
           <button id="pageReload" type="button">Reload</button>
         </div>
+        <div class="btn-row page-keys">
+          <button id="pageF" type="button" aria-label="Full screen: presses the F key">Full screen (F)</button>
+          <button id="pageC" type="button" aria-label="Captions: presses the C key">Captions (C)</button>
+        </div>
         <div class="btn-row send-row">
-          <button id="pageFill" type="button" class="primary">Fill the screen with the video</button>
           <button id="pageShow" type="button" class="primary hidden">Show it in the car</button>
           <button id="pageClose" type="button">Close the page</button>
         </div>

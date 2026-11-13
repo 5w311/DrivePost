@@ -76,7 +76,28 @@ export function clearOldShares(dir = baseDir()) {
  * picture size at 30 frames a second, each piece starting on a whole frame,
  * so that the stream the car's ffmpeg reads never changes shape.
  */
-export function ingestArgs({ list, size = '720', audio = true, h264 = true }) {
+export function ingestArgs({ list, size = '720', audio = true, h264 = true, copy = false }) {
+  const keep = [
+    '-f', 'hls', '-hls_time', String(SEGMENT_S), '-hls_list_size', String(KEPT),
+    '-hls_flags', 'delete_segments+independent_segments+temp_file',
+    '-hls_segment_filename', path.join(path.dirname(list), 's%06d.ts'),
+    list,
+  ];
+  // A recording that is already as the stream is kept (the browser's own
+  // film of its screen: H.264 at this size, a whole frame every second, AAC
+  // sound) is only cut into pieces. Nothing is converted, which costs this
+  // machine next to nothing and the picture nothing at all.
+  if (copy) {
+    return [
+      '-hide_banner', '-loglevel', 'error',
+      '-probesize', '1000000', '-analyzeduration', '1000000',
+      '-i', 'pipe:0',
+      '-map', '0:v:0',
+      ...(audio ? ['-map', '0:a:0?'] : ['-an']),
+      '-c', 'copy',
+      ...keep,
+    ];
+  }
   const { width, height, kbps } = SCREEN_SIZES[cleanSize(size)];
   const fit = [
     'fps=30',
@@ -101,10 +122,7 @@ export function ingestArgs({ list, size = '720', audio = true, h264 = true }) {
     ...picture,
     '-g', String(30 * SEGMENT_S), '-keyint_min', String(30 * SEGMENT_S), '-sc_threshold', '0',
     ...(audio ? ['-af', 'aresample=async=1', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2'] : ['-an']),
-    '-f', 'hls', '-hls_time', String(SEGMENT_S), '-hls_list_size', String(KEPT),
-    '-hls_flags', 'delete_segments+independent_segments+temp_file',
-    '-hls_segment_filename', path.join(path.dirname(list), 's%06d.ts'),
-    list,
+    ...keep,
   ];
 }
 
@@ -148,7 +166,7 @@ function stopWaitingFor(profile) {
 }
 
 class Share {
-  constructor(profile, { size, audio, again, h264, spawnImpl = spawn }) {
+  constructor(profile, { size, audio, again, h264, copy, spawnImpl = spawn }) {
     this.profile = profile;
     this.size = cleanSize(size);
     this.audio = audio !== false;
@@ -168,7 +186,7 @@ class Share {
     this.onReplaced = null;
     this.onStopped = null; // ended from outside (endShare)
 
-    this.ff = spawnImpl(config.ffmpegBin, ingestArgs({ list: this.list, size: this.size, audio: this.audio, h264 }), {
+    this.ff = spawnImpl(config.ffmpegBin, ingestArgs({ list: this.list, size: this.size, audio: this.audio, h264, copy: !!copy }), {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
     this.ff.stdin.on('error', () => {}); // it went away mid-write: its exit is dealt with below

@@ -8,7 +8,7 @@ Tesla's browser pauses its built-in video player when the car leaves Park. Drive
 
 - **Car page:** search YouTube or paste a link, with suggestions as you type, Up Next, Recent, resume where you left off, ±10 s, a seek bar and 360p to 1080p quality.
 - **Other sites too:** paste or share a link to a post on X, Reddit or Instagram, to a page with a video player on it, or straight to a video file. It plays like any other video, with Up Next, Recent, resume and skipping. Search and For You stay YouTube's. See [Videos from other sites](#videos-from-other-sites) for what works and what a site can refuse.
-- **Open a page:** for a link with no video in it to fetch (a site with a player of its own), the server opens the page itself in a browser of its own, shows it in the car with its sound, and a phone steers it. See [Opening a page](#opening-a-page).
+- **Open a page:** for a link with no video in it to fetch (a site with a player of its own), the server opens the page itself in a browser of its own, shows it in the car with its sound, and a phone works it like a remote desktop. The car's own pause and ten-second buttons work the page's video. See [Opening a page](#opening-a-page).
 - **Skipping without waiting:** the car loads two minutes ahead (the lighter part of the seek bar, which keeps creeping forward as the video plays) and keeps the last few minutes played. A skip to anywhere in that happens at once; only a skip further away loads again.
 - **Recent searches:** the last 20 searches are kept. Tap the empty search box, or open **Search**, to run one again. × forgets one, **Clear** forgets them all.
 - **For You:** videos like the ones you've been watching, on the car page and the phone remote.
@@ -137,21 +137,26 @@ The second line makes the file the app's own. yt-dlp keeps a cookies file up to 
 
 ### Opening a page
 
-Some links have no video in them that can be fetched: the page has a player of its own and nothing behind it to hand over. For those the server opens **the page itself**, in a browser of its own, and shows the car a picture of it with its sound. A phone steers it. Nothing is taken out of the site: the page plays in an ordinary browser as it would on any computer, and the car is shown that browser's tab.
+Some links have no video in them that can be fetched: the page has a player of its own and nothing behind it to hand over. For those the server opens **the page itself**, in a browser of its own, and shows the car a picture of that browser's screen with its sound. A phone works it the way a remote-desktop app works a computer. Nothing is taken out of the site: the page plays in an ordinary browser as it would on any computer, and the car is shown that browser.
 
 **Opening one.** On the phone remote, under **Send a video**, paste or copy the link and tap **No video to find? Open the page itself**. Within about ten seconds the car is playing the page as a live item named after it. A **Page** card appears on every phone of the profile:
 
-- **A live view of the page.** A tap on it is a click on the page, and a drag scrolls. It stops after a minute untouched, to save the phone's data, and comes back with a tap.
-- **Type into the page**, **Enter** and **Delete**, for search boxes and sign-ins. Tap the box on the page first.
+- **A live view of the browser's screen.** A tap on it is a click, and a drag scrolls. **Press and hold** moves the mouse there without clicking, and it then follows your finger: that is how a player's buttons, which hide until the mouse comes near, are woken so you can tap them. The mouse pointer shows in the live view (not in the car).
+- **Bigger** puts the live view over the whole of the phone's screen, for small buttons. Turn the phone sideways for the largest picture; **Done** puts it back.
+- **Type into the page**, with **Enter**, **Delete** and **Esc**, for search boxes and sign-ins. Tap the box on the page first.
 - **Back** and **Reload**.
-- **Fill the screen with the video** makes the page's player fill the car's picture, and **Show the whole page** brings the page back. A player's own full-screen button works too. (Until then the page has a black band above and below it in the car: the browser keeps its own notices there, and they aren't part of the picture.)
+- **Full screen (F)** and **Captions (C)** press the F and C keys, which most players use for those. A player that doesn't has its own buttons for them: press and hold on the video to bring them up, then tap. Esc leaves full screen. Most sites keep what you chose, so captions switched on once stay on.
 - **Show it in the car** puts the page back on after another video; **Close the page** ends it, and the car goes on to Up Next.
 
-Once the video is playing, the phone is free. The car runs about four seconds behind the page, so steer by the phone's live view, which is immediate, and not by the car.
+The live view stops after a minute untouched, to save the phone's data, and comes back with a tap. Once the video is playing, the phone is free. The car runs about five seconds behind the page, so steer by the phone's live view, which is immediate, and not by the car.
 
-**What it remembers.** Each profile has its own browser data, kept in a Docker volume, so a site you signed in to stays signed in. The tabs themselves are not kept: every page starts in a clean window.
+**The car's own buttons work the page's video.** Pause, in the car or on a phone, pauses the video in the page itself, and Play takes it back to where the car's picture had got to before playing on, so nothing is missed. The two ten-second buttons skip back and on in it. This goes through the browser's own media controls, the ones a keyboard's play key uses, so it works with any site's player that the browser knows is playing. What a site doesn't let you skip in (most live television) can't be skipped in from here either.
 
-**How it works.** A second container (`browser/`) holds Chromium on a screen that exists only in memory, and a small program that drives it (`browser/agent.js`). That program connects to DrivePost, signs in with a key the two share, and does what it is told. One tab shows the page; a second tab records the first, picture and sound, the way a video call shares a tab, and the recording is handed to DrivePost as it is made. There `server/src/mirror.js` has ffmpeg turn it into one fixed picture at 30 frames a second, kept in memory as a live stream of one-second pieces, and the car's stream is converted from that like any live video. (A browser only hands over a frame when the page changes, so a still page is sent again ten times a second; without that a paused video would stall the car and leave it behind for good.)
+**What it remembers.** Each profile has its own browser data, kept in a Docker volume, so a site you signed in to stays signed in. The tabs themselves are not kept: every page starts in a clean window. The browser keeps UTC time unless `.env` says where it is (`TZ=America/New_York`), which is what makes a site's TV guide show your hours.
+
+**How it works.** A second container (`browser/`) holds an ordinary Chromium at a desk nobody sits at: a screen that exists only in memory (Xvfb), a sound card that plays to nobody (PulseAudio), a window manager, and a mouse and keyboard. A small program there (`browser/agent.js`) is that desk's remote desktop. It connects to DrivePost, signs in with a key the two share, starts the browser on the address it is given, moves the mouse and presses the keys when a phone says so, and has ffmpeg film the screen and record the sound. The film is handed to DrivePost as it is made, which keeps it in memory as a live stream of one-second pieces (`server/src/mirror.js`, nothing converted), and the car's stream is made from that like any live video.
+
+No program drives the browser. It is started without a remote-control interface, and the program beside it never reaches into a page: it can't read one, change one or run anything in one. All it knows of the page is the name on its window. A site sees an ordinary browser being used by a person, which is what is happening.
 
 **Kept apart.** A web page is the least trusted thing this server touches, so the browser's container:
 
@@ -159,17 +164,23 @@ Once the video is playing, the phone is free. The car runs about four seconds be
 - runs without extra privileges, as an ordinary user;
 - is on a Docker network with **no way out**: no route to the internet, to your home network, or to the machine it runs on (so not to that machine's SSH either). Everything it fetches goes through DrivePost (`server/src/guard.js`), which refuses addresses on your home network: the router's settings page, other machines, the server itself. `OTHER_SITES_LOCAL=on` lifts that, as it does for links.
 
-Chromium's own inner sandbox can't be built inside a container without giving the container powers it shouldn't have, so it runs with `--no-sandbox` and the container is the wall. The browser is driven over a pipe, not a port, so no page it visits can reach its controls.
+Chromium's own inner sandbox can't be built inside a container without giving the container powers it shouldn't have, so it runs with `--no-sandbox` and the container is the wall. A short list of house rules (`browser/policies.json`) keeps the browser's own offers out of the picture: no saving of passwords, no translating, no downloads.
 
 **One at a time.** A browser playing video is the heaviest thing this server does, so there is one page for the whole server. While one profile's car is showing a page, another profile is told the browser is taken; once that car is on something else, the next page takes its place. A page that no car is playing and no phone is steering is closed after five minutes (`PAGE_IDLE_SECONDS`).
 
-**What it costs.** Measured with both containers on a two-core machine with no graphics card, while a video filled the screen: about one core for the browser's container and a third of a core for the app's (keeping the picture, and converting it for the car at 360p), with 650 to 850 MB of memory in the browser's. Its image takes about 1.1 GB of disk. No browser runs until a page is opened: at rest that container uses about 50 MB and no CPU.
+**On mobile data.** A page can't be loaded ahead the way a video can, so it is the first thing to stutter on a weak signal. Three things are done about that:
+
+- A car that can play H.264 is sent the page as H.264: about 1.6 Mbit/s at 720p, 0.85 at 480p and 0.45 at 360p, where MPEG-1 needs 2.6, 1.3 and 0.7.
+- A car starts with a few seconds in hand. Each time the signal dips it waits for six seconds' worth before carrying on, and from then on runs that much further behind the page with that much in reserve. It is only started afresh from where the page is now once it is 20 seconds behind.
+- As with any video, three stalls in two minutes step the quality down by itself, and **Quality** on the remote sets it by hand: each step down is about half the data.
+
+**What it costs.** Measured with both containers on a two-core machine with no graphics card, while a video filled the screen: about 0.6 of a core for the browser's container (the browser, and filming its screen) and 0.2 for the app's (converting for the car at 360p), with about 750 MB of memory in the browser's. Its image takes about 1.4 GB of disk. At rest that container uses about 70 MB and no CPU.
 
 **What it can't do.**
 
 - **Copy-protected video.** Chromium here has no way to play it and DrivePost does nothing to get around that. Such a player shows its own error.
-- **Sites that refuse it.** The browser says truthfully that it is being driven by a program, and some sites turn that away. A test you can pass by hand (a CAPTCHA) you can pass through the live view.
-- **More than a picture.** The car plays what the page shows; it can't seek, and Pause, then Play, shows the page as it is by then.
+- **Every site's robot check.** An "I'm not a robot" box judges the browser and where it runs, not the tap. This is an ordinary browser used by a person, which is what such a check looks for, but it runs on a server with no graphics card, and a check that holds that against it will fail it however often the box is tapped. DrivePost doesn't disguise the browser to get through.
+- **Ads that are part of the video.** Nothing is filtered: the car shows what the page shows.
 
 `PAGES=off` in `.env` takes the feature away. The browser's container still starts with the rest, and waits there doing nothing.
 
@@ -187,7 +198,7 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 
   The MPEG-1 figures are measured. The H.264 figures are what YouTube usually uses for 30 fps video plus the sound, and they vary from video to video; 60 fps videos use about half as much again. **Stats** shows the real rate of what's playing.
 - A machine fast enough for the format. Passing H.264 through takes almost no CPU, so a Pi 4 should handle 1080p. Converting to MPEG-1 is real work: a Pi 4 should stay at 480p for that, and 1080p also needs a fast screen in the car, because MPEG-1 is decoded in JavaScript.
-- For [opening pages](#opening-a-page): about a core and a half to spare and a gigabyte of memory while a page is open. A mini PC is comfortable; a Pi 4 is not.
+- For [opening pages](#opening-a-page): about a core to spare and a gigabyte of memory while a page is open. A mini PC is comfortable; a Pi 4 is not.
 - A way to reach it from the car over HTTPS. A Cloudflare Tunnel on your own domain is built in.
 
 ## Setup
@@ -360,7 +371,10 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | No **Open the page itself** under Send a video | The browser container isn't connected. `docker compose ps` should list `browser` as running, and `docker compose logs browser` should end with `connected to DrivePost`. `PAGES=off` also takes it away. |
 | A page opens but stays blank, or says the site can't be reached | Everything the browser fetches goes through DrivePost. `docker compose logs drivepost` has a `[page]` line for every opening and closing, and `docker compose logs browser` says what the browser made of the address. An address on your own network is refused on purpose. |
 | A page's video is black or shows an error about protected content | The video is copy-protected, which this browser can't play. |
-| A page stutters in the car, or the car keeps starting it afresh | The server can't keep up: `docker stats` while it plays shows how busy `drivepost` and `browser` are. Lower **Quality** in the car, and close other heavy work on the server. |
+| A player's buttons on a page can't be found or hit | They hide until the mouse comes near. **Press and hold** on the video in the live view to bring them up, and tap **Bigger** to make them easy to hit. |
+| Pause or the ten-second buttons do nothing on a page | They work what the browser knows is playing. A video that hasn't been started yet has to be started on the page first, and live television can't be skipped in. |
+| A page's "I'm not a robot" box spins and comes back | The site's check is failing the browser, not your tap (see "What it can't do" under [Opening a page](#opening-a-page)). |
+| A page stutters in the car, or the car keeps starting it afresh | Usually the car's connection: tap **Stats** in the car, and lower **Quality** (each step is about half the data). If Stats shows the server behind instead, `docker stats` while it plays shows how busy `drivepost` and `browser` are. |
 | `docker compose up` fails while creating the `fence` network (it may say *unknown gateway mode*) | The Docker on that machine is older than 28, the first that can keep a network off the machine it runs on. Update Docker (`curl -fsSL https://get.docker.com \| sh`) and run it again. |
 | **The server's browser is showing a page in another car** | One page at a time for the whole server. It frees up when that car plays something else or the page is closed. |
 | It plays MPEG-1 and you expected H.264 | Tap **Stats** and read the **Format** line: it says whether the browser can't decode H.264, the video has no H.264 version, H.264 failed earlier, or it's switched off on the phone. The **Browser** line lists what the browser can decode. H.264 needs the page to be on https. |
@@ -389,7 +403,7 @@ The pages are drawn in the style of Rig UI, a component library by the same auth
 ## Project layout
 
 ```
-browser/         The browser pages are opened in: its image, and the program that drives it
+browser/         The browser pages are opened in: its image, and the program that is its remote desktop
 scripts/         Automatic updates (timer installer and the update script), iPhone Shortcut builder and checker
 shortcut/        The iPhone Shortcut, unsigned, for reading
 server/src/      Node server: auth, state, yt-dlp, links to other sites, pages, ffmpeg streaming, TS chunker

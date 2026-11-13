@@ -699,5 +699,21 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
 }
 .page-type { margin-top: 10px; }
 .page-type input { flex: 1; min-width: 0; }
-/* Four across, on the narrowest phone too. */
-.page-keys button { min-width: 0; padding: 0 4px; font-size: 15px; }
+.page-under { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; }
+.page-under .page-hint { flex: 1; margin: 0; }
+.page-under button { flex: none; min-height: 36px; padding: 0 12px; font-size: 14px; }
+/* Five across, on the narrowest phone too. */
+.page-keys { margin-top: 8px; }
+.page-keys button { flex: 1 1 0; min-width: 0; padding: 0 2px; font-size: 14px; }
+.page-view.pointing { outline: 2px solid var(--rig-accent, #2f6bff); outline-offset: -2px; }
+/* The live view over the whole of the phone's screen: turn the phone for the largest picture. */
+.page-view.big {
+  position: fixed; inset: 0; z-index: 60; width: auto; height: auto; aspect-ratio: auto; border-radius: 0;
+}
+/* Its way back sits in a corner the picture leaves empty (beside it on a phone held sideways, under it upright). */
+.page-done {
+  position: absolute; left: max(6px, env(safe-area-inset-left)); bottom: max(6px, env(safe-area-inset-bottom));
+  min-height: 34px; padding: 0 12px; font-size: 13px;
+  background: rgba(8, 12, 18, 0.8); color: #e6ebf2; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px;
+}
+html.page-big, html.page-big body { overflow: hidden; }

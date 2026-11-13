@@ -253,6 +253,8 @@ export class Store extends EventEmitter {
     if (!this.page) return 'No page is open right now.';
     if (this.page.phase !== 'live') return 'The page is still opening.';
     this.setNow(pageItem(this.page), { startAt: 0 });
+    // Put back on after it was paused from here: its video carries on too.
+    this.emit('pageMedia', 'show', 0);
     return null;
   }
 
@@ -272,6 +274,11 @@ export class Store extends EventEmitter {
     if (!this.now || this.now.id !== PAGE_ID || !this.paused) return;
     this.now = { ...this.now, seq: ++this.seq };
     this.position = { seq: this.now.seq, t: 0, state: 'loading', at: Date.now() };
+  }
+
+  // The page is what is on: its video is asked to pause, play or skip (server.js passes it to the browser).
+  pageMedia(what, by = 0) {
+    if (this.now && this.now.id === PAGE_ID) this.emit('pageMedia', what, by);
   }
 
   // Apply a command from the car or a phone. Returns an error string or null.
@@ -326,14 +333,19 @@ export class Store extends EventEmitter {
       case 'stop':
         this.setNow(null);
         break;
+      // (A page's video is in the server's browser, not here: pausing,
+      // playing and skipping are also passed on to it. See pageMedia.)
       case 'pause':
+        if (this.now && !this.paused) this.pageMedia('pause');
         if (this.now) this.paused = true;
         break;
       case 'resume':
+        if (this.now && this.paused) this.pageMedia('play');
         this.backToNow();
         if (this.now) this.paused = false;
         break;
       case 'toggle':
+        if (this.now) this.pageMedia(this.paused ? 'play' : 'pause');
         this.backToNow();
         if (this.now) this.paused = !this.paused;
         break;
@@ -341,7 +353,8 @@ export class Store extends EventEmitter {
         this.seekTo(Number(data.to) || 0);
         break;
       case 'skip':
-        this.seekTo(this.currentTime() + (Number(data.by) || 0));
+        if (this.now && this.now.id === PAGE_ID) this.pageMedia('seek', Number(data.by) || 0);
+        else this.seekTo(this.currentTime() + (Number(data.by) || 0));
         break;
       case 'restart':
         this.seekTo(0);

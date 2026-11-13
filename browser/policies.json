@@ -1,0 +1,17 @@
+{
+  "CommandLineFlagSecurityWarningsEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "PrivacySandboxPromptEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "RestoreOnStartup": 5,
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "TranslateEnabled": false,
+  "DownloadRestrictions": 3,
+  "WebRtcIPHandling": "disable_non_proxied_udp"
+}

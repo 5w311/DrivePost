@@ -3,46 +3,44 @@
  *
  * Some links can't be turned into a video: the page has a player of its
  * own and nothing behind it that can be fetched. DrivePost then opens the
- * page itself, here, in an ordinary browser on a screen nobody looks at, and
- * shows the car a picture of it with its sound. A phone steers it: it gets a
- * small live view of the page, and its taps and typing are passed on.
+ * page itself, here, in an ordinary browser on a screen nobody sits at, and
+ * shows the car a picture of that screen with its sound. A phone steers it:
+ * it gets a small live view of the screen, and its taps and typing are
+ * passed on.
  *
- * This program is all that runs in this container besides the browser. It
- *   - connects out to DrivePost and does what it is told (open this address,
- *     tap here, go back, close);
- *   - starts the browser for one page at a time, each profile with its own
- *     sign-ins;
- *   - has a second tab record the first, the way a video call shares a tab
- *     (capture.html), and passes the recording on to DrivePost as it is made.
+ * Nothing drives the browser but that phone. It is started the way a person
+ * starts one, with the address to open, and after that this program only
+ * does what a remote-desktop program does:
+ *   - it gives the browser a screen that exists in memory, a sound card that
+ *     plays to nobody, and a mouse and a keyboard;
+ *   - it moves that mouse and presses those keys when the phone says so;
+ *   - it films the screen and records the sound, and passes the recording
+ *     on to DrivePost as it is made.
+ * It never reaches into a page. It can't read one, change one or run
+ * anything in one, and the browser has no remote-control interface switched
+ * on for it to do so. All it knows of the page is the name on its window.
+ * Play, pause and skipping go through the browser's own media controls, the
+ * ones the keys on a keyboard and a desktop's media buttons use.
  *
  * The container has no way out to the internet of its own. Everything the
  * browser fetches goes through DrivePost, which refuses addresses on the
- * home network. The page being shown is never trusted: it can't reach this
- * program (the two addresses it serves carry a code only this browser's own
- * tabs are given), and the browser is driven over a pipe, not a port.
+ * home network.
  */
-import { spawn } from 'node:child_process';
-import crypto from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import WebSocket, { WebSocketServer } from 'ws';
-import { Cdp } from './cdp.js';
+import WebSocket from 'ws';
 
 const env = process.env;
 const SERVER = env.DRIVEPOST_WS || 'ws://drivepost:8080/ws/browser';
 const KEY_FILE = env.BROWSER_KEY_FILE || '/run/drivepost-browser/key';
 const DATA = env.BROWSER_DATA || '/browser-data';
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// The screen the browser is given, and so the size of a video that fills it.
-// (While a page is only being looked through, the browser's own bars take a
-// strip of that, and the picture is a little wider than it is tall for it.)
+// The screen the browser is given, which is the picture the car gets.
 const WIDTH = 1280;
 const HEIGHT = 720;
-const RECORD_BPS = 6000000; // the recording never leaves this machine, so it can be a sharp one
-const VIEW = { width: 640, height: 360, quality: 50, everyMs: 250 }; // the phone's live view
+const VIEW = { width: 640, height: 360, fps: 5 }; // the phone's live view
+const WHEEL_PX = 120; // how far one notch of a mouse wheel moves a page
 
 const log = (...a) => console.log('[browser]', ...a);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -54,6 +52,46 @@ function within(promise, ms, what) {
       timer = setTimeout(() => reject(new Error(`${what} took too long`)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
+}
+const alive = (proc) => !!proc && proc.exitCode === null && proc.signalCode === null;
+
+// Run a small program and wait for it. Resolves with { code, out }; never rejects.
+function run(cmd, args, { input, timeout = 4000, vars } = {}) {
+  return new Promise((done) => {
+    const child = execFile(cmd, args, { env: vars || env, timeout, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      done({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(stdout || '') });
+    });
+    if (input !== undefined) child.stdin.end(input);
+  });
+}
+
+// Stop a program: asked first, then made to.
+function stop(proc, graceMs = 3000) {
+  if (!alive(proc)) return Promise.resolve();
+  return new Promise((gone) => {
+    const timer = setTimeout(() => alive(proc) && proc.kill('SIGKILL'), graceMs);
+    timer.unref();
+    proc.once('exit', () => {
+      clearTimeout(timer);
+      gone();
+    });
+    proc.kill('SIGTERM');
+  });
+}
+
+/*
+ * Close the browser the way a person does: its window is closed from the
+ * keyboard. A browser that is closed like that writes down what it was
+ * signed in to before it goes; one that is simply told to stop loses what
+ * it learned in its last half minute. If it is still there a moment later
+ * (a page asking "leave?", a second window), it is told to after all.
+ */
+async function closeBrowser(proc, vars) {
+  if (!alive(proc)) return;
+  const gone = new Promise((done) => proc.once('exit', done));
+  await run('xdotool', ['key', 'ctrl+shift+w'], { vars, timeout: 2000 });
+  await Promise.race([gone, sleep(2500)]);
+  await stop(proc);
 }
 
 function chromeBin() {
@@ -70,73 +108,12 @@ function readKey() {
   }
 }
 
-// ---------- the two pages of its own this browser is given ----------
-// Served on this machine only, at addresses that carry a code made afresh
-// each time this program starts.
-const code = crypto.randomBytes(16).toString('hex');
-const MARK = `DrivePost stage ${code.slice(0, 8)}`; // the capture finds the tab to record by this title
-const STAGE = `<!doctype html><meta charset="utf-8"><title>${MARK}</title>
-<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f14;color:#8b98a8;font:28px system-ui,sans-serif">Opening the page…</body>`;
-const CAPTURE = fs.readFileSync(path.join(HERE, 'capture.html'));
-const PUMP = fs.readFileSync(path.join(HERE, 'pump.js'));
-
-const HOME_BASE = 'http://127.0.0.1';
-const local = http.createServer((req, res) => {
-  const p = (req.url || '').split('?')[0];
-  const send = (type, body) => {
-    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
-    res.end(body);
-  };
-  if (p === `/stage/${code}`) return send('text/html; charset=utf-8', STAGE);
-  if (p === `/capture/${code}`) return send('text/html; charset=utf-8', CAPTURE);
-  if (p === '/pump.js') return send('text/javascript; charset=utf-8', PUMP);
-  res.writeHead(404);
-  res.end();
-});
-const uploads = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
-local.on('upgrade', (req, socket, head) => {
-  // Only the recording tab of the page that is open now. (A browser can
-  // bring back the tabs it had last time; one of those is turned away here.)
-  const u = new URL(req.url || '/', HOME_BASE);
-  const s = session;
-  if (u.pathname !== `/up/${code}` || !s || u.searchParams.get('s') !== s.nonce) return socket.destroy();
-  uploads.handleUpgrade(req, socket, head, (ws) => {
-    if (session === s && !s.over) s.capturePage(ws);
-    else ws.close();
-  });
-});
-await new Promise((done) => local.listen(0, '127.0.0.1', done));
-const HOME = `http://127.0.0.1:${local.address().port}`;
-
-// ---------- a screen for the browser ----------
-// An ordinary windowed browser needs a screen, so it gets one that exists
-// only in memory. Without one (Xvfb missing, or it won't start) the browser
-// runs with no window at all, which works too.
-let display = null;
-async function ensureDisplay() {
-  if (display) return display;
-  if (env.BROWSER_HEADLESS === '1') return (display = { headless: true });
-  const n = Number(env.BROWSER_DISPLAY) || 99;
+function safeHost(url) {
   try {
-    fs.rmSync(`/tmp/.X${n}-lock`, { force: true }); // left by a run that was cut short
-    const proc = spawn('Xvfb', [`:${n}`, '-screen', '0', `${WIDTH}x${HEIGHT}x24`, '-nolisten', 'tcp', '-ac'], { stdio: 'ignore' });
-    let failed = null;
-    proc.on('error', (err) => (failed = err));
-    proc.on('exit', () => {
-      failed = failed || new Error('it stopped');
-      if (display && display.proc === proc) display = null;
-    });
-    for (let i = 0; i < 50 && !failed && !fs.existsSync(`/tmp/.X11-unix/X${n}`); i++) await sleep(100);
-    if (failed || !fs.existsSync(`/tmp/.X11-unix/X${n}`)) {
-      proc.kill();
-      throw failed || new Error('it never came up');
-    }
-    display = { name: `:${n}`, proc };
-  } catch (err) {
-    log(`no virtual screen (${err.message}): the browser will run without a window`);
-    display = { headless: true };
+    return new URL(url).hostname;
+  } catch {
+    return 'that address';
   }
-  return display;
 }
 
 // ---------- DrivePost ----------
@@ -149,97 +126,310 @@ function hand(kind, data) {
   if (server && server.readyState === 1) server.send(Buffer.concat([Buffer.from([kind]), data]));
 }
 
+// ---------- the desk the browser sits at ----------
+// A screen that exists only in memory (Xvfb), a sound card that plays to
+// nobody (PulseAudio), the message bus a desktop's media buttons talk to the
+// browser over (D-Bus), and a window manager that keeps the browser's window
+// in front and filling the screen. Set up once this program has found
+// DrivePost, and left standing: at rest they use next to nothing, and the
+// first page opens a second sooner for it.
+let desk = null;
+let deskComing = null; // being set up right now
+function ensureDesk() {
+  if (desk && desk.up) return Promise.resolve(desk);
+  if (!deskComing) {
+    deskComing = setUpDesk().finally(() => {
+      deskComing = null;
+    });
+  }
+  return deskComing;
+}
+async function setUpDesk() {
+  const n = Number(env.BROWSER_DISPLAY) || 99;
+  const dir = `/tmp/drivepost-desk-${n}`;
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const left of [`/tmp/.X${n}-lock`, `/tmp/.X11-unix/X${n}`]) fs.rmSync(left, { force: true }); // from a run that was cut short
+  const mine = {
+    up: false,
+    dir,
+    display: `:${n}`,
+    procs: [],
+    vars: {
+      ...env,
+      DISPLAY: `:${n}`,
+      XDG_RUNTIME_DIR: dir,
+      PULSE_SERVER: `unix:${dir}/sound`,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${dir}/bus`,
+      LC_ALL: 'C.UTF-8', // so that letters outside English are typed as themselves
+    },
+  };
+  const start = (what, cmd, args, needed) => {
+    const proc = spawn(cmd, args, { stdio: 'ignore', env: mine.vars });
+    proc.on('error', (err) => {
+      if (needed) log(`${what} couldn't be started (${err.message})`);
+    });
+    proc.on('exit', () => {
+      if (!needed || desk !== mine || !mine.up) return;
+      // The desk has lost a leg: whatever page is open goes with it, and the next one sets it up afresh.
+      mine.up = false;
+      log(`${what} stopped`);
+      for (const p of mine.procs) if (alive(p)) p.kill();
+      if (session) session.fail("The server's browser lost its screen.");
+    });
+    mine.procs.push(proc);
+    return proc;
+  };
+  const there = async (file, what) => {
+    for (let i = 0; i < 60 && !fs.existsSync(file); i++) await sleep(100);
+    if (!fs.existsSync(file)) {
+      for (const p of mine.procs) if (alive(p)) p.kill();
+      throw new Error(`${what} didn't come up`);
+    }
+  };
+  // (-s 0: a screen nobody touches for ten minutes would otherwise go blank, and the car with it.)
+  start('The screen', 'Xvfb', [`:${n}`, '-screen', '0', `${WIDTH}x${HEIGHT}x24`, '-nolisten', 'tcp', '-ac', '-s', '0'], true);
+  await there(`/tmp/.X11-unix/X${n}`, 'the screen');
+  start('The message bus', 'dbus-daemon', ['--session', `--address=unix:path=${dir}/bus`, '--nofork', '--nopidfile'], true);
+  await there(`${dir}/bus`, 'the message bus');
+  start('The sound', 'pulseaudio', [
+    '-n', '--daemonize=no', '--exit-idle-time=-1', '--log-target=stderr',
+    `--load=module-native-protocol-unix socket=${dir}/sound auth-anonymous=1`,
+    '--load=module-null-sink sink_name=drivepost rate=48000 channels=2',
+    '--load=module-always-sink',
+  ], true);
+  await there(`${dir}/sound`, 'the sound');
+  // Without it everything still works where there is one window; it is there for the second (a sign-in that pops up).
+  start('The window manager', 'matchbox-window-manager', ['-use_titlebar', 'no', '-use_cursor', 'no'], false);
+  await sleep(200);
+  mine.up = true;
+  return (desk = mine);
+}
+
 // ---------- one page ----------
 let session = null;
 // The browser of the page before this one, on its way out. The next one
 // waits for it: two browsers can't share one profile's files.
 let leaving = Promise.resolve();
 
+// The keys a phone can ask for, by the names a keyboard gives them here.
 const KEYS = {
-  Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
-  Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
-  Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
-  Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
-  Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
-  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
-  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
-  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
-  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+  Enter: 'Return', Backspace: 'BackSpace', Tab: 'Tab', Escape: 'Escape', Space: 'space',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  F: 'f', C: 'c', M: 'm',
 };
-
-/*
- * Run in the page: make its video fill the screen. The biggest video in view
- * is the one; a player that sits in a frame of its own (most embedded ones
- * do) is filled by its frame.
- */
-const FILL = `(() => {
-  const found = [];
-  const walk = (root) => {
-    for (const el of root.querySelectorAll('*')) {
-      if (el.tagName === 'VIDEO' || el.tagName === 'IFRAME') found.push(el);
-      if (el.shadowRoot) walk(el.shadowRoot);
-    }
-  };
-  walk(document);
-  let best = null, most = 200 * 110;
-  for (const el of found) {
-    const r = el.getBoundingClientRect();
-    const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
-    const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
-    if (w <= 0 || h <= 0) continue;
-    const area = w * h * (el.tagName === 'VIDEO' && !el.paused ? 1.5 : 1);
-    if (area > most) { most = area; best = el; }
-  }
-  if (!best) return 'none';
-  return best.requestFullscreen().then(() => 'ok', (e) => 'refused');
-})()`;
-const UNFILL = `(document.fullscreenElement ? document.exitFullscreen().then(() => 'ok', () => 'refused') : 'ok')`;
 
 class Session {
   constructor({ id, url, profile, guardPort }) {
     this.id = id;
-    this.nonce = crypto.randomBytes(8).toString('hex'); // tells this page's recording tab from any other
     this.url = String(url);
     this.profile = String(profile || 'main').replace(/[^a-z0-9_-]/gi, '_').slice(0, 64) || 'main';
     // The way out: DrivePost's guard, on the machine this program is connected to.
     this.proxy = Number(guardPort) ? `http://${new URL(SERVER).hostname}:${Number(guardPort)}` : '';
-    this.proc = null;
-    this.cdp = null;
-    this.stage = null; // the tab that shows the page
-    this.stageTarget = null;
-    this.cap = null; // the tab that records it
-    this.capTarget = null;
-    this.capSocket = null;
-    this.capArrived = null;
-    this.capHere = new Promise((done) => (this.capArrived = done));
+    this.proc = null; // the browser
+    this.ff = null; // what films its screen
     this.over = false;
-    this.up = false; // the browser is running and the page is being captured
-    this.wantView = false;
-    this.viewing = false;
-    this.viewAt = 0;
-    this.viewNext = null; // the newest picture, waiting to be sent
-    this.viewTimer = null;
-    this.shown = { url: '', title: '' };
-    this.size = { w: WIDTH, h: HEIGHT }; // how big the page is on its screen right now
+    this.up = false; // DrivePost has been told the picture is coming
+    this.filmFails = 0;
+    this.viewing = false; // a phone has the live view open
+    this.viewBuf = Buffer.alloc(0);
+    this.viewLast = null; // the last picture sent, so the same one isn't sent twice
+    this.named = ''; // the name on the window, as last passed on
+    this.owed = 0; // scrolling asked for that hasn't added up to a notch of the wheel yet
     this.poll = null;
     this.stderr = '';
     this.todo = []; // steering that is waiting its turn (see steer)
     this.steering = false;
   }
 
+  say(phase, extra = {}) {
+    tell({ t: 'state', id: this.id, phase, ...extra });
+  }
+
+  async start() {
+    this.desk = await ensureDesk();
+    await leaving;
+    if (this.over) return;
+    this.launch(this.url);
+    this.film();
+    // What the page calls itself can change at any time.
+    this.poll = setInterval(() => this.look().catch(() => {}), 2000);
+  }
+
+  // Start the browser on an address, as a person would from a desktop.
+  launch(url) {
+    const dir = path.join(DATA, this.profile);
+    fs.mkdirSync(dir, { recursive: true });
+    // One browser at a time uses these files. A lock left by one that was cut short would turn this one away.
+    for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(dir, f), { force: true });
+    // The browser would bring back the tabs it had last time, and load them
+    // all again behind the page that was asked for. What it remembers of its
+    // tabs is thrown away; what it is signed in to is kept.
+    fs.rmSync(path.join(dir, 'Default', 'Sessions'), { recursive: true, force: true });
+    const args = [
+      `--user-data-dir=${dir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--password-store=basic',
+      '--hide-crash-restore-bubble',
+      // Nothing leaves except through DrivePost's guard (and no side doors around it).
+      ...(this.proxy ? [`--proxy-server=${this.proxy}`, '--proxy-bypass-list=<-loopback>', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : []),
+      // One window, filling the screen, with none of the browser's own bars: the screen is the picture.
+      '--window-position=0,0',
+      `--window-size=${WIDTH},${HEIGHT}`,
+      '--kiosk',
+      // In its container the browser can't build its own inner sandbox; the container is the wall.
+      ...(env.BROWSER_NO_SANDBOX === '0' ? [] : ['--no-sandbox']),
+      url,
+    ];
+    const proc = (this.proc = spawn(chromeBin(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: this.desk.vars }));
+    proc.stderr.on('data', (d) => {
+      this.stderr = (this.stderr + d).slice(-3000);
+    });
+    proc.on('error', (err) => {
+      if (this.proc === proc) this.fail(`The browser couldn't be started (${err.message}).`);
+    });
+    proc.on('exit', () => {
+      if (this.proc === proc) this.fail('The browser stopped.');
+    });
+  }
+
+  /*
+   * Film the screen and record the sound, and pass both on as they are
+   * made. A second, smaller picture a few times a second is for the phone's
+   * live view, and shows the mouse pointer, which the car's doesn't.
+   */
+  film() {
+    if (this.over) return;
+    const screen = ['-f', 'x11grab', '-video_size', `${WIDTH}x${HEIGHT}`];
+    const args = [
+      '-hide_banner', '-loglevel', 'error',
+      ...screen, '-framerate', '30', '-draw_mouse', '0', '-thread_queue_size', '512', '-i', this.desk.display,
+      '-f', 'pulse', '-fragment_size', '8192', '-thread_queue_size', '512', '-i', 'drivepost.monitor',
+      ...screen, '-framerate', String(VIEW.fps), '-draw_mouse', '1', '-thread_queue_size', '64', '-i', this.desk.display,
+      // The recording never leaves this machine, so it can be a sharp one. DrivePost makes of it what the car needs.
+      '-map', '0:v', '-map', '1:a',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '20', '-maxrate', '8M', '-bufsize', '8M', '-g', '30', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      '-f', 'mpegts', '-muxdelay', '0', '-muxpreload', '0', '-flush_packets', '1', 'pipe:1',
+      '-map', '2:v', '-vf', `scale=${VIEW.width}:${VIEW.height}:flags=bilinear`, '-pix_fmt', 'yuvj420p', '-c:v', 'mjpeg', '-q:v', '9',
+      '-f', 'mpjpeg', '-flush_packets', '1', 'pipe:3',
+    ];
+    const ff = (this.ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], env: this.desk.vars }));
+    let first = true;
+    let said = '';
+    ff.stdout.on('data', (chunk) => {
+      if (this.ff !== ff || this.over) return;
+      if (first) {
+        first = false;
+        // Said before the first piece, so DrivePost knows a new recording starts here.
+        tell({ t: 'rec', id: this.id, type: 'video/mp2t' });
+        if (!this.up) {
+          this.up = true;
+          this.say('capturing', { sound: true });
+        }
+      }
+      hand(1, chunk);
+    });
+    ff.stdio[3].on('data', (chunk) => {
+      if (this.ff === ff && !this.over) this.viewData(chunk);
+    });
+    ff.stderr.on('data', (d) => {
+      said = (said + d).slice(-600);
+    });
+    ff.on('error', (err) => {
+      if (this.ff === ff) this.fail(`The screen couldn't be filmed (${err.message}).`);
+    });
+    ff.on('exit', () => {
+      if (this.ff !== ff || this.over) return;
+      // It stopped by itself. Started again a few times; after that something is wrong for good.
+      this.ff = null;
+      log(`filming the screen stopped${said.trim() ? ` | ${said.trim().split('\n').pop().slice(0, 200)}` : ''}`);
+      if (++this.filmFails > 3) return this.fail("The page's picture stopped.");
+      setTimeout(() => this.film(), 500);
+    });
+  }
+
+  // A fresh recording: asked for when the one being sent couldn't be used.
+  async again() {
+    if (this.over) return;
+    const old = this.ff;
+    this.ff = null;
+    if (alive(old)) old.kill('SIGKILL');
+    this.viewBuf = Buffer.alloc(0);
+    this.film();
+  }
+
+  // The live view arrives as one small picture after another, each with its length said first.
+  viewData(chunk) {
+    this.viewBuf = this.viewBuf.length ? Buffer.concat([this.viewBuf, chunk]) : chunk;
+    for (;;) {
+      const head = this.viewBuf.indexOf('\r\n\r\n');
+      if (head < 0) break;
+      const m = /content-length:\s*(\d+)/i.exec(this.viewBuf.subarray(0, head).toString('latin1'));
+      const from = head + 4;
+      if (!m) {
+        this.viewBuf = this.viewBuf.subarray(from);
+        continue;
+      }
+      const size = Number(m[1]);
+      if (this.viewBuf.length < from + size) break;
+      const picture = Buffer.from(this.viewBuf.subarray(from, from + size));
+      this.viewBuf = this.viewBuf.subarray(from + size);
+      // Only to a phone that is looking, and only when the screen has changed.
+      if (this.viewing && !(this.viewLast && picture.equals(this.viewLast))) {
+        this.viewLast = picture;
+        hand(2, picture);
+      }
+    }
+    if (this.viewBuf.length > 4 * 1024 * 1024) this.viewBuf = Buffer.alloc(0);
+  }
+
+  view(on) {
+    this.viewing = !!on;
+    this.viewLast = null; // the next picture goes out whatever it shows
+  }
+
+  // The mouse and keyboard.
+  xdo(...args) {
+    return run('xdotool', args.map(String), { vars: this.desk.vars });
+  }
+
+  // What the page calls itself: the name on the browser's window.
+  async look() {
+    if (this.over || !alive(this.proc)) return;
+    let r = await this.xdo('getactivewindow', 'getwindowname');
+    if (r.code !== 0) {
+      // (No window manager to say which window is in front: take the browser's newest.)
+      const found = await this.xdo('search', '--onlyvisible', '--class', 'chrom');
+      const id = found.out.trim().split('\n').pop();
+      if (!id) return;
+      r = await this.xdo('getwindowname', id);
+      if (r.code !== 0) return;
+    }
+    const name = r.out.trim().replace(/ - (Chromium|Google Chrome for Testing|Google Chrome)$/, '').slice(0, 200);
+    if (!name || name === this.named || /^(New Tab|Untitled|about:blank)$/i.test(name)) return;
+    this.named = name;
+    tell({ t: 'page', id: this.id, url: this.url, title: name });
+  }
+
   /*
    * Steering (taps, typing, Back and the rest) is done one thing at a time,
-   * in the order it came. A tap is several steps, each answered by the
-   * browser before the next is sent, and what was typed right behind it must
-   * not land between them: it would be typed before the box had been
-   * clicked, into nothing.
+   * in the order it came: what was typed right behind a tap must not land
+   * before the click has.
    */
   steer(msg, work) {
     const last = this.todo[this.todo.length - 1];
+    const both = (kind) => last && last.msg.t === 'input' && last.msg.kind === kind && msg.t === 'input' && msg.kind === kind;
     // A drag sends scroll after scroll. Those still waiting are added up, so
     // a busy page doesn't go on scrolling after the finger has left.
-    if (last && last.msg.t === 'input' && last.msg.kind === 'scroll' && msg.t === 'input' && msg.kind === 'scroll') {
+    if (both('scroll')) {
       last.msg = { ...last.msg, dy: (Number(last.msg.dy) || 0) + (Number(msg.dy) || 0) };
+      return;
+    }
+    // And of the places a finger has pointed at on its way, only the newest matters.
+    if (both('point')) {
+      last.msg = msg;
       return;
     }
     this.todo.push({ msg, work });
@@ -252,7 +442,7 @@ class Session {
       const { msg, work } = this.todo.shift();
       try {
         // One step that never comes back doesn't hold up the rest.
-        await within(Promise.resolve(work(msg)), 5000, msg.t);
+        await within(Promise.resolve(work(msg)), 8000, msg.t);
       } catch (err) {
         log(`${msg.t} failed: ${err.message}`);
       }
@@ -261,317 +451,93 @@ class Session {
     this.steering = false;
   }
 
-  say(phase, extra = {}) {
-    tell({ t: 'state', id: this.id, phase, ...extra });
-  }
-
-  async start() {
-    const screen = await ensureDisplay();
-    await leaving;
-    if (this.over) return;
-    const dir = path.join(DATA, this.profile);
-    fs.mkdirSync(dir, { recursive: true });
-    // One browser at a time uses these files. A lock left by one that was cut short would turn this one away.
-    for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(dir, f), { force: true });
-    // The browser would bring back the tabs it had last time, and load them all
-    // again behind the page that was asked for. What it remembers of its tabs
-    // is thrown away; what it is signed in to is kept.
-    fs.rmSync(path.join(dir, 'Default', 'Sessions'), { recursive: true, force: true });
-
-    const args = [
-      `--user-data-dir=${dir}`,
-      '--remote-debugging-pipe',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--password-store=basic',
-      '--disable-sync',
-      '--disable-notifications',
-      '--hide-crash-restore-bubble',
-      '--disable-session-crashed-bubble',
-      '--disable-features=Translate,MediaRouter,PrivacySandboxSettings4',
-      // Both tabs keep working at full pace whichever is in front.
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--disable-backgrounding-occluded-windows',
-      // A page's video may start without the tap a person would give it: the tap comes from a phone.
-      '--autoplay-policy=no-user-gesture-required',
-      // The recording tab is given the page's tab without anyone choosing it in a window.
-      `--auto-select-tab-capture-source-by-title=${MARK}`,
-      // Nothing leaves except through DrivePost's guard (and no side doors around it).
-      ...(this.proxy
-        ? [`--proxy-server=${this.proxy}`, `--proxy-bypass-list=<-loopback>;127.0.0.1:${local.address().port}`, '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
-        : []),
-      '--window-position=0,0',
-      `--window-size=${WIDTH},${HEIGHT}`,
-      ...(screen.headless ? ['--headless=new', `--screen-info={${WIDTH}x${HEIGHT}}`] : ['--kiosk']),
-      // In its container the browser can't build its own inner sandbox; the container is the wall.
-      ...(env.BROWSER_NO_SANDBOX === '0' ? [] : ['--no-sandbox']),
-      'about:blank',
-    ];
-    this.proc = spawn(chromeBin(), args, {
-      stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
-      env: { ...env, ...(screen.name ? { DISPLAY: screen.name } : {}) },
-    });
-    this.proc.stderr.on('data', (d) => {
-      this.stderr = (this.stderr + d).slice(-3000);
-    });
-    this.proc.on('error', (err) => this.fail(`The browser couldn't be started (${err.message}).`));
-    this.proc.on('exit', () => this.fail('The browser stopped.'));
-    const cdp = (this.cdp = new Cdp(this.proc.stdio[3], this.proc.stdio[4]));
-    this.listen(cdp);
-
-    await cdp.send('Target.setDiscoverTargets', { discover: true });
-    let first = null;
-    for (let i = 0; i < 100 && !first; i++) {
-      first = (await cdp.send('Target.getTargets')).targetInfos.find((t) => t.type === 'page');
-      if (!first) await sleep(100);
-    }
-    if (!first) throw new Error('the browser opened no window');
-    this.stageTarget = first.targetId;
-    this.stage = (await cdp.send('Target.attachToTarget', { targetId: first.targetId, flatten: true })).sessionId;
-    await cdp.send('Page.enable', {}, this.stage);
-    // Without a window there is nothing to give the page its size, so it is told one.
-    if (screen.headless) await cdp.send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false }, this.stage);
-    await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => {});
-    const loaded = this.once('Page.loadEventFired', this.stage);
-    await cdp.send('Page.navigate', { url: `${HOME}/stage/${code}` }, this.stage);
-    await within(loaded, 15000, 'starting the browser');
-
-    // The second tab, which records the first.
-    const made = await cdp.send('Target.createTarget', { url: `${HOME}/capture/${code}?s=${this.nonce}`, newWindow: true });
-    this.capTarget = made.targetId;
-    this.cap = (await cdp.send('Target.attachToTarget', { targetId: made.targetId, flatten: true })).sessionId;
-    // Two tabs and no more: anything the browser brought back from last time is closed.
-    for (const t of (await cdp.send('Target.getTargets')).targetInfos) {
-      if (t.type === 'page' && t.targetId !== this.stageTarget && t.targetId !== this.capTarget) await cdp.send('Target.closeTarget', { targetId: t.targetId }).catch(() => {});
-    }
-    await within(this.capHere, 15000, 'getting the recording tab ready');
-    const began = await within(
-      cdp.send('Runtime.evaluate', {
-        expression: `start(${JSON.stringify({ width: WIDTH, height: HEIGHT, bps: RECORD_BPS })})`,
-        awaitPromise: true,
-        returnByValue: true,
-        userGesture: true,
-      }, this.cap),
-      20000,
-      'capturing the page',
-    );
-    if (began.exceptionDetails) throw new Error(`the page couldn't be captured (${(began.exceptionDetails.exception || {}).description || began.exceptionDetails.text})`);
-    if (this.over) return;
-    this.say('capturing', { sound: !!(began.result.value || {}).sound, windowed: !screen.headless });
-    this.up = true;
-    // The page's tab in front, as the one being looked at: the recording tab works on behind it.
-    await cdp.send('Page.bringToFront', {}, this.stage).catch(() => {});
-    await this.measure();
-    await this.go(this.url);
-    if (this.wantView) this.view(true).catch((err) => log(`the live view couldn't start: ${err.message}`));
-    // What the page calls itself can change at any time without it going anywhere.
-    this.poll = setInterval(() => this.look().catch(() => {}), 3000);
-  }
-
-  // How big the page is on its screen (taps are placed by it).
-  async measure() {
-    if (this.over || !this.stage) return;
-    const m = await this.cdp.send('Page.getLayoutMetrics', {}, this.stage);
-    const v = m.cssVisualViewport || m.visualViewport || {};
-    if (v.clientWidth > 0 && v.clientHeight > 0) this.size = { w: v.clientWidth, h: v.clientHeight };
-  }
-
-  // Where the page is and what it calls itself, passed on when either has changed.
-  async look() {
-    if (this.over || !this.stage) return;
-    const r = await this.cdp.send('Runtime.evaluate', { expression: 'JSON.stringify([location.href, document.title])', returnByValue: true }, this.stage);
-    let at;
-    try {
-      at = JSON.parse(r.result.value);
-    } catch {
-      return;
-    }
-    const [url, title] = at;
-    if (!/^https?:/i.test(url) || url.startsWith(HOME)) return;
-    if (url === this.shown.url && title === this.shown.title) return;
-    this.shown = { url, title };
-    tell({ t: 'page', id: this.id, url: String(url).slice(0, 2000), title: String(title || '').slice(0, 200) });
-  }
-
-  // Resolves the next time the browser reports `method` about the tab `sessionId`.
-  once(method, sessionId) {
-    return new Promise((resolve) => {
-      const on = (params, sid) => {
-        if (sid !== sessionId) return;
-        this.cdp.off(method, on);
-        resolve(params);
-      };
-      this.cdp.on(method, on);
-    });
-  }
-
-  listen(cdp) {
-    cdp.on('gone', () => this.fail('The browser stopped.'));
-    const ours = (url) => !url || url === 'about:blank' || url.startsWith(HOME);
-
-    const moved = (info) => {
-      // The page's own tab: it has a new name or address, so see what it calls itself now.
-      if (info.targetId === this.stageTarget) return void this.look().catch(() => {});
-      // A page that opens another window gets it in the same tab instead:
-      // there is one picture, and it is of this tab.
-      if (info.type !== 'page' || info.targetId === this.capTarget || ours(info.url)) return;
-      if (!this.stage || this.over) return;
-      cdp.send('Target.closeTarget', { targetId: info.targetId }).catch(() => {});
-      if (/^https?:/i.test(info.url)) this.go(info.url).catch(() => {});
-    };
-    cdp.on('Target.targetCreated', (p) => moved(p.targetInfo));
-    cdp.on('Target.targetInfoChanged', (p) => moved(p.targetInfo));
-
-    // The page has gone somewhere, or finished loading: see what it calls itself now.
-    const arrived = (p, sid) => {
-      if (sid === this.stage && !(p && p.frame && p.frame.parentId)) this.look().catch(() => {});
-    };
-    cdp.on('Page.frameNavigated', arrived);
-    cdp.on('Page.navigatedWithinDocument', arrived);
-    cdp.on('Page.loadEventFired', arrived);
-    cdp.on('Page.domContentEventFired', arrived);
-    // Its size changed (a video was made to fill the screen, say).
-    cdp.on('Page.frameResized', (p, sid) => {
-      if (sid === this.stage) this.measure().catch(() => {});
-    });
-
-    // "Leave this page?", an alert, a confirm: nobody is there to press OK.
-    cdp.on('Page.javascriptDialogOpening', (p, sid) => {
-      if (sid === this.stage) cdp.send('Page.handleJavaScriptDialog', { accept: true }, sid).catch(() => {});
-    });
-
-    // The phone's live view: a small picture of the page, a few times a second at most.
-    cdp.on('Page.screencastFrame', (p, sid) => {
-      if (sid !== this.stage) return;
-      cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId }, sid).catch(() => {});
-      const meta = p.metadata || {};
-      if (meta.deviceWidth > 0 && meta.deviceHeight > 0) this.size = { w: meta.deviceWidth, h: meta.deviceHeight };
-      if (!this.viewing) return;
-      // No more often than the phone needs, but always ending on the newest:
-      // a picture that came too soon after the last waits its turn, and is
-      // replaced by any that comes while it waits.
-      this.viewNext = p.data;
-      if (this.viewTimer) return;
-      const send = () => {
-        this.viewTimer = null;
-        if (this.over || !this.viewing || !this.viewNext) return;
-        this.viewAt = Date.now();
-        hand(2, Buffer.from(this.viewNext, 'base64'));
-        this.viewNext = null;
-      };
-      const wait = VIEW.everyMs - (Date.now() - this.viewAt);
-      if (wait <= 0) send();
-      else this.viewTimer = setTimeout(send, wait);
-    });
-  }
-
-  // The recording tab has connected back: it sends the recording up this socket.
-  capturePage(ws) {
-    if (this.capSocket) this.capSocket.close();
-    this.capSocket = ws;
-    this.capArrived();
-    ws.on('message', (data, isBinary) => {
-      if (this.over || this.capSocket !== ws) return;
-      if (isBinary) return hand(1, data);
-      let msg;
-      try {
-        msg = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (msg.recording) tell({ t: 'rec', id: this.id, type: String(msg.type || '') });
-      else if (msg.ended) this.fail('The page stopped being captured.');
-      else if (msg.error) this.fail(String(msg.error).slice(0, 200));
-    });
-    ws.on('close', () => {
-      // When the whole browser goes down its tabs go first: give it a moment
-      // to be the one that says what happened.
-      setTimeout(() => {
-        if (this.capSocket === ws && !this.over) this.fail('The recording tab went away.');
-      }, 700);
-    });
-  }
-
-  async go(url) {
-    if (this.over || !this.stage) return;
-    const r = await this.cdp.send('Page.navigate', { url: String(url) }, this.stage);
-    // The browser shows its own "can't reach this page", which the car and the phone both see.
-    if (r.errorText && r.errorText !== 'net::ERR_ABORTED') log(`couldn't open ${safeHost(url)}: ${r.errorText}`);
-  }
-
   async input(msg) {
-    if (this.over || !this.stage) return;
-    const send = (method, params) => this.cdp.send(method, params, this.stage);
-    const at = (v, size) => Math.round(Math.min(1, Math.max(0, Number(v) || 0)) * size);
-    const x = at(msg.x, this.size.w);
-    const y = at(msg.y, this.size.h);
+    if (this.over || !alive(this.proc)) return;
+    const at = (v, size) => Math.round(Math.min(1, Math.max(0, Number(v) || 0)) * (size - 1));
+    const x = at(msg.x, WIDTH);
+    const y = at(msg.y, HEIGHT);
     if (msg.kind === 'tap') {
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+      // The mouse arrives, and then clicks: a player that shows its buttons
+      // when the mouse comes near has them up by the time of the click.
+      await this.xdo('mousemove', x, y, 'sleep', '0.12', 'click', '1');
+    } else if (msg.kind === 'point') {
+      // The mouse goes there and doesn't click (a finger held on the live view).
+      await this.xdo('mousemove', x, y);
     } else if (msg.kind === 'scroll') {
-      const dy = Math.min(3, Math.max(-3, Number(msg.dy) || 0)) * this.size.h;
-      await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: Math.round(dy) });
+      this.owed += Math.min(3, Math.max(-3, Number(msg.dy) || 0)) * HEIGHT;
+      const notches = Math.trunc(this.owed / WHEEL_PX);
+      if (!notches) return;
+      this.owed -= notches * WHEEL_PX;
+      await this.xdo('mousemove', x, y, 'click', '--repeat', Math.min(30, Math.abs(notches)), '--delay', '12', notches > 0 ? '5' : '4');
     } else if (msg.kind === 'text') {
       const text = String(msg.text || '').slice(0, 500);
-      if (text) await send('Input.insertText', { text });
+      if (!text) return;
+      // Plain letters are typed. Anything else (accents, other alphabets) is
+      // pasted, which a keyboard that has no such keys can't get wrong.
+      if (/^[\x20-\x7e]*$/.test(text) || !(await this.paste(text))) await this.xdo('type', '--delay', '14', '--', text);
     } else if (msg.kind === 'key' && Object.hasOwn(KEYS, msg.key)) {
-      const k = KEYS[msg.key];
-      await send('Input.dispatchKeyEvent', { type: k.text ? 'keyDown' : 'rawKeyDown', ...k, nativeVirtualKeyCode: k.windowsVirtualKeyCode });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode, nativeVirtualKeyCode: k.windowsVirtualKeyCode });
+      await this.xdo('key', KEYS[msg.key]);
     }
+  }
+
+  async paste(text) {
+    let failed = false;
+    // (It stays to hand the text over when the browser asks for it, and is taken away again afterwards.)
+    const clip = spawn('xclip', ['-quiet', '-selection', 'clipboard', '-i'], { stdio: ['pipe', 'ignore', 'ignore'], env: this.desk.vars });
+    clip.on('error', () => (failed = true));
+    clip.stdin.on('error', () => {});
+    clip.stdin.end(text);
+    await sleep(150);
+    if (failed) return false;
+    await this.xdo('key', 'ctrl+v');
+    await sleep(350);
+    clip.kill();
+    return true;
   }
 
   async nav(what) {
-    if (this.over || !this.stage) return;
-    if (what === 'reload') return this.cdp.send('Page.reload', {}, this.stage);
-    const h = await this.cdp.send('Page.getNavigationHistory', {}, this.stage);
-    const to = h.entries[h.currentIndex + (what === 'forward' ? 1 : -1)];
-    // (The first entries are this browser's own blank and "Opening" pages: there is no going back to those.)
-    if (!to || !/^https?:/i.test(to.url) || to.url.startsWith(HOME)) return tell({ t: 'said', id: this.id, what, result: 'none' });
-    await this.cdp.send('Page.navigateToHistoryEntry', { entryId: to.id }, this.stage);
+    if (this.over || !alive(this.proc)) return;
+    await this.xdo('key', what === 'reload' ? 'F5' : what === 'forward' ? 'alt+Right' : 'alt+Left');
   }
 
-  async fill(on) {
-    if (this.over || !this.stage) return;
-    const r = await this.cdp.send('Runtime.evaluate', { expression: on ? FILL : UNFILL, awaitPromise: true, returnByValue: true, userGesture: true }, this.stage);
-    tell({ t: 'said', id: this.id, what: on ? 'fill' : 'unfill', result: r.exceptionDetails ? 'refused' : String(r.result.value) });
+  // Somewhere new in the same browser: it is closed and started again on the new address.
+  async go(url) {
+    if (this.over) return;
+    this.url = String(url);
+    this.named = '';
+    const old = this.proc;
+    this.proc = null;
+    await closeBrowser(old, this.desk.vars);
+    if (this.over) return;
+    this.launch(this.url);
   }
 
-  async view(on) {
-    // A phone can ask before the page's tab is there: it is remembered and done once it is.
-    this.wantView = !!on;
-    if (this.over || !this.stage || !this.up || this.viewing === !!on) return;
-    this.viewing = !!on;
-    if (!on) return void (await this.cdp.send('Page.stopScreencast', {}, this.stage).catch(() => {}));
-    this.viewAt = 0;
-    // The browser turns this down while the tab is between two pages, so it is asked until it takes.
-    for (let i = 0; i < 20 && !this.over && this.viewing; i++) {
-      try {
-        await this.cdp.send('Page.bringToFront', {}, this.stage).catch(() => {});
-        await this.cdp.send('Page.startScreencast', { format: 'jpeg', quality: VIEW.quality, maxWidth: VIEW.width, maxHeight: VIEW.height, everyNthFrame: 1 }, this.stage);
-        return;
-      } catch (err) {
-        if (i === 19) {
-          this.viewing = false;
-          throw err;
-        }
-        await sleep(500);
-      }
+  /*
+   * Play, pause and skip, through the browser's own media controls: the ones
+   * a keyboard's play key and a desktop's media buttons use. They act on
+   * whatever in the page is playing, without anything being done to the page.
+   */
+  async media(what, by) {
+    if (this.over || !alive(this.proc)) return;
+    const bus = (dest, ...rest) => run('dbus-send', ['--session', `--dest=${dest}`, '--type=method_call', '--print-reply', '--reply-timeout=2000', ...rest], { vars: this.desk.vars });
+    const names = await bus('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames');
+    const player = /org\.mpris\.MediaPlayer2\.chrom[A-Za-z0-9_.]*/.exec(names.out);
+    // Nothing in the page is playing or paused that the browser knows of.
+    if (!player) return tell({ t: 'said', id: this.id, what, result: 'none' });
+    const call = (method, ...args) => bus(player[0], '/org/mpris/MediaPlayer2', `org.mpris.MediaPlayer2.Player.${method}`, ...args);
+    const micros = (s) => `int64:${Math.round(s * 1e6)}`;
+    if (what === 'pause') await call('Pause');
+    else if (what === 'play') await call('Play');
+    else if (what === 'seek') {
+      const s = Math.min(600, Math.max(-600, Number(by) || 0));
+      if (s) await call('Seek', micros(s));
     }
-  }
-
-  // DrivePost couldn't use the recording: start a new one of the same capture.
-  async again() {
-    if (this.over || !this.cap) return;
-    await this.cdp.send('Runtime.evaluate', { expression: `again(${RECORD_BPS})`, returnByValue: true }, this.cap);
   }
 
   fail(message) {
     if (this.over) return;
     // (The browser grumbles about things a container doesn't have; those lines say nothing about this.)
-    const last = this.stderr.trim().split('\n').filter((l) => !/dbus|DBus|component_updater|gcm|registration_request/i.test(l)).pop();
+    const last = this.stderr.trim().split('\n').filter((l) => !/dbus|DBus|component_updater|gcm|registration_request|vaapi|gpu/i.test(l)).pop();
     log(`${message}${last ? ` | ${last.slice(0, 300)}` : ''}`);
     this.end('failed', message);
   }
@@ -584,29 +550,14 @@ class Session {
     if (this.over) return;
     this.over = true;
     clearInterval(this.poll);
-    clearTimeout(this.viewTimer);
     if (session === this) session = null;
     this.say(phase, message ? { message } : {});
-    if (this.capSocket) this.capSocket.close();
+    const ff = this.ff;
+    this.ff = null;
+    if (alive(ff)) ff.kill('SIGKILL');
     const proc = this.proc;
-    if (proc && proc.exitCode === null && proc.signalCode === null) {
-      leaving = new Promise((gone) => proc.once('exit', gone));
-      // Asked to go first, so that what was signed in to is written down properly.
-      const closing = this.cdp && !this.cdp.closed ? this.cdp.send('Browser.close').catch(() => {}) : Promise.resolve();
-      closing.then(() => {
-        setTimeout(() => {
-          if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
-        }, 3000).unref();
-      });
-    }
-  }
-}
-
-function safeHost(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return 'that address';
+    this.proc = null;
+    if (alive(proc)) leaving = closeBrowser(proc, this.desk.vars);
   }
 }
 
@@ -630,8 +581,8 @@ function handle(msg) {
   else if (msg.t === 'go') s.steer(msg, (m) => s.go(m.url));
   else if (msg.t === 'input') s.steer(msg, (m) => s.input(m));
   else if (msg.t === 'nav') s.steer(msg, (m) => s.nav(m.what));
-  else if (msg.t === 'fill') s.steer(msg, (m) => s.fill(m.on !== false));
-  else if (msg.t === 'view') run(s.view(!!msg.on));
+  else if (msg.t === 'media') s.steer(msg, (m) => s.media(m.what, m.by));
+  else if (msg.t === 'view') s.view(!!msg.on);
   else if (msg.t === 'again') run(s.again());
 }
 
@@ -650,6 +601,7 @@ function connect() {
     waits = 0;
     log('connected to DrivePost');
     tell({ t: 'hello', width: WIDTH, height: HEIGHT });
+    ensureDesk().catch((err) => log(`the browser's desk couldn't be set up yet (${err.message})`));
   });
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
@@ -677,8 +629,14 @@ function connect() {
 function quit() {
   // (Said in words: a page that closes under someone deserves a reason.)
   if (session) session.end('failed', "The server's browser is restarting.");
-  if (display && display.proc) display.proc.kill();
-  setTimeout(() => process.exit(0), 300);
+  const mine = desk;
+  desk = null;
+  // The browser first, so it can write down what it was signed in to; then the desk it sat at.
+  leaving.then(() => {
+    if (mine) for (const p of mine.procs) if (alive(p)) p.kill();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 7000).unref();
 }
 process.on('SIGTERM', quit);
 process.on('SIGINT', quit);

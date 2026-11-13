@@ -3,13 +3,14 @@
  * and the car is shown the page.
  *
  * The page is opened in a browser of the server's own, which runs in a
- * container beside this one (the browser/ folder). A small program there
- * (agent.js) connects in to this server, proves itself with a key the two
- * share, and from then on does what it is told: open this address, tap
- * here, go back, close. It sends back two things. One is a recording of the
- * page, picture and sound, made as it goes: mirror.js turns that into the
- * live video the car plays. The other is a small picture of the page a few
- * times a second, for the phone that steers it.
+ * container beside this one (the browser/ folder). It is an ordinary
+ * browser at a desk nobody sits at, and a small program there (agent.js) is
+ * its remote desktop: it connects in to this server, proves itself with a
+ * key the two share, and from then on passes on what a phone does (a tap
+ * here, some typing, Back) as mouse and keyboard. It sends back two things.
+ * One is a recording of the browser's screen, picture and sound, made as it
+ * goes: mirror.js keeps that as the live video the car plays. The other is
+ * a small picture of the screen a few times a second, for the phone.
  *
  * One page at a time for the whole server: a browser playing video is the
  * heaviest thing this machine does. A page nobody is watching or steering is
@@ -23,10 +24,13 @@ import fs from 'node:fs';
 import { config } from './config.js';
 import { addressAllowed, linkIn, siteOf } from './links.js';
 import { startShare } from './mirror.js';
+import { pageLag } from './stream.js';
 
 const OPEN_WITHIN_MS = 45 * 1000; // a page whose picture hasn't come up by then isn't going to
 const FRESH_STARTS = 2; // times in a row a recording may be started afresh before giving up
 const STALLED_MS = 12 * 1000; // a recording that stops arriving for this long has stalled
+// About how far behind the browser's screen a car's picture runs, when the car hasn't been playing long enough to say.
+const BEHIND_S = 5;
 
 let agent = null; // the browser's program, once it has connected: { ws, address }
 let page = null; // the page that is open, if one is
@@ -115,7 +119,7 @@ export function attachAgent(ws, req) {
       return;
     }
     if (!page || msg.id !== page.id) return;
-    if (msg.t === 'rec') newRecording();
+    if (msg.t === 'rec') newRecording(String(msg.type || ''));
     else if (msg.t === 'page') moved(msg);
     else if (msg.t === 'state') {
       if (msg.phase === 'capturing') page.sound = msg.sound !== false;
@@ -133,11 +137,12 @@ export function attachAgent(ws, req) {
 }
 
 // The browser has started a recording (its first of this page, or a fresh one).
-function newRecording() {
+function newRecording(type) {
   const mine = page;
   let share;
   try {
-    share = startShare(mine.profile, { size: '720', audio: true, again: mine.recordings > 0, h264 });
+    // (The browser's film of its own screen is kept as it comes: see ingestArgs.)
+    share = startShare(mine.profile, { size: '720', audio: true, again: mine.recordings > 0, h264, copy: /^video\/mp2t\b/i.test(type) });
   } catch (err) {
     console.error(`[page] could not take the recording in: ${err.message}`);
     return endPage("This server couldn't take the page's picture in.");
@@ -174,9 +179,8 @@ function moved(msg) {
 }
 
 function said(msg) {
-  if (msg.what === 'fill' && msg.result === 'none') hooks.toast(page.profile, 'No video was found on the page to fill the screen with.');
-  else if (msg.what === 'fill' && msg.result !== 'ok') hooks.toast(page.profile, "The page wouldn't let its video fill the screen.");
-  else if ((msg.what === 'back' || msg.what === 'forward') && msg.result === 'none') hooks.toast(page.profile, msg.what === 'back' ? 'This is the first page.' : 'There is no page after this one.');
+  // A skip was asked for and the browser knows of nothing playing to skip in. (A pause that finds nothing has still paused the car.)
+  if (msg.what === 'seek' && msg.result === 'none') hooks.toast(page.profile, 'Nothing on the page is playing that could be skipped in.');
 }
 
 // What the screens are told about it.
@@ -209,6 +213,7 @@ export async function openPage(profile, text) {
     page.site = site;
     page.title = '';
     page.idleSince = 0;
+    page.held = null;
     toAgent({ t: 'go', id: page.id, url });
     console.log(`[page] on to ${site}`);
     hooks.changed(profile, view(page));
@@ -222,6 +227,7 @@ export async function openPage(profile, text) {
     title: '',
     phase: 'opening',
     sound: true,
+    held: null, // its video was paused from the car or a phone: how far behind it the car was showing (seconds)
     share: null,
     recordings: 0,
     fails: 0,
@@ -266,7 +272,7 @@ function endPage(message) {
 
 // ---------- steering it from a phone ----------
 
-const KINDS = new Set(['tap', 'scroll', 'text', 'key']);
+const KINDS = new Set(['tap', 'point', 'scroll', 'text', 'key']);
 const NAVS = new Set(['back', 'forward', 'reload']);
 
 /*
@@ -300,12 +306,35 @@ export function watchPage(ws, profile) {
     if (msg.t === 'input' && KINDS.has(msg.kind)) {
       toAgent({ t: 'input', id: mine.id, kind: msg.kind, x: Number(msg.x) || 0, y: Number(msg.y) || 0, dy: Number(msg.dy) || 0, text: String(msg.text || '').slice(0, 500), key: String(msg.key || '').slice(0, 20) });
     } else if (msg.t === 'nav' && NAVS.has(msg.what)) toAgent({ t: 'nav', id: mine.id, what: msg.what });
-    else if (msg.t === 'fill') toAgent({ t: 'fill', id: mine.id, on: msg.on !== false });
   });
   ws.on('close', () => {
     mine.viewers.delete(ws);
     if (page === mine && !mine.viewers.size) toAgent({ t: 'view', id: mine.id, on: false });
   });
+}
+
+/*
+ * Play, pause or skip in whatever the page is playing, for the car's and the
+ * phone's own buttons. The browser does it through its media controls, the
+ * ones a keyboard's play key uses, so it works on any site's player.
+ *
+ * The car's picture runs a few seconds behind the browser. A video paused
+ * from the car has by then played that much further than the car showed, so
+ * it is taken back that far before it is played again: nothing is missed.
+ */
+export function pageMedia(profile, what, by = 0) {
+  const mine = pageOf(profile);
+  // (Shown again in the car: played on, if it was a pause from the car that stopped it.)
+  if (mine && what === 'show' && mine.held !== null) what = 'play';
+  if (!mine || !['pause', 'play', 'seek'].includes(what)) return false;
+  if (what === 'pause') {
+    if (mine.held === null) mine.held = Math.min(30, pageLag(profile) ?? BEHIND_S);
+  } else if (what === 'play') {
+    if (mine.held !== null) toAgent({ t: 'media', id: mine.id, what: 'seek', by: -Math.round(mine.held * 10) / 10 });
+    mine.held = null;
+  }
+  toAgent({ t: 'media', id: mine.id, what, by: what === 'seek' ? Math.max(-600, Math.min(600, Number(by) || 0)) : 0 });
+  return true;
 }
 
 // A profile's phones were signed out: they stop steering.

@@ -24,11 +24,20 @@ const SILENT_AFTER = 20;
 const startedOverForSound = new Map();
 const BACKLOG_HIGH = 4 * 1024 * 1024;
 const BACKLOG_LOW = 1024 * 1024;
-// A page in the server's browser is recorded as it is watched, so the car can
-// only ever hold a few seconds of it. Holding more than this means the car
-// has fallen that far behind the page (a slow patch, a paused player): see
-// fellBehind below.
-const SCREEN_AHEAD = 10;
+// A page in the server's browser is recorded as it is watched, so a car
+// starts with only a few seconds of it in hand. Each time its connection
+// dips it falls a little further behind the page, and what has been sent in
+// the meantime is then its reserve for the next dip: a car on mobile data
+// settles some seconds back and plays smoothly from there. Further behind
+// than this, it is started afresh from where the page is now (fellBehind).
+const SCREEN_AHEAD = 20;
+// A page's picture, made into H.264 for a car that can play it: about what
+// MPEG-1 needs two thirds more data for.
+const PAGE_H264_KBPS = { 360: 450, 480: 850, 720: 1600, 1080: 1600 };
+// How far behind the browser's screen each profile's car is showing a page
+// (seconds), as last worked out. See pageLag.
+const pageLags = new Map();
+const CAPTURE_S = 1.5; // from the browser's screen to a piece of the stream on this machine
 
 // MP2 audio needs more bits than modern formats; 192k is where it stops
 // sounding rough, so the two higher tiers get that.
@@ -69,6 +78,8 @@ export function outputRate(fps) {
 }
 
 export function streamPlan(info, quality) {
+  // (A page is filmed at 720p. Asked for at more than that, it is sent as 720p is: more data would buy nothing.)
+  if (info.mirror && PRESETS[quality] && PRESETS[quality].height > (info.height || 720)) quality = '720';
   const preset = PRESETS[quality] || PRESETS[480];
   return {
     height: Math.min(preset.height, info.height || preset.height),
@@ -85,8 +96,10 @@ export function streamPlan(info, quality) {
 //          H.264, which is nearly all of them up to 1080p.
 //   mpeg1: converted here and decoded by JSMpeg in the car. Works everywhere.
 // Live streams are always converted: their timestamps can jump, and
-// converting smooths that out.
+// converting smooths that out. A page is made into whichever the car asks
+// for: its picture is this machine's own, and steady.
 export function chooseCodec(want, info, canEncodeH264 = true) {
+  if (info.mirror) return want === 'h264' && canEncodeH264 ? 'h264' : 'mpeg1';
   if (want !== 'h264' || info.live) return 'mpeg1';
   if (info.inputs.some((i) => i.lavfi)) return canEncodeH264 ? 'h264' : 'mpeg1'; // the test pattern
   // Another site's video that can't be passed on as it is (links.js says why).
@@ -176,7 +189,17 @@ export function ffmpegArgs(info, startAt, quality, audioRate = 48000, codec = 'm
   if (a >= 0) args.push('-map', `${a}:a:0${info.inputs[a].other ? '?' : ''}`);
 
   const max = Math.round(plan.kbps * 1.3);
-  if (codec === 'h264' && info.inputs[v].lavfi) {
+  if (codec === 'h264' && info.inputs[v].mirror) {
+    // A page: its picture is made here at the size and the rate the car's
+    // quality asks for. No frames that lean on later ones, so the car can
+    // show each as it arrives.
+    const kbps = PAGE_H264_KBPS[quality] || PAGE_H264_KBPS[480];
+    args.push(
+      '-vf', `scale=-2:'min(${plan.height},ih)':flags=bicubic,fps=30,format=yuv420p`,
+      '-c:v', 'libx264', '-preset', 'superfast', '-tune', 'zerolatency', '-crf', '23',
+      '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`, '-g', '60'
+    );
+  } else if (codec === 'h264' && info.inputs[v].lavfi) {
     // Test pattern: encode it the way YouTube's files are (with B-frames).
     args.push(
       '-vf', 'format=yuv420p',
@@ -423,6 +446,13 @@ export async function cutLists(info, startAt, lists, handedOver = []) {
   return cuts;
 }
 
+// How far behind the browser's screen a profile's car is showing its page,
+// in seconds, or null when no car has been playing it just now.
+export function pageLag(group) {
+  const l = pageLags.get(group);
+  return l && Date.now() - l.at < 15000 ? l.s : null;
+}
+
 // One car connection = one ffmpeg process.
 export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
   const handedOver = []; // lists made fetchable for this stream's ffmpeg
@@ -566,7 +596,12 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     // show the car an older and older page.
     if (page && startedAtEdge !== null && lastSentPts !== null && splitter.firstVideoPts !== null) {
       const reached = startedAtEdge + (lastSentPts - splitter.firstVideoPts);
-      if (playable.share.edge() - reached > SCREEN_AHEAD) return fellBehind('server');
+      const short = playable.share.edge() - reached;
+      if (short > SCREEN_AHEAD) return fellBehind('server');
+      // How far behind the browser's screen this car is showing the page:
+      // what it has been sent and not yet played, what hasn't been sent yet,
+      // and the moment the picture takes to get this far.
+      if (clientClock !== null) pageLags.set(group, { s: Math.max(0, a) + Math.max(0, short) + CAPTURE_S, at: Date.now() });
     }
     if (!flowPaused && (a > limit.high || backlog > BACKLOG_HIGH)) {
       logSpeed(backlog > BACKLOG_HIGH ? "held back by the car's connection, not the CPU" : '');
@@ -633,7 +668,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   const plan = streamPlan(info, quality);
   codec = chooseCodec(want, info, await canEncodeH264());
   if (closed) return;
-  passthrough = codec === 'h264' && !info.inputs.some((i) => i.lavfi);
+  passthrough = codec === 'h264' && !info.inputs.some((i) => i.lavfi || i.mirror);
   sendJson(ws, {
     type: 'meta',
     duration: info.duration,
@@ -645,7 +680,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     why: (codec === 'mpeg1' && want === 'h264' && !info.live && info.convert) || undefined,
     // Passed-through video keeps YouTube's own frame rate and bitrate.
     fps: passthrough ? info.fps || null : codec === 'h264' ? 30 : plan.rate.fps,
-    kbps: passthrough ? (info.tbr ? Math.round(info.tbr) : null) : plan.kbps,
+    kbps: passthrough ? (info.tbr ? Math.round(info.tbr) : null) : codec === 'h264' && info.mirror ? PAGE_H264_KBPS[quality] || PAGE_H264_KBPS[480] : plan.kbps,
   });
   const notice = byRoute ? routeNotice(info.routeName) : '';
   if (notice && noticeDue(group, info.routeName)) sendJson(ws, { type: 'notice', message: notice });
