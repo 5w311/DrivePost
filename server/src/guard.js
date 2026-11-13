@@ -11,12 +11,16 @@
  * It serves the browser's machine and nobody else: `allowed(address)` says
  * who that is (webpage.js knows, from the program there having proved itself
  * with the shared key).
+ *
+ * It is also where ads are stopped, for a profile that has asked for that:
+ * `blocked(name)` says whether a machine's name is one to refuse (adblock.js).
  */
 import http from 'node:http';
 import net from 'node:net';
 import { whereTo } from './links.js';
 
 const WHY = "DrivePost's browser doesn't open addresses on its own network.";
+const AD = "Stopped by DrivePost's ad block list.";
 
 function turnAway(socket, code, text) {
   const body = `${text}\n`;
@@ -24,10 +28,10 @@ function turnAway(socket, code, text) {
 }
 
 /*
- * Start it. `opts`: { port, allowed(address), lookup, allowLocal, connect }.
+ * Start it. `opts`: { port, allowed(address), blocked(name), lookup, allowLocal, connect }.
  * Returns the http.Server (its 'listening' and 'error' events are the caller's to hear).
  */
-export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal, connect = net.connect }) {
+export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal, connect = net.connect, blocked = null }) {
   const lead = (name) => whereTo(name, lookup, allowLocal);
 
   // http:// pages: the browser sends the whole address and this fetches it.
@@ -44,6 +48,7 @@ export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal
       return deny(400, 'This is a proxy for one browser, not a website.');
     }
     if (u.protocol !== 'http:') return deny(400, 'Only web addresses.');
+    if (blocked && blocked(u.hostname)) return deny(403, AD);
     let to;
     try {
       to = await lead(u.hostname);
@@ -73,6 +78,7 @@ export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal
     const m = /^(\[[0-9a-f:.]+\]|[^:\s]+):(\d{1,5})$/i.exec(req.url || '');
     const port = m ? Number(m[2]) : 0;
     if (!m || port < 1 || port > 65535) return turnAway(client, 400, 'Where to?');
+    if (blocked && blocked(m[1])) return turnAway(client, 403, AD);
     let to;
     try {
       to = await lead(m[1]);

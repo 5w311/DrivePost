@@ -80,6 +80,10 @@ export const config = {
     // The door the browser fetches everything through (guard.js). Not
     // published outside Docker.
     guardPort: Number(env.GUARD_PORT) || 8081,
+    // The list of ad and tracker machines a profile can have blocked in its
+    // pages (adblock.js), and where this server keeps its copy.
+    blockList: (env.PAGE_BLOCKLIST_URL || '').trim() || 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts',
+    blockListFile: path.join(path.resolve(env.DATA_DIR || './data'), 'ad-block-list.txt'),
     // A page nobody is watching or steering is closed after this long.
     idleMs: (Number(env.PAGE_IDLE_SECONDS) || 5 * 60) * 1000,
     // Where the page's picture is kept while it plays (a few megabytes,

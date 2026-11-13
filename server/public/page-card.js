@@ -16,6 +16,10 @@
  *
  * The live view costs data, so it only runs while it is being used: it
  * stops after a minute untouched and comes back with a tap.
+ *
+ * "Block ads" has the server refuse what the page asks of ad and tracker
+ * machines (adblock.js on the server). It is this profile's own setting,
+ * and it is a switch because a few sites won't play with their ads blocked.
  */
 (function () {
   'use strict';
@@ -34,6 +38,8 @@
   var loading = null; // the next one, being made ready
   var size = { w: 16, h: 9 }; // the picture's own size
   var big = false; // the live view fills the phone's screen
+  var ads = null; // how blocking ads stands, as the server last said: { on, list, stopped }
+  var adsTimer = null;
   var pageWas = ''; // which page the card was last drawn for
 
   function show(node, on) {
@@ -54,6 +60,8 @@
     if (!p) {
       pageWas = '';
       setBig(false);
+      ads = null;
+      watchAds();
       return stopView();
     }
     // Another page: start with a clean slate.
@@ -72,6 +80,10 @@
     $('#pageSay').textContent = say;
     $('#pageSite').textContent = p.title && p.title !== site ? p.title : '';
     show($('#pageShow'), p.phase === 'live' && !showing);
+    // (Switched from another phone of this profile: what was heard here before no longer holds.)
+    if (ads && server.settings && !!server.settings.blockAds !== ads.on) ads = null;
+    paintAds();
+    watchAds();
     show($('#pageVeil'), resting || !picture);
     $('#pageVeil').textContent = resting ? 'Tap to see the page' : p.phase !== 'live' ? 'Opening…' : 'One moment…';
     if (!resting && !document.hidden) startView();
@@ -127,6 +139,43 @@
     if (mine) {
       mine.onopen = mine.onmessage = mine.onclose = null;
       try { mine.close(); } catch (e) {}
+    }
+  }
+
+  // ---------- blocking ads ----------
+
+  function paintAds() {
+    var on = ads ? ads.on : !!(server && server.settings && server.settings.blockAds);
+    var btn = $('#pageAds');
+    btn.textContent = 'Block ads: ' + (on ? 'on' : 'off');
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    var say = '';
+    if (on && ads) {
+      if (ads.list === 'failed') say = "The block list couldn't be fetched, so nothing is blocked yet. The server tries again by itself.";
+      else if (ads.list !== 'ready') say = 'Fetching the block list…';
+      else say = ads.stopped + (ads.stopped === 1 ? ' request' : ' requests') + " to ad and tracker companies stopped on this page. If the site won't play, switch this off and tap Reload.";
+    }
+    $('#pageAdsSay').textContent = say;
+    show($('#pageAdsSay'), !!say);
+  }
+
+  function askAds(body) {
+    return DT.api('/api/page/ads', body ? { body: body } : {}).then(function (r) {
+      ads = r;
+      paintAds();
+      return r;
+    });
+  }
+
+  // While a page is open and ads are being blocked, the count is kept up to date.
+  function watchAds() {
+    var want = !!page() && !document.hidden && !!(ads ? ads.on : server && server.settings && server.settings.blockAds);
+    if (want && !adsTimer) {
+      askAds().catch(function () {});
+      adsTimer = setInterval(function () { askAds().catch(function () {}); }, 5000);
+    } else if (!want && adsTimer) {
+      clearInterval(adsTimer);
+      adsTimer = null;
     }
   }
 
@@ -274,6 +323,15 @@
     key('#pageC', 'C');
     $('#pageBack').addEventListener('click', function () { send({ t: 'nav', what: 'back' }); });
     $('#pageReload').addEventListener('click', function () { send({ t: 'nav', what: 'reload' }); });
+    $('#pageAds').addEventListener('click', function () {
+      var on = !(ads ? ads.on : server && server.settings && server.settings.blockAds);
+      askAds({ on: on }).then(function () {
+        DT.toast(on
+          ? 'Blocking ads from here on. Tap Reload to clear the ones already on the page.'
+          : 'Ads are no longer blocked. Tap Reload for the page to load them.');
+        watchAds();
+      }).catch(function (e) { DT.toast(e.message); });
+    });
     $('#pageBig').addEventListener('click', function () { setBig(true); });
     $('#pageDone').addEventListener('click', function (ev) {
       ev.stopPropagation();
@@ -287,8 +345,10 @@
     });
     // Out of sight, the live view is only data spent.
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopView();
-      else paint();
+      if (document.hidden) {
+        stopView();
+        watchAds();
+      } else paint();
     });
     paint();
   }

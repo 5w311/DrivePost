@@ -383,6 +383,10 @@ export class Store extends EventEmitter {
         this.settings = { ...this.settings, format: data.v };
         this.restartStream();
         break;
+      case 'blockAds':
+        // In pages opened in the server's browser: refuse what they ask of ad and tracker machines (adblock.js).
+        this.settings = { ...this.settings, blockAds: !!data.on };
+        break;
       case 'fill':
         // In fullscreen: zoom the picture to cover the window instead of fitting it.
         this.settings = { ...this.settings, fill: !!data.on };

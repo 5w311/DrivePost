@@ -10,7 +10,8 @@ import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
 import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
-import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, pageMedia, watchPage, dropWatchers } from './webpage.js';
+import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, pageMedia, watchPage, dropWatchers, adRefused, adsStopped } from './webpage.js';
+import { adListed, adList, useAdList } from './adblock.js';
 import { startGuard } from './guard.js';
 import { stampPage, feedbackLink } from './pages.js';
 import { recommendFor } from './recommend.js';
@@ -741,6 +742,17 @@ async function route(req, res) {
       closePage(profile);
       return send(res, 200, { ok: true });
     }
+    // Blocking ads in this profile's pages: switched on or off (POST), and how it stands (GET).
+    if (p === '/api/page/ads' && (req.method === 'GET' || req.method === 'POST')) {
+      const store = storeFor(profile);
+      if (req.method === 'POST') {
+        const body = await readJson(req);
+        store.command('blockAds', { on: !!body.on });
+      }
+      const on = !!store.settings.blockAds;
+      if (on) useAdList();
+      return send(res, 200, { on, list: adList().state, names: adList().size, stopped: adsStopped(profile) });
+    }
 
     if (req.method === 'GET' && p === '/api/search') {
       try {
@@ -967,7 +979,8 @@ onShare((profile, what, share) => {
 // The browser's one way out to the internet (guard.js). Only worth opening
 // where a browser can sign in at all.
 if (config.pages.on && browserKey()) {
-  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows });
+  const wantsAdsBlocked = (id) => !!(auth.profile(id) && storeFor(id).settings.blockAds);
+  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows, blocked: (name) => adRefused(name, wantsAdsBlocked, adListed) });
   guard.on('error', (err) => console.log(`[page] the browser's way out couldn't be opened on port ${config.pages.guardPort} (${err.code || err.message}): pages won't load`));
 }
 

@@ -705,6 +705,8 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
 /* Five across, on the narrowest phone too. */
 .page-keys { margin-top: 8px; }
 .page-keys button { flex: 1 1 0; min-width: 0; padding: 0 2px; font-size: 14px; }
+.page-keys button[aria-pressed="true"] { border-color: var(--rig-accent, #2f6bff); color: var(--rig-accent, #2f6bff); font-weight: 600; }
+#pageAdsSay { margin: 8px 0 0; }
 .page-view.pointing { outline: 2px solid var(--rig-accent, #2f6bff); outline-offset: -2px; }
 /* The live view over the whole of the phone's screen: turn the phone for the largest picture. */
 .page-view.big {

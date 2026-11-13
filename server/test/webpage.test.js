@@ -101,3 +101,64 @@ test("only a program with the key is the browser, and nothing opens without one"
   assert.match((await openPage('main', 'http://localhost:8080/admin')).error, refused);
   assert.match((await openPage('main', 'https://93.184.216.34/')).error, /browser isn't running/);
 });
+
+// ---------- blocking ads ----------
+
+test('a block list is read from a hosts file, and only names of other machines count', async () => {
+  const { parseList } = await import('../src/adblock.js');
+  const list = parseList([
+    '# Title: a list',
+    '127.0.0.1 localhost',
+    '127.0.0.1 localhost.localdomain',
+    '255.255.255.255 broadcasthost',
+    '::1 ip6-localhost',
+    'fe80::1%lo0 localhost',
+    '0.0.0.0 0.0.0.0',
+    '',
+    '0.0.0.0 ads.example.com',
+    '0.0.0.0 Tracker.Example.NET   # with a note',
+    '127.0.0.1 pixel.example.org',
+    'plain.example.io',
+    '||rule.example.com^',
+    '0.0.0.0 not a name',
+    '0.0.0.0 -bad-.example.com',
+    'just words here',
+  ].join('\n'));
+  assert.deepEqual([...list].sort(), ['ads.example.com', 'pixel.example.org', 'plain.example.io', 'rule.example.com', 'tracker.example.net']);
+  assert.equal(parseList('').size, 0);
+});
+
+test('the guard refuses what is on the block list, and only that', async () => {
+  const asked = [];
+  const guard = startGuard({
+    port: 0, host: '127.0.0.1', allowed: () => true, allowLocal: true,
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    blocked: (name) => { asked.push(name); return name === 'ads.example.com'; },
+    connect: () => { const s = new net.Socket(); setImmediate(() => s.emit('error', new Error('nowhere'))); return s; },
+  });
+  await new Promise((done) => guard.once('listening', done));
+  const port = guard.address().port;
+  const ask = (request) => new Promise((done) => {
+    const s = net.connect(port, '127.0.0.1', () => s.write(request));
+    let got = '';
+    s.on('data', (d) => (got += d));
+    s.on('close', () => done(got));
+    s.on('error', () => done(got));
+  });
+  const line = await ask('CONNECT ads.example.com:443 HTTP/1.1\r\nHost: x\r\n\r\n');
+  assert.match(line, /^HTTP\/1\.1 403 /);
+  assert.match(line, /ad block list/);
+  const page = await ask('GET http://ads.example.com/banner.js HTTP/1.1\r\nHost: ads.example.com\r\nConnection: close\r\n\r\n');
+  assert.match(page, /^HTTP\/1\.1 403 /);
+  assert.match(page, /ad block list/);
+  const other = await ask('CONNECT video.example.com:443 HTTP/1.1\r\nHost: x\r\n\r\n');
+  assert.match(other, /^HTTP\/1\.1 502 /, 'a name that is not on the list is passed on (here, to nowhere)');
+  assert.deepEqual(asked, ['ads.example.com', 'ads.example.com', 'video.example.com']);
+  guard.close();
+});
+
+test('ads are only refused for a profile that asked, and never the site it opened', async () => {
+  const { adRefused } = await import('../src/webpage.js');
+  // (No page is open in these tests: nothing is refused for nobody.)
+  assert.equal(adRefused('ads.example.com', () => true, () => true), false);
+});

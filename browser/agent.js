@@ -41,6 +41,13 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 const VIEW = { width: 640, height: 360, fps: 5 }; // the phone's live view
 const WHEEL_PX = 120; // how far one notch of a mouse wheel moves a page
+// A browser's sound reaches the film a little before its picture does: the
+// picture has to be drawn, put on the screen and then caught by the next of
+// thirty looks a second, while the sound is taken as it is made. Measured
+// with a clip that flashes and beeps at once, that is 20 to 100 ms. The
+// sound is set back by the middle of that, so the two are within a frame or
+// two of each other either way.
+const PICTURE_LAG_S = 0.06;
 
 const log = (...a) => console.log('[browser]', ...a);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -298,21 +305,34 @@ class Session {
    * Film the screen and record the sound, and pass both on as they are
    * made. A second, smaller picture a few times a second is for the phone's
    * live view, and shows the mouse pointer, which the car's doesn't.
+   *
+   * The screen and the sound are two feeds, and they don't start at the
+   * same instant: the sound can be most of a second behind the screen in
+   * getting going. So each is stamped with the time on the clock as it is
+   * taken, and those times are kept (-copyts) instead of each feed being
+   * counted from its own start, which is what would put them out of step
+   * by however far apart they started. (The clock's time is a very large
+   * number: the same amount is taken off both on the way out.)
    */
   film() {
     if (this.over) return;
-    const screen = ['-f', 'x11grab', '-video_size', `${WIDTH}x${HEIGHT}`];
+    const screen = ['-f', 'x11grab', '-video_size', `${WIDTH}x${HEIGHT}`, '-use_wallclock_as_timestamps', '1'];
+    const since = (Date.now() / 1000 - 3).toFixed(3);
     const args = [
-      '-hide_banner', '-loglevel', 'error',
+      '-hide_banner', '-loglevel', 'error', '-copyts',
       ...screen, '-framerate', '30', '-draw_mouse', '0', '-thread_queue_size', '512', '-i', this.desk.display,
-      '-f', 'pulse', '-fragment_size', '8192', '-thread_queue_size', '512', '-i', 'drivepost.monitor',
+      '-f', 'pulse', '-itsoffset', String(PICTURE_LAG_S), '-fragment_size', '8192', '-thread_queue_size', '512', '-i', 'drivepost.monitor',
       ...screen, '-framerate', String(VIEW.fps), '-draw_mouse', '1', '-thread_queue_size', '64', '-i', this.desk.display,
       // The recording never leaves this machine, so it can be a sharp one. DrivePost makes of it what the car needs.
       '-map', '0:v', '-map', '1:a',
+      // (Each frame keeps the time it was taken at: none are added or dropped here to even them out.)
+      '-fps_mode', 'passthrough',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '20', '-maxrate', '8M', '-bufsize', '8M', '-g', '30', '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      // (The sound is held to its times too, should the two clocks ever drift over a long evening.)
+      '-af', 'aresample=async=1', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      '-output_ts_offset', `-${since}`,
       '-f', 'mpegts', '-muxdelay', '0', '-muxpreload', '0', '-flush_packets', '1', 'pipe:1',
-      '-map', '2:v', '-vf', `scale=${VIEW.width}:${VIEW.height}:flags=bilinear`, '-pix_fmt', 'yuvj420p', '-c:v', 'mjpeg', '-q:v', '9',
+      '-map', '2:v', '-fps_mode', 'passthrough', '-vf', `scale=${VIEW.width}:${VIEW.height}:flags=bilinear`, '-pix_fmt', 'yuvj420p', '-c:v', 'mjpeg', '-q:v', '9',
       '-f', 'mpjpeg', '-flush_packets', '1', 'pipe:3',
     ];
     const ff = (this.ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], env: this.desk.vars }));

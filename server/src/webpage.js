@@ -85,6 +85,25 @@ const plain = (address) => String(address || '').replace(/^::ffff:/, '');
 export const guardAllows = (address) => !!agent && plain(address) === agent.address;
 // Can a page be opened right now?
 export const pagesReady = () => config.pages.on && !!agent;
+
+/*
+ * For guard.js: should what the browser is asking of this machine be
+ * refused as an ad? Only for a profile that has switched that on (`wants`
+ * says), only names on the list, and never the site the person opened.
+ */
+export function adRefused(name, wants, listed) {
+  if (!page || !wants(page.profile)) return false;
+  const asked = String(name || '').toLowerCase().replace(/^\[|\]$/g, '');
+  let opened = '';
+  try {
+    opened = new URL(page.url).hostname.toLowerCase();
+  } catch {}
+  if (asked === opened || !listed(asked)) return false;
+  page.stopped++;
+  return true;
+}
+// How many such requests have been refused for the page a profile has open.
+export const adsStopped = (profile) => (pageOf(profile) ? pageOf(profile).stopped : 0);
 export const pageOf = (profile) => (page && page.profile === profile ? page : null);
 
 function toAgent(msg) {
@@ -214,6 +233,7 @@ export async function openPage(profile, text) {
     page.title = '';
     page.idleSince = 0;
     page.held = null;
+    page.stopped = 0;
     toAgent({ t: 'go', id: page.id, url });
     console.log(`[page] on to ${site}`);
     hooks.changed(profile, view(page));
@@ -228,6 +248,7 @@ export async function openPage(profile, text) {
     phase: 'opening',
     sound: true,
     held: null, // its video was paused from the car or a phone: how far behind it the car was showing (seconds)
+    stopped: 0, // requests to ad machines refused for it
     share: null,
     recordings: 0,
     fails: 0,

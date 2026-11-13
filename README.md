@@ -146,6 +146,7 @@ Some links have no video in them that can be fetched: the page has a player of i
 - **Type into the page**, with **Enter**, **Delete** and **Esc**, for search boxes and sign-ins. Tap the box on the page first.
 - **Back** and **Reload**.
 - **Full screen (F)** and **Captions (C)** press the F and C keys, which most players use for those. A player that doesn't has its own buttons for them: press and hold on the video to bring them up, then tap. Esc leaves full screen. Most sites keep what you chose, so captions switched on once stay on.
+- **Block ads** (off to begin with) has the server refuse what the page asks of ad and tracker companies. See "Blocking ads" below.
 - **Show it in the car** puts the page back on after another video; **Close the page** ends it, and the car goes on to Up Next.
 
 The live view stops after a minute untouched, to save the phone's data, and comes back with a tap. Once the video is playing, the phone is free. The car runs about five seconds behind the page, so steer by the phone's live view, which is immediate, and not by the car.
@@ -154,7 +155,7 @@ The live view stops after a minute untouched, to save the phone's data, and come
 
 **What it remembers.** Each profile has its own browser data, kept in a Docker volume, so a site you signed in to stays signed in. The tabs themselves are not kept: every page starts in a clean window. The browser keeps UTC time unless `.env` says where it is (`TZ=America/New_York`), which is what makes a site's TV guide show your hours.
 
-**How it works.** A second container (`browser/`) holds an ordinary Chromium at a desk nobody sits at: a screen that exists only in memory (Xvfb), a sound card that plays to nobody (PulseAudio), a window manager, and a mouse and keyboard. A small program there (`browser/agent.js`) is that desk's remote desktop. It connects to DrivePost, signs in with a key the two share, starts the browser on the address it is given, moves the mouse and presses the keys when a phone says so, and has ffmpeg film the screen and record the sound. The film is handed to DrivePost as it is made, which keeps it in memory as a live stream of one-second pieces (`server/src/mirror.js`, nothing converted), and the car's stream is made from that like any live video.
+**How it works.** A second container (`browser/`) holds an ordinary Chromium at a desk nobody sits at: a screen that exists only in memory (Xvfb), a sound card that plays to nobody (PulseAudio), a window manager, and a mouse and keyboard. A small program there (`browser/agent.js`) is that desk's remote desktop. It connects to DrivePost, signs in with a key the two share, starts the browser on the address it is given, moves the mouse and presses the keys when a phone says so, and has ffmpeg film the screen and record the sound. The film is handed to DrivePost as it is made, which keeps it in memory as a live stream of one-second pieces (`server/src/mirror.js`, nothing converted), and the car's stream is made from that like any live video. The screen and the sound are two feeds that don't start at the same instant, so each is stamped with the time on the clock as it is taken and they are lined up by that; the sound is then set back 60 ms, which is about how much longer a picture takes to reach the screen.
 
 No program drives the browser. It is started without a remote-control interface, and the program beside it never reaches into a page: it can't read one, change one or run anything in one. All it knows of the page is the name on its window. A site sees an ordinary browser being used by a person, which is what is happening.
 
@@ -168,6 +169,13 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 
 **One at a time.** A browser playing video is the heaviest thing this server does, so there is one page for the whole server. While one profile's car is showing a page, another profile is told the browser is taken; once that car is on something else, the next page takes its place. A page that no car is playing and no phone is steering is closed after five minutes (`PAGE_IDLE_SECONDS`).
 
+**Blocking ads.** With **Block ads** switched on in the Page card, whatever a page asks of a machine on a block list is refused at the door the browser fetches everything through (`server/src/adblock.js`, `server/src/guard.js`), the way a Pi-hole does it for a home network. The page gets the rest, and the card counts what was stopped.
+
+- The list is a public one in the format of a hosts file: by default [StevenBlack/hosts](https://github.com/StevenBlack/hosts), the one a Pi-hole starts with (about 78,000 names). The server fetches it the first time someone switches blocking on, keeps a copy with its data, and fetches it again once a week. `PAGE_BLOCKLIST_URL` in `.env` names another list.
+- It is each profile's own setting and it is off until switched on. It is a switch because a few sites won't play with their ads blocked: switch it off and tap **Reload**.
+- The site you opened is never blocked, whatever the list says of it.
+- What it can't stop is an ad that comes from the same machine as the programme. Most free television splices its breaks into the stream itself, and no list can tell those from the show.
+
 **On mobile data.** A page can't be loaded ahead the way a video can, so it is the first thing to stutter on a weak signal. Three things are done about that:
 
 - A car that can play H.264 is sent the page as H.264: about 1.6 Mbit/s at 720p, 0.85 at 480p and 0.45 at 360p, where MPEG-1 needs 2.6, 1.3 and 0.7.
@@ -180,7 +188,7 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 
 - **Copy-protected video.** Chromium here has no way to play it and DrivePost does nothing to get around that. Such a player shows its own error.
 - **Every site's robot check.** An "I'm not a robot" box judges the browser and where it runs, not the tap. This is an ordinary browser used by a person, which is what such a check looks for, but it runs on a server with no graphics card, and a check that holds that against it will fail it however often the box is tapped. DrivePost doesn't disguise the browser to get through.
-- **Ads that are part of the video.** Nothing is filtered: the car shows what the page shows.
+- **Ads that are part of the video.** **Block ads** stops what comes from ad companies' machines. A break spliced into the stream itself, as most free television does it, comes from the same machine as the show and stays.
 
 `PAGES=off` in `.env` takes the feature away. The browser's container still starts with the rest, and waits there doing nothing.
 
@@ -373,6 +381,8 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | A page's video is black or shows an error about protected content | The video is copy-protected, which this browser can't play. |
 | A player's buttons on a page can't be found or hit | They hide until the mouse comes near. **Press and hold** on the video in the live view to bring them up, and tap **Bigger** to make them easy to hit. |
 | Pause or the ten-second buttons do nothing on a page | They work what the browser knows is playing. A video that hasn't been started yet has to be started on the page first, and live television can't be skipped in. |
+| A site on a page won't play, or asks for an ad blocker to be switched off | Switch **Block ads** off on the Page card and tap **Reload**. |
+| **Block ads** is on and the card says the list couldn't be fetched | The server couldn't reach the list's address (GitHub, unless `PAGE_BLOCKLIST_URL` says otherwise). It tries again by itself every half hour; nothing is blocked until it has one. |
 | A page's "I'm not a robot" box spins and comes back | The site's check is failing the browser, not your tap (see "What it can't do" under [Opening a page](#opening-a-page)). |
 | A page stutters in the car, or the car keeps starting it afresh | Usually the car's connection: tap **Stats** in the car, and lower **Quality** (each step is about half the data). If Stats shows the server behind instead, `docker stats` while it plays shows how busy `drivepost` and `browser` are. |
 | `docker compose up` fails while creating the `fence` network (it may say *unknown gateway mode*) | The Docker on that machine is older than 28, the first that can keep a network off the machine it runs on. Update Docker (`curl -fsSL https://get.docker.com \| sh`) and run it again. |
