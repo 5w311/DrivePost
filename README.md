@@ -168,7 +168,7 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 **What it can't do.**
 
 - **Copy-protected video.** Chromium here has no way to play it and DrivePost does nothing to get around that. Such a player shows its own error.
-- **Sites that refuse it.** The browser says truthfully that it is being driven by a program, and some sites turn that away. A test you can pass by hand (a CAPTCHA) you can pass through the live view.
+- **Sites that refuse it.** The browser says truthfully that it is being driven by a program, and some sites turn that away. Their "I'm not a robot" check then fails however often it is tapped: it judges the browser, not the tap, and DrivePost does nothing to get around it.
 - **More than a picture.** The car plays what the page shows; it can't seek, and Pause, then Play, shows the page as it is by then.
 
 `PAGES=off` in `.env` takes the feature away. The browser's container still starts with the rest, and waits there doing nothing.
