@@ -162,3 +162,87 @@ test('ads are only refused for a profile that asked, and never the site it opene
   // (No page is open in these tests: nothing is refused for nobody.)
   assert.equal(adRefused('ads.example.com', () => true, () => true), false);
 });
+
+// ---------- the browser's own ad blocker ----------
+
+test('the guard serves the waiting page a browser with an ad blocker starts on', async () => {
+  const { READY_HOST, WAITING } = await import('../src/guard.js');
+  const asked = [];
+  const heard = [];
+  const guard = startGuard({
+    port: 0, host: '127.0.0.1', allowed: () => true,
+    lookup: async () => { throw new Error('ENOTFOUND'); },
+    blocked: (name) => { asked.push(name); return true; },
+    waited: (up) => heard.push(up),
+  });
+  await new Promise((done) => guard.once('listening', done));
+  const port = guard.address().port;
+  const get = (path) => new Promise((done) => {
+    const s = net.connect(port, '127.0.0.1', () => s.write(`GET http://${READY_HOST}${path} HTTP/1.1\r\nHost: ${READY_HOST}\r\nConnection: close\r\n\r\n`));
+    let got = '';
+    s.on('data', (d) => (got += d));
+    s.on('close', () => done(got));
+  });
+  const page = await get('/');
+  assert.match(page, /^HTTP\/1\.1 200 /);
+  assert.match(page, /content-type: text\/html/i);
+  assert.ok(page.includes(`<title>${WAITING}</title>`));
+  assert.ok(page.includes('location.replace(to)') && page.includes("to.indexOf('https://') === 0"), 'it goes on to a web address, and to nothing else');
+  assert.ok(!page.includes('undefined'));
+  const box = await get('/box?4');
+  assert.match(box, /^HTTP\/1\.1 200 /);
+  assert.ok(box.includes('id="ad_banner"'), 'a box with an ad\'s name on it, for the blocker to hide');
+  const script = await get('/prebid.js?7');
+  assert.match(script, /^HTTP\/1\.1 200 /);
+  assert.match(script, /content-type: text\/javascript/i);
+  assert.match(script, /content-length: 0/i, 'the scripts it asks for are given, with nothing in them');
+  assert.deepEqual(asked, [], 'and the block list is not asked about the waiting place');
+  assert.ok(page.includes("fetch(up ? '/up' : '/late'"), 'on its way out it says whether the blocker came up');
+  assert.deepEqual(heard, []);
+  assert.match(await get('/up'), /^HTTP\/1\.1 200 /);
+  assert.match(await get('/late'), /^HTTP\/1\.1 200 /);
+  assert.deepEqual(heard, [true, false], 'which the guard passes on');
+  guard.close();
+});
+
+test('a browser with uBlock Origin Lite is told which profiles want it, and reopens a page when that changes', async () => {
+  const { attachAgent, usePages, adBlocker, pageAds, closePage, pageOf, blockerSaid, blockerIs } = await import('../src/webpage.js');
+  const sent = [];
+  const told = [];
+  const ws = Object.assign(new EventEmitter(), { readyState: 1, send: (m) => sent.push(JSON.parse(m)), close: () => {} });
+  const wants = { main: true, other: false };
+  usePages({ blocksAds: (profile) => !!wants[profile], changed: (profile, info) => told.push(info && info.blocker) });
+  blockerSaid(true); // (with no page open, nobody is told anything)
+  assert.deepEqual(told, []);
+  attachAgent(ws, { socket: { remoteAddress: '172.30.0.3' } });
+  try {
+    assert.equal(adBlocker(), '', 'a browser that has said nothing of a blocker has none');
+    assert.equal(pageAds('main', true), false);
+    ws.emit('message', Buffer.from(JSON.stringify({ t: 'hello', width: 1280, height: 720, ublock: '2026.1110.1816' })), false);
+    assert.equal(adBlocker(), 'uBlock Origin Lite 2026.1110.1816');
+    assert.equal(pageAds('main', false), false, 'with no page open there is nothing to reopen');
+
+    assert.deepEqual(await openPage('main', 'https://93.184.216.34/watch'), { ok: true });
+    const open = sent.find((m) => m.t === 'open');
+    assert.equal(open.blockAds, true, 'the browser is told as the page is opened');
+    assert.equal(open.profile, 'main');
+    assert.equal(blockerIs('main'), '', "until the waiting page has said, it isn't known whether the blocker came up");
+    blockerSaid(false);
+    assert.equal(blockerIs('main'), 'late');
+    blockerSaid(true);
+    assert.equal(blockerIs('main'), 'up');
+    assert.equal(told[told.length - 1], 'up', 'and the phones are told with the rest of what they know of the page');
+    assert.equal(blockerIs('other'), '');
+    assert.equal(pageAds('other', true), false, "another profile's switch doesn't touch this page");
+    assert.equal(pageAds('main', false), true);
+    assert.deepEqual(sent[sent.length - 1], { t: 'ads', id: open.id, on: false });
+    assert.equal(blockerIs('main'), '', 'opened again, that is not known again');
+    assert.equal(pageOf('main').url, 'https://93.184.216.34/watch', 'it is opened again where it was first opened');
+    closePage('main');
+  } finally {
+    ws.emit('close');
+    usePages({ blocksAds: () => false, changed: () => {} });
+  }
+  assert.equal(pagesReady(), false);
+  assert.equal(adBlocker(), '');
+});

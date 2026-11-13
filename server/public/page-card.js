@@ -23,9 +23,12 @@
  * The live view costs data, so it only runs while it is being used: it
  * stops after a minute untouched and comes back with a tap.
  *
- * "Block ads" has the server refuse what the page asks of ad and tracker
- * machines (adblock.js on the server). It is this profile's own setting,
- * and it is a switch because a few sites won't play with their ads blocked.
+ * "Block ads" gives the server's browser an ad blocker for this profile's
+ * pages: uBlock Origin Lite in the browser itself, where the browser has it,
+ * with the server's own list of ad and tracker machines behind it (adblock.js
+ * on the server). It is a switch because a few sites won't play with their
+ * ads blocked. The browser takes its blocker on as it starts, so switching
+ * with a page open opens that page again.
  */
 (function () {
   'use strict';
@@ -47,7 +50,7 @@
   var turned = false; // ...and is drawn on its side, for a phone held upright
   var turnTimer = null;
   var dropped = false; // the live view's line went down while it was wanted
-  var ads = null; // how blocking ads stands, as the server last said: { on, list, stopped }
+  var ads = null; // how blocking ads stands, as the server last said: { on, with, list, stopped }
   var adsTimer = null;
   var pageWas = ''; // which page the card was last drawn for
 
@@ -206,8 +209,12 @@
     var on = ads ? ads.on : !!(server && server.settings && server.settings.blockAds);
     $('#pageAds').setAttribute('aria-checked', on ? 'true' : 'false');
     var say;
-    if (!on) say = 'Refuses what a page asks of ad and tracker companies.';
+    if (!on) say = 'Stops ads and trackers in the pages opened here.';
     else if (!ads) say = 'On.';
+    // The browser's own blocker does the work, and what it stops never reaches the server to be counted.
+    // (The browser says whether its blocker was at work by the time the page was opened.)
+    else if (ads.with && (page() || {}).blocker === 'late') say = 'On, but ' + ads.with.replace(/ [0-9.]+$/, '') + " wasn't at work yet when this page opened. Tap Reload. If ads still show, it didn't start, and only the server's own list is blocking.";
+    else if (ads.with) say = 'On, with ' + ads.with.replace(/ [0-9.]+$/, '') + ". If a site won't play, switch this off.";
     else if (ads.list === 'failed') say = "The block list couldn't be fetched, so nothing is blocked yet. The server tries again by itself.";
     else if (ads.list !== 'ready') say = 'Fetching the block list…';
     else if (!ads.stopped) say = 'On. Nothing stopped on this page yet.';
@@ -223,7 +230,9 @@
     });
   }
 
-  // While a page is open and ads are being blocked, the count is kept up to date.
+  // While a page is open and ads are being blocked, how that stands is kept
+  // up to date: whether the browser's blocker came up, or the count of what
+  // the server's list has stopped.
   function watchAds() {
     var want = !!page() && !document.hidden && !!(ads ? ads.on : server && server.settings && server.settings.blockAds);
     if (want && !adsTimer) {
@@ -439,8 +448,11 @@
     $('#pageReload').addEventListener('click', function () { send({ t: 'nav', what: 'reload' }); });
     $('#pageAds').addEventListener('click', function () {
       var on = !(ads ? ads.on : server && server.settings && server.settings.blockAds);
-      askAds({ on: on }).then(function () {
-        DT.toast(on
+      askAds({ on: on }).then(function (r) {
+        // With its own blocker to take on or leave off, the browser opens the page again by itself.
+        if (r.reopened) DT.toast(on ? 'Blocking ads. The page is opening again with the blocker on.' : 'Ads are no longer blocked. The page is opening again.');
+        else if (r.with || !page()) DT.toast(on ? 'Ads will be blocked in the pages opened here.' : 'Ads are no longer blocked.');
+        else DT.toast(on
           ? 'Blocking ads from here on. Tap Reload to clear the ones already on the page.'
           : 'Ads are no longer blocked. Tap Reload for the page to load them.');
         watchAds();

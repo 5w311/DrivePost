@@ -42,6 +42,7 @@ const hooks = {
   changed: () => {}, // (profile, info | null): the page is opening, has changed, or is closed
   toast: () => {}, // (profile, message)
   availability: () => {}, // pages became possible, or stopped being
+  blocksAds: () => false, // (profile): has this profile switched "Block ads" on?
 };
 export function usePages(given) {
   Object.assign(hooks, given);
@@ -104,6 +105,48 @@ export function adRefused(name, wants, listed) {
 }
 // How many such requests have been refused for the page a profile has open.
 export const adsStopped = (profile) => (pageOf(profile) ? pageOf(profile).stopped : 0);
+
+/*
+ * The browser's own ad blocker, where its machine has one: uBlock Origin
+ * Lite, loaded into the browser for a profile that has "Block ads" on. It
+ * sees every address a page asks for and the page itself, so it can do what
+ * the list at the guard can't: stop an ad by where on a site it lives, and
+ * tidy away the gaps. The list stays behind it. '' : the browser has none.
+ */
+export const adBlocker = () => (agent && agent.ublock ? `uBlock Origin Lite ${agent.ublock}` : '');
+
+/*
+ * For guard.js: the waiting page a browser with the blocker starts on has
+ * moved on to the page that was asked for, and says whether the blocker was
+ * seen to be at work by then (`up`) or it gave up waiting. What a phone is
+ * told goes by this: 'up', 'late', or '' while that isn't known.
+ */
+export function blockerSaid(up) {
+  if (!page) return;
+  page.blocker = up ? 'up' : 'late';
+  if (!up) console.log("[page] the browser's ad blocker wasn't at work when the page was opened (it started late, or not at all)");
+  hooks.changed(page.profile, view(page));
+}
+export const blockerIs = (profile) => (pageOf(profile) ? pageOf(profile).blocker || '' : '');
+
+/*
+ * "Block ads" was switched for a profile. With a page of its own open in a
+ * browser that has the blocker, the browser is started again with or without
+ * it, on the address the page was opened at. Returns whether that happened.
+ */
+export function pageAds(profile, on) {
+  const mine = pageOf(profile);
+  if (!mine || !agent || !agent.ublock) return false;
+  mine.title = '';
+  mine.idleSince = 0;
+  mine.held = null;
+  mine.stopped = 0;
+  mine.blocker = '';
+  toAgent({ t: 'ads', id: mine.id, on: !!on });
+  console.log(`[page] opening it again ${on ? 'with' : 'without'} the ad blocker`);
+  hooks.changed(profile, view(mine));
+  return true;
+}
 export const pageOf = (profile) => (page && page.profile === profile ? page : null);
 
 function toAgent(msg) {
@@ -135,6 +178,12 @@ export function attachAgent(ws, req) {
     try {
       msg = JSON.parse(data);
     } catch {
+      return;
+    }
+    // What it says of itself as it signs in: among other things, whether it has an ad blocker.
+    if (msg.t === 'hello') {
+      mine.ublock = String(msg.ublock || '').replace(/[^0-9a-z.]/gi, '').slice(0, 24);
+      if (mine.ublock) console.log(`[page] the browser has uBlock Origin Lite ${mine.ublock} for "Block ads"`);
       return;
     }
     if (!page || msg.id !== page.id) return;
@@ -203,7 +252,7 @@ function said(msg) {
 }
 
 // What the screens are told about it.
-const view = (p) => ({ url: p.url, title: p.title, site: p.site, phase: p.phase });
+const view = (p) => ({ url: p.url, title: p.title, site: p.site, phase: p.phase, blocker: p.blocker || '' });
 
 // ---------- opening and closing ----------
 
@@ -234,6 +283,7 @@ export async function openPage(profile, text) {
     page.idleSince = 0;
     page.held = null;
     page.stopped = 0;
+    page.blocker = '';
     toAgent({ t: 'go', id: page.id, url });
     console.log(`[page] on to ${site}`);
     hooks.changed(profile, view(page));
@@ -249,6 +299,7 @@ export async function openPage(profile, text) {
     sound: true,
     held: null, // its video was paused from the car or a phone: how far behind it the car was showing (seconds)
     stopped: 0, // requests to ad machines refused for it
+    blocker: '', // the browser's own ad blocker, for this page: 'up', 'late' (see blockerSaid), or '' while not known
     share: null,
     recordings: 0,
     fails: 0,
@@ -263,7 +314,7 @@ export async function openPage(profile, text) {
   }, OPEN_WITHIN_MS);
   mine.openTimer.unref();
   console.log(`[page] opening ${site}`);
-  toAgent({ t: 'open', id: mine.id, url, profile, guardPort: config.pages.guardPort });
+  toAgent({ t: 'open', id: mine.id, url, profile, guardPort: config.pages.guardPort, blockAds: !!hooks.blocksAds(profile) });
   hooks.changed(profile, view(mine));
   return { ok: true };
 }

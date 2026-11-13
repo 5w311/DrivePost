@@ -238,6 +238,8 @@ export class Store extends EventEmitter {
       title: clean(info.title ?? before.title, 200),
       site: clean(info.site ?? before.site, 80),
       phase: info.phase === 'live' || (info.phase === undefined && before.phase === 'live') ? 'live' : 'opening',
+      // The browser's own ad blocker, for this page: at work when it opened ('up'), not yet ('late'), or not known ('').
+      blocker: ['up', 'late'].includes(info.blocker ?? before.blocker) ? info.blocker ?? before.blocker : '',
       since: before.since,
     };
     // The car's row for it keeps up with where the page has gone.

@@ -22,6 +22,11 @@
  * Play, pause and skipping go through the browser's own media controls, the
  * ones the keys on a keyboard and a desktop's media buttons use.
  *
+ * For a profile that has "Block ads" switched on, the browser is started
+ * with one extension: uBlock Origin Lite, an ad blocker, as its author
+ * publishes it. That does work inside pages, as it does in anyone's browser;
+ * this program still doesn't. With the switch off there is no extension.
+ *
  * The container has no way out to the internet of its own. Everything the
  * browser fetches goes through DrivePost, which refuses addresses on the
  * home network.
@@ -35,6 +40,31 @@ const env = process.env;
 const SERVER = env.DRIVEPOST_WS || 'ws://drivepost:8080/ws/browser';
 const KEY_FILE = env.BROWSER_KEY_FILE || '/run/drivepost-browser/key';
 const DATA = env.BROWSER_DATA || '/browser-data';
+// uBlock Origin Lite, as its author publishes it, unpacked where the image
+// keeps it (the Dockerfile says which release). It is the browser's ad
+// blocker for a profile that has "Block ads" switched on, and is left out
+// of the browser altogether for one that hasn't. null: this machine has none.
+//
+// A browser writes into the folder of an extension it is started with (it
+// keeps its own index of the blocker's rules there, and refuses to load the
+// extension if it can't). So the browser is never given the image's copy,
+// `from`, which this program can't write to anyway. It is given a copy of
+// that, `dir`, made afresh each time it is started: nothing a page managed
+// to change in it outlasts that browser.
+const UBLOCK = (() => {
+  const from = env.UBLOCK_FROM || '/opt/ublock-origin-lite';
+  const dir = env.UBLOCK_DIR || '/tmp/ublock-origin-lite';
+  try {
+    const version = String(JSON.parse(fs.readFileSync(path.join(from, 'manifest.json'), 'utf8')).version || '');
+    return { from, dir, version };
+  } catch {
+    return null;
+  }
+})();
+function freshBlocker() {
+  fs.rmSync(UBLOCK.dir, { recursive: true, force: true });
+  fs.cpSync(UBLOCK.from, UBLOCK.dir, { recursive: true });
+}
 
 // The screen the browser is given, which is the picture the car gets.
 const WIDTH = 1280;
@@ -48,6 +78,20 @@ const WHEEL_PX = 120; // how far one notch of a mouse wheel moves a page
 // sound is set back by the middle of that, so the two are within a frame or
 // two of each other either way.
 const PICTURE_LAG_S = 0.06;
+
+/*
+ * The blocker comes up a moment after the browser does: its rules for what
+ * to stop within a tenth of a second or so, what it does inside pages a
+ * second or two later. A page opened in that moment would get its ads. So
+ * with the blocker on, the browser is started on a waiting page instead,
+ * which DrivePost's guard serves under a made-up name (guard.js has the
+ * page, and says how it tells that the blocker is at work). It is handed the
+ * address that was asked for after a '#', which a browser keeps to itself,
+ * and goes on to it once the blocker is ready, or after six seconds anyway.
+ */
+const WAITING = 'Starting the ad blocker'; // the waiting page's name, which is not passed on as the page's
+const WAIT_HOST = 'ready.drivepost.invalid'; // (guard.js has the same two)
+const waitingPage = (url) => `http://${WAIT_HOST}/#${encodeURIComponent(String(url))}`;
 
 const log = (...a) => console.log('[browser]', ...a);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -227,9 +271,10 @@ const KEYS = {
 };
 
 class Session {
-  constructor({ id, url, profile, guardPort }) {
+  constructor({ id, url, profile, guardPort, blockAds }) {
     this.id = id;
     this.url = String(url);
+    this.blockAds = !!blockAds; // this profile wants ads blocked
     this.profile = String(profile || 'main').replace(/[^a-z0-9_-]/gi, '_').slice(0, 64) || 'main';
     // The way out: DrivePost's guard, on the machine this program is connected to.
     this.proxy = Number(guardPort) ? `http://${new URL(SERVER).hostname}:${Number(guardPort)}` : '';
@@ -273,6 +318,16 @@ class Session {
     // all again behind the page that was asked for. What it remembers of its
     // tabs is thrown away; what it is signed in to is kept.
     fs.rmSync(path.join(dir, 'Default', 'Sessions'), { recursive: true, force: true });
+    // The ad blocker, for a profile that wants one.
+    let blocker = false;
+    if (this.blockAds && UBLOCK) {
+      try {
+        freshBlocker();
+        blocker = true;
+      } catch (err) {
+        log(`the ad blocker couldn't be set out for the browser (${err.message}): starting without it`);
+      }
+    }
     const args = [
       `--user-data-dir=${dir}`,
       '--no-first-run',
@@ -287,7 +342,10 @@ class Session {
       '--kiosk',
       // In its container the browser can't build its own inner sandbox; the container is the wall.
       ...(env.BROWSER_NO_SANDBOX === '0' ? [] : ['--no-sandbox']),
-      url,
+      // That blocker and no other extension, or no extension at all.
+      ...(blocker ? [`--disable-extensions-except=${UBLOCK.dir}`, `--load-extension=${UBLOCK.dir}`] : ['--disable-extensions']),
+      // (With the blocker: by way of the waiting page, until the blocker is at work. The guard is who it asks.)
+      blocker && this.proxy ? waitingPage(url) : url,
     ];
     const proc = (this.proc = spawn(chromeBin(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: this.desk.vars }));
     proc.stderr.on('data', (d) => {
@@ -428,7 +486,8 @@ class Session {
       if (r.code !== 0) return;
     }
     const name = r.out.trim().replace(/ - (Chromium|Google Chrome for Testing|Google Chrome)$/, '').slice(0, 200);
-    if (!name || name === this.named || /^(New Tab|Untitled|about:blank)$/i.test(name)) return;
+    // (Not the waiting page's name, nor its address, which a browser shows until a page has said its name.)
+    if (!name || name === this.named || name === WAITING || name.startsWith(WAIT_HOST) || /^(New Tab|Untitled|about:blank)$/i.test(name)) return;
     this.named = name;
     tell({ t: 'page', id: this.id, url: this.url, title: name });
   }
@@ -532,6 +591,14 @@ class Session {
     this.launch(this.url);
   }
 
+  // "Block ads" was switched on or off. A browser takes an extension on as it
+  // starts, so it is closed and started again, on the address it was opened at.
+  async ads(on) {
+    if (this.over || this.blockAds === !!on) return;
+    this.blockAds = !!on;
+    if (UBLOCK) await this.go(this.url);
+  }
+
   /*
    * Play, pause and skip, through the browser's own media controls: the ones
    * a keyboard's play key and a desktop's media buttons use. They act on
@@ -599,6 +666,7 @@ function handle(msg) {
   const run = (p) => Promise.resolve(p).catch((err) => log(`${msg.t} failed: ${err.message}`));
   if (msg.t === 'close') s.close();
   else if (msg.t === 'go') s.steer(msg, (m) => s.go(m.url));
+  else if (msg.t === 'ads') s.steer(msg, (m) => s.ads(m.on));
   else if (msg.t === 'input') s.steer(msg, (m) => s.input(m));
   else if (msg.t === 'nav') s.steer(msg, (m) => s.nav(m.what));
   else if (msg.t === 'media') s.steer(msg, (m) => s.media(m.what, m.by));
@@ -620,7 +688,7 @@ function connect() {
     server = ws;
     waits = 0;
     log('connected to DrivePost');
-    tell({ t: 'hello', width: WIDTH, height: HEIGHT });
+    tell({ t: 'hello', width: WIDTH, height: HEIGHT, ublock: UBLOCK ? UBLOCK.version : '' });
     ensureDesk().catch((err) => log(`the browser's desk couldn't be set up yet (${err.message})`));
   });
   ws.on('message', (data, isBinary) => {
@@ -662,4 +730,5 @@ process.on('SIGTERM', quit);
 process.on('SIGINT', quit);
 
 log(`ready (browser: ${chromeBin()})`);
+log(UBLOCK ? `ad blocker: uBlock Origin Lite ${UBLOCK.version}` : 'ad blocker: none here (DrivePost\'s own list still applies)');
 connect();

@@ -141,13 +141,12 @@ Some links have no video in them that can be fetched: the page has a player of i
 
 **Opening one.** On the phone remote, under **Send a video**, paste or copy the link and tap **No video to find? Open the page itself**. Within about ten seconds the car is playing the page as a live item named after it. A **Page** card appears on every phone of the profile:
 
-- **A live view of the browser's screen.** A tap on it is a click, and a drag scrolls. **Press and hold** moves the mouse there without clicking, and it then follows your finger: that is how a player's buttons, which hide until the mouse comes near, are woken so you can tap them. The mouse pointer shows in the live view (not in the car).
-- **Bigger** puts the live view over the whole of the phone's screen, for small buttons. Turn the phone sideways for the largest picture; **Done** puts it back.
-- **Type into the page**, with **Enter**, **Delete** and **Esc**, for search boxes and sign-ins. Tap the box on the page first.
-- **Back** and **Reload**.
-- **Full screen (F)** and **Captions (C)** press the F and C keys, which most players use for those. A player that doesn't has its own buttons for them: press and hold on the video to bring them up, then tap. Esc leaves full screen. Most sites keep what you chose, so captions switched on once stay on.
-- **Block ads** (off to begin with) has the server refuse what the page asks of ad and tracker companies. See "Blocking ads" below.
-- **Show it in the car** puts the page back on after another video; **Close the page** ends it, and the car goes on to Up Next.
+- **The page, in a small browser window.** Its bar has **Back**, **Reload**, the site and the page's name, and a button at the right end that makes it **bigger**. Under the bar is a live view of the browser's screen. A tap on it is a click, and a drag scrolls. **Press and hold** moves the mouse there without clicking, and it then follows your finger: that is how a player's buttons, which hide until the mouse comes near, are woken so you can tap them. A ring shows where you tapped or are pointing, and the mouse pointer shows in the live view (not in the car).
+- **Bigger** puts the live view over the whole of the phone's screen, the long way round, for small buttons. On a phone held upright the page lies on its side: turn the phone to look at it. It makes no difference whether the phone turns its own screen. The round button in its corner puts it back.
+- **Type into the page** and **Send**, with **Enter**, **Delete**, **Esc** and **Tab**, for search boxes and sign-ins. Tap the box on the page first; Tab moves on to a form's next box.
+- **Full screen** and **Captions** press the F and C keys, which most players use for those. A player that doesn't has its own buttons for them: press and hold on the video to bring them up, then tap. Esc leaves full screen. Most sites keep what you chose, so captions switched on once stay on.
+- **Block ads**, a switch, off to begin with. See "Blocking ads" below.
+- The card's head says how the page stands with the car (**In the car**, **Paused**, **Not in the car**, **Car offline**) and has **Close**, which ends it; the car goes on to Up Next. When the car is on another video, the card offers **Show it in the car**.
 
 The live view stops after a minute untouched, to save the phone's data, and comes back with a tap. Once the video is playing, the phone is free. The car runs about five seconds behind the page, so steer by the phone's live view, which is immediate, and not by the car.
 
@@ -157,7 +156,7 @@ The live view stops after a minute untouched, to save the phone's data, and come
 
 **How it works.** A second container (`browser/`) holds an ordinary Chromium at a desk nobody sits at: a screen that exists only in memory (Xvfb), a sound card that plays to nobody (PulseAudio), a window manager, and a mouse and keyboard. A small program there (`browser/agent.js`) is that desk's remote desktop. It connects to DrivePost, signs in with a key the two share, starts the browser on the address it is given, moves the mouse and presses the keys when a phone says so, and has ffmpeg film the screen and record the sound. The film is handed to DrivePost as it is made, which keeps it in memory as a live stream of one-second pieces (`server/src/mirror.js`, nothing converted), and the car's stream is made from that like any live video. The screen and the sound are two feeds that don't start at the same instant, so each is stamped with the time on the clock as it is taken and they are lined up by that; the sound is then set back 60 ms, which is about how much longer a picture takes to reach the screen.
 
-No program drives the browser. It is started without a remote-control interface, and the program beside it never reaches into a page: it can't read one, change one or run anything in one. All it knows of the page is the name on its window. A site sees an ordinary browser being used by a person, which is what is happening.
+No program drives the browser. It is started without a remote-control interface, and the program beside it never reaches into a page: it can't read one, change one or run anything in one. All it knows of the page is the name on its window. A site sees an ordinary browser being used by a person, which is what is happening. With **Block ads** on, that browser has one extension, an ad blocker, which works inside pages as it does in anyone's browser; with it off, the browser has none.
 
 **Kept apart.** A web page is the least trusted thing this server touches, so the browser's container:
 
@@ -169,12 +168,17 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 
 **One at a time.** A browser playing video is the heaviest thing this server does, so there is one page for the whole server. While one profile's car is showing a page, another profile is told the browser is taken; once that car is on something else, the next page takes its place. A page that no car is playing and no phone is steering is closed after five minutes (`PAGE_IDLE_SECONDS`).
 
-**Blocking ads.** With **Block ads** switched on in the Page card, whatever a page asks of a machine on a block list is refused at the door the browser fetches everything through (`server/src/adblock.js`, `server/src/guard.js`), the way a Pi-hole does it for a home network. The page gets the rest, and the card counts what was stopped.
+**Blocking ads.** With **Block ads** switched on in the Page card, the server's browser blocks ads in that profile's pages, in two layers:
 
-- The list is a public one in the format of a hosts file: by default [StevenBlack/hosts](https://github.com/StevenBlack/hosts), the one a Pi-hole starts with (about 78,000 names). The server fetches it the first time someone switches blocking on, keeps a copy with its data, and fetches it again once a week. `PAGE_BLOCKLIST_URL` in `.env` names another list.
-- It is each profile's own setting and it is off until switched on. It is a switch because a few sites won't play with their ads blocked: switch it off and tap **Reload**.
-- The site you opened is never blocked, whatever the list says of it.
-- What it can't stop is an ad that comes from the same machine as the programme. Most free television splices its breaks into the stream itself, and no list can tell those from the show.
+- **[uBlock Origin Lite](https://github.com/uBlockOrigin/uBOL-home)**, in the browser itself. It is today's uBlock Origin, by the same author (Raymond Hill; GPLv3); the original can no longer run in Chromium, which dropped the kind of extension it is during 2026. It goes by the whole address of what a page asks for, so it also stops ads that come from the site's own machine, and it tidies away the boxes they would have sat in. The browser's image carries one named release of it, taken from its author's repository when the image is built (`browser/Dockerfile` names the commit; put a newer one there to move on). It is set to its fullest filtering mode, "complete" (`browser/ublock-policy.js`), and otherwise left as its author ships it. The browser is given a fresh copy of it each time it starts, so nothing a page did to it carries over. With the switch off, the browser is started with no extension at all.
+- **DrivePost's own list**, behind it: whatever a page asks of a machine on a block list is refused at the door the browser fetches everything through (`server/src/adblock.js`, `server/src/guard.js`), the way a Pi-hole does it for a home network. The list is a public one in the format of a hosts file: by default [StevenBlack/hosts](https://github.com/StevenBlack/hosts), the one a Pi-hole starts with (about 78,000 names). The server fetches it the first time someone switches blocking on, keeps a copy with its data, and fetches it again once a week. `PAGE_BLOCKLIST_URL` in `.env` names another list. The site you opened is never refused by it, whatever the list says.
+
+What to know about it:
+
+- It is each profile's own setting and it is off until switched on. It is a switch because a few sites won't play with their ads blocked: switch it off for those.
+- A browser takes an extension on as it starts. So switching with a page open **opens that page again**, at the address it was first opened at; what the browser is signed in to is kept.
+- An ad blocker comes up a moment after its browser does, and a page opened in that moment would get its ads. So with the switch on, the browser starts on a waiting page of DrivePost's own, which the guard serves, and goes on to yours once the blocker is seen to be at work (`server/src/guard.js` says how it tells). That adds a second or two to opening a page.
+- What it can't stop is an ad that is part of the video. Most free television splices its breaks into the stream itself, and nothing in a browser can tell those from the show.
 
 **On mobile data.** A page can't be loaded ahead the way a video can, so it is the first thing to stutter on a weak signal. Three things are done about that:
 
@@ -182,13 +186,13 @@ Chromium's own inner sandbox can't be built inside a container without giving th
 - A car starts with a few seconds in hand. Each time the signal dips it waits for six seconds' worth before carrying on, and from then on runs that much further behind the page with that much in reserve. It is only started afresh from where the page is now once it is 20 seconds behind.
 - As with any video, three stalls in two minutes step the quality down by itself, and **Quality** on the remote sets it by hand: each step down is about half the data.
 
-**What it costs.** Measured with both containers on a two-core machine with no graphics card, while a video filled the screen: about 0.6 of a core for the browser's container (the browser, and filming its screen) and 0.2 for the app's (converting for the car at 360p), with about 750 MB of memory in the browser's. Its image takes about 1.4 GB of disk. At rest that container uses about 70 MB and no CPU.
+**What it costs.** Measured with both containers on a two-core machine with no graphics card, while a video filled the screen: about 0.6 of a core for the browser's container (the browser, and filming its screen) and 0.2 for the app's (converting for the car at 360p), with about 750 MB of memory in the browser's. Its image takes about 1.45 GB of disk, 35 MB of that the ad blocker and its lists. At rest that container uses about 70 MB and no CPU.
 
 **What it can't do.**
 
 - **Copy-protected video.** Chromium here has no way to play it and DrivePost does nothing to get around that. Such a player shows its own error.
 - **Every site's robot check.** An "I'm not a robot" box judges the browser and where it runs, not the tap. This is an ordinary browser used by a person, which is what such a check looks for, but it runs on a server with no graphics card, and a check that holds that against it will fail it however often the box is tapped. DrivePost doesn't disguise the browser to get through.
-- **Ads that are part of the video.** **Block ads** stops what comes from ad companies' machines. A break spliced into the stream itself, as most free television does it, comes from the same machine as the show and stays.
+- **Ads that are part of the video.** **Block ads** stops the ads a page fetches and shows around and over its video. A break spliced into the stream itself, as most free television does it, is part of the same video as the show and stays.
 
 `PAGES=off` in `.env` takes the feature away. The browser's container still starts with the rest, and waits there doing nothing.
 
@@ -379,10 +383,11 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | No **Open the page itself** under Send a video | The browser container isn't connected. `docker compose ps` should list `browser` as running, and `docker compose logs browser` should end with `connected to DrivePost`. `PAGES=off` also takes it away. |
 | A page opens but stays blank, or says the site can't be reached | Everything the browser fetches goes through DrivePost. `docker compose logs drivepost` has a `[page]` line for every opening and closing, and `docker compose logs browser` says what the browser made of the address. An address on your own network is refused on purpose. |
 | A page's video is black or shows an error about protected content | The video is copy-protected, which this browser can't play. |
-| A player's buttons on a page can't be found or hit | They hide until the mouse comes near. **Press and hold** on the video in the live view to bring them up, and tap **Bigger** to make them easy to hit. |
+| A player's buttons on a page can't be found or hit | They hide until the mouse comes near. **Press and hold** on the video in the live view to bring them up, and tap the button at the right end of the Page card's bar for the big view, which makes them easy to hit. |
 | Pause or the ten-second buttons do nothing on a page | They work what the browser knows is playing. A video that hasn't been started yet has to be started on the page first, and live television can't be skipped in. |
-| A site on a page won't play, or asks for an ad blocker to be switched off | Switch **Block ads** off on the Page card and tap **Reload**. |
-| **Block ads** is on and the card says the list couldn't be fetched | The server couldn't reach the list's address (GitHub, unless `PAGE_BLOCKLIST_URL` says otherwise). It tries again by itself every half hour; nothing is blocked until it has one. |
+| A site on a page won't play, or asks for an ad blocker to be switched off | Switch **Block ads** off on the Page card. The page opens again without the blocker. |
+| **Block ads** is on and a page still shows ads | If they are breaks in the video itself, they are part of the stream and can't be removed. Otherwise `docker compose logs browser` should have a line `ad blocker: uBlock Origin Lite` with its version near the top; if it says `none here`, the browser's image was built without it and only the block list is at work. |
+| The update fails while building the `browser` image, at a `git fetch` step | That step fetches uBlock Origin Lite from GitHub. The old version keeps running and the updater tries again within the hour. |
 | A page's "I'm not a robot" box spins and comes back | The site's check is failing the browser, not your tap (see "What it can't do" under [Opening a page](#opening-a-page)). |
 | A page stutters in the car, or the car keeps starting it afresh | Usually the car's connection: tap **Stats** in the car, and lower **Quality** (each step is about half the data). If Stats shows the server behind instead, `docker stats` while it plays shows how busy `drivepost` and `browser` are. |
 | `docker compose up` fails while creating the `fence` network (it may say *unknown gateway mode*) | The Docker on that machine is older than 28, the first that can keep a network off the machine it runs on. Update Docker (`curl -fsSL https://get.docker.com \| sh`) and run it again. |

@@ -10,7 +10,7 @@ import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
 import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
-import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, pageMedia, watchPage, dropWatchers, adRefused, adsStopped } from './webpage.js';
+import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, pageMedia, watchPage, dropWatchers, adRefused, adsStopped, adBlocker, pageAds, blockerSaid, blockerIs } from './webpage.js';
 import { adListed, adList, useAdList } from './adblock.js';
 import { startGuard } from './guard.js';
 import { stampPage, feedbackLink } from './pages.js';
@@ -745,13 +745,19 @@ async function route(req, res) {
     // Blocking ads in this profile's pages: switched on or off (POST), and how it stands (GET).
     if (p === '/api/page/ads' && (req.method === 'GET' || req.method === 'POST')) {
       const store = storeFor(profile);
+      let reopened = false;
       if (req.method === 'POST') {
         const body = await readJson(req);
+        const was = !!store.settings.blockAds;
         store.command('blockAds', { on: !!body.on });
+        // The browser takes its ad blocker on, or leaves it off, as it starts.
+        if (was !== !!store.settings.blockAds) reopened = pageAds(profile, !!store.settings.blockAds);
       }
       const on = !!store.settings.blockAds;
       if (on) useAdList();
-      return send(res, 200, { on, list: adList().state, names: adList().size, stopped: adsStopped(profile) });
+      // `with`: the browser's own ad blocker, where it has one, and `blocker` whether it was at work when this
+      // profile's page was opened ('up', 'late', or '' while that isn't known). `reopened`: the page is being opened again for the change.
+      return send(res, 200, { on, with: adBlocker(), blocker: blockerIs(profile), reopened, list: adList().state, names: adList().size, stopped: adsStopped(profile) });
     }
 
     if (req.method === 'GET' && p === '/api/search') {
@@ -944,6 +950,7 @@ usePages({
     else store.pageOver();
   },
   toast: (profile, message) => broadcast(profile, { type: 'toast', message }),
+  blocksAds: (profile) => !!(auth.profile(profile) && storeFor(profile).settings.blockAds),
   // Phones show "Open as a page" only while there is a browser to open it in.
   availability: () => {
     for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c.profile)));
@@ -980,7 +987,7 @@ onShare((profile, what, share) => {
 // where a browser can sign in at all.
 if (config.pages.on && browserKey()) {
   const wantsAdsBlocked = (id) => !!(auth.profile(id) && storeFor(id).settings.blockAds);
-  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows, blocked: (name) => adRefused(name, wantsAdsBlocked, adListed) });
+  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows, blocked: (name) => adRefused(name, wantsAdsBlocked, adListed), waited: blockerSaid });
   guard.on('error', (err) => console.log(`[page] the browser's way out couldn't be opened on port ${config.pages.guardPort} (${err.code || err.message}): pages won't load`));
 }
 

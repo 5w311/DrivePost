@@ -254,7 +254,14 @@ test('the page plays only once its picture is there, and only this server says w
   assert.equal(s.now, null);
 
   s.setPage({ phase: 'live' });
-  assert.deepEqual({ ...s.publicState().page, since: 0 }, { ...TV, phase: 'live', since: 0 }, 'what is new is added to what was known');
+  assert.deepEqual({ ...s.publicState().page, since: 0 }, { ...TV, phase: 'live', blocker: '', since: 0 }, 'what is new is added to what was known');
+  // Whether the browser's ad blocker was at work when the page opened: 'up', 'late', or not known.
+  s.setPage({ blocker: 'late' });
+  assert.equal(s.publicState().page.blocker, 'late');
+  s.setPage({ title: 'Stand-in TV' });
+  assert.equal(s.publicState().page.blocker, 'late', 'kept until something else is said of it');
+  s.setPage({ blocker: 'anything else' });
+  assert.equal(s.publicState().page.blocker, '');
   assert.equal(s.command('play', { item: { id: PAGE_ID, title: 'Free money', url: 'https://example.com/x', duration: 99 } }), null);
   assert.equal(s.now.title, 'Stand-in TV', 'whatever a phone sends with it is ignored');
   assert.equal(s.now.site, 'standin.tv');
