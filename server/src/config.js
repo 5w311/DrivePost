@@ -67,14 +67,24 @@ export const config = {
     extraArgs: words(env.OTHER_SITES_ARGS),
   },
 
-  // Screen sharing: a tab, a window or a screen shown in the car, sent by the
-  // browser of the device it is on (see mirror.js).
-  screen: {
-    // SCREEN_SHARE=off takes the "Share this screen" card away.
-    on: !/^(off|0|no|false)$/i.test((env.SCREEN_SHARE || '').trim()),
-    // Where the shared screen is kept while it plays (a few megabytes,
-    // rewritten every second). Memory by default; SCREEN_DIR= names a folder.
-    dir: (env.SCREEN_DIR || '').trim(),
+  // Pages: a link with no video to fetch is opened as a page in a browser of
+  // the server's own (the browser container), and the car is shown that.
+  pages: {
+    // PAGES=off takes "Open as a page" away.
+    on: !/^(off|0|no|false)$/i.test((env.PAGES || '').trim()),
+    // The browser's program proves who it is with a key the two share. In
+    // Docker, DrivePost writes it to a small volume both can see. BROWSER_KEY
+    // sets it by hand (for running the two outside Docker).
+    key: (env.BROWSER_KEY || '').trim(),
+    keyFile: env.BROWSER_KEY_FILE || '/run/drivepost-browser/key',
+    // The door the browser fetches everything through (guard.js). Not
+    // published outside Docker.
+    guardPort: Number(env.GUARD_PORT) || 8081,
+    // A page nobody is watching or steering is closed after this long.
+    idleMs: (Number(env.PAGE_IDLE_SECONDS) || 5 * 60) * 1000,
+    // Where the page's picture is kept while it plays (a few megabytes,
+    // rewritten every second). Memory by default; PAGES_DIR= names a folder.
+    dir: (env.PAGES_DIR || env.SCREEN_DIR || '').trim(),
   },
 
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',

@@ -16,12 +16,45 @@ services:
       # holds your sign-ins, profiles and history, so it keeps its name: under
       # a new name the app would start with empty data.
       - drivetest-data:/data
-    # The app also answers to its old name inside Docker, so a tunnel route
-    # that still says http://drivetest:8080 keeps working.
+      # A key the app writes for the browser container to sign in with.
+      - browser-key:/run/drivepost-browser
     networks:
+      # The app also answers to its old name inside Docker, so a tunnel route
+      # that still says http://drivetest:8080 keeps working.
       default:
         aliases:
           - drivetest
+      # Where the browser container lives (below).
+      fence: {}
+
+  # The browser DrivePost opens pages in, for links with no video to fetch:
+  # the page itself is opened here and the car is shown it. (browser/agent.js)
+  #
+  # It is kept apart on purpose. A web page is the least trusted thing this
+  # server touches, so this container gets none of the app's settings or data,
+  # no extra powers, and no network of its own: "fence" has no way out. All it
+  # can reach is the app, which fetches for it and refuses addresses on your
+  # home network.
+  browser:
+    build:
+      context: ./browser
+    restart: unless-stopped
+    depends_on:
+      - drivepost
+    networks:
+      - fence
+    volumes:
+      - browser-key:/run/drivepost-browser:ro
+      # What each profile is signed in to on the sites it has opened.
+      - browser-data:/browser-data
+    # A browser keeps its working memory here, and Docker's usual 64 MB isn't enough.
+    shm_size: "1gb"
+    mem_limit: 3g
+    pids_limit: 1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   # Optional: publish the app on your domain through a Cloudflare Tunnel.
   # Start with: docker compose --profile tunnel up -d
@@ -36,5 +69,18 @@ services:
     depends_on:
       - drivepost
 
+networks:
+  # Where the browser container is kept. "internal" leaves it no route to the
+  # internet or to your home network. "isolated" also keeps this machine
+  # itself off it, so nothing that listens here (SSH, say) can be reached
+  # from the browser: only the containers on it can. (Docker Engine 28 or
+  # newer.)
+  fence:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+
 volumes:
   drivetest-data:
+  browser-key:
+  browser-data:

@@ -23,13 +23,12 @@
         ? "Copy a YouTube video's link, then tap a button."
         : "Copy a video's link in YouTube, X, Reddit, Instagram or on a web page, then tap a button.") +
         (apple ? ' A small Paste button then pops up: tap that too.' : '');
-      if (DT.screenShare) DT.screenShare.hello(msg);
+      if (DT.pageCard) DT.pageCard.hello(msg);
     },
     state: function (msg) {
-      // (Nor while this device is sharing its screen: a fresh page would end that.)
-      if (DT.stale && !typing() && !(DT.screenShare && DT.screenShare.busy()) && DT.reloadIfStale()) return;
+      if (DT.stale && !typing() && DT.reloadIfStale()) return;
       state = msg.state;
-      if (DT.screenShare) DT.screenShare.state(state);
+      if (DT.pageCard) DT.pageCard.state(state);
       render();
     },
     pos: function (msg) {
@@ -40,7 +39,7 @@
     }
   });
 
-  if (DT.screenShare) DT.screenShare.use(control);
+  if (DT.pageCard) DT.pageCard.use(control);
 
   // Message passed back after sharing from another app.
   var params = new URLSearchParams(location.search);
@@ -196,6 +195,16 @@
       }
       finding = how;
       labelSend();
+      // Not as a video at all: the page itself, opened in the server's own browser.
+      if (how === 'page') {
+        return DT.api('/api/page/open', { body: { url: text } }).then(function () {
+          linkBox.value = '';
+          DT.toast('Opening the page in the car…');
+        }, function (e) {
+          if (!typed) linkBox.value = text.slice(0, 500);
+          DT.toast(e.message);
+        });
+      }
       // Finding out what a link is can take a few seconds for a site that isn't YouTube.
       return DT.api('/api/resolve', { body: { text: text } }).then(function (r) {
         var lined = how === 'queue' && state && state.now;
@@ -218,6 +227,7 @@
   }
   sendBtn.play.addEventListener('click', function () { send('play'); });
   sendBtn.queue.addEventListener('click', function () { send('queue'); });
+  $('#pageBtn').addEventListener('click', function () { send('page'); });
   linkBox.addEventListener('input', labelSend);
   $('#linkClear').addEventListener('click', function () {
     linkBox.value = '';

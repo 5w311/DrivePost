@@ -683,8 +683,21 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
 .more[open] summary { margin-bottom: 6px; }
 .kv .k { color: var(--rig-ink-3); font-size: 13px; font-weight: 600; }
 
-/* "Share this screen" on the phone page: what is happening, then the choices. */
-.share-say { margin: 0 0 12px; font-size: 15px; line-height: 1.4; }
-#shareCard .seg { margin-bottom: 4px; }
-#shareCard .send-row { margin-top: 10px; }
-#shareCard .send-row:empty, #shareCard .send-row:not(:has(button:not(.hidden))) { display: none; }
+/* A page open in the server's browser, steered from the phone: what is
+   happening, a small live view of it to tap and drag on, then the buttons. */
+.page-site { font-weight: 400; margin-left: 6px; }
+.page-say { margin: 0 0 12px; font-size: 15px; line-height: 1.4; }
+.page-open { width: 100%; margin-top: 8px; min-height: 44px; font-size: 14.5px; }
+.page-view {
+  position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: var(--rig-radius-sm); overflow: hidden;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer;
+}
+.page-view img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+.page-veil {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px;
+  background: rgba(8, 12, 18, 0.72); color: #e6ebf2; font-weight: 600;
+}
+.page-type { margin-top: 10px; }
+.page-type input { flex: 1; min-width: 0; }
+/* Four across, on the narrowest phone too. */
+.page-keys button { min-width: 0; padding: 0 4px; font-size: 15px; }

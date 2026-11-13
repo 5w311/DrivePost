@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DrivePost capture</title>
+</head>
+<body style="background:#111;color:#888;font:14px sans-serif">
+This tab records the page being shown and hands the recording on.
+<script>
+/*
+ * Runs in the server's own browser, in a tab beside the page being shown.
+ * It captures that page the way a video call shares a tab (picture and
+ * sound), records the capture, and hands the recording to the program that
+ * runs this browser (agent.js) as it is made. From there it goes to
+ * DrivePost, which turns it into the live video the car plays.
+ *
+ * Nobody clicks through the browser's "choose what to share" window here:
+ * the browser was started so that it picks the page by its title.
+ */
+'use strict';
+var token = location.pathname.split('/').pop();
+var ws = new WebSocket('ws://' + location.host + '/up/' + token + location.search);
+var rec = null;
+var out = null; // what is recorded: the steadied picture and the sound
+
+function say(msg) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+/*
+ * The picture at a steady pace (pump.js says why). Resolves with the track
+ * to record: the steadied one, or the captured one as it is if the worker
+ * doesn't get going.
+ */
+function steady(track) {
+  return new Promise(function (resolve) {
+    if (!(window.MediaStreamTrackProcessor && window.MediaStreamTrackGenerator && window.Worker)) return resolve(track);
+    var worker = null;
+    var done = false;
+    function settle(t) {
+      if (done) return;
+      done = true;
+      if (t === track && worker) worker.terminate();
+      resolve(t);
+    }
+    try {
+      var proc = new MediaStreamTrackProcessor({ track: track, maxBufferSize: 2 });
+      var gen = new MediaStreamTrackGenerator({ kind: 'video' });
+      worker = new Worker('/pump.js');
+      worker.onmessage = function (ev) {
+        if (ev.data && ev.data.flowing) settle(gen);
+      };
+      worker.onerror = function () { settle(track); };
+      worker.postMessage({ readable: proc.readable, writable: gen.writable }, [proc.readable, gen.writable]);
+    } catch (e) {
+      return settle(track);
+    }
+    setTimeout(function () { settle(track); }, 2500);
+  });
+}
+
+function record(bps) {
+  var type = 'video/webm;codecs=vp8,opus';
+  rec = new MediaRecorder(out, MediaRecorder.isTypeSupported(type)
+    ? { mimeType: type, videoBitsPerSecond: bps, audioBitsPerSecond: 160000 }
+    : { videoBitsPerSecond: bps });
+  var mine = rec;
+  // Said before the first piece, so whoever takes the recording knows a new one starts here.
+  say({ recording: true, type: rec.mimeType });
+  rec.ondataavailable = function (ev) {
+    if (rec === mine && ev.data && ev.data.size && ws.readyState === 1) ws.send(ev.data);
+  };
+  rec.onerror = function () {
+    if (rec === mine) say({ error: 'The recorder stopped.' });
+  };
+  rec.start(200);
+}
+
+// Called by agent.js, as if by a click. `opts`: { width, height, bps }.
+window.start = async function (opts) {
+  var stream = await navigator.mediaDevices.getDisplayMedia({
+    video: { frameRate: { ideal: 30, max: 30 }, width: { max: opts.width }, height: { max: opts.height } },
+    // The sound as it is: both channels, none of the clean-up meant for calls.
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 }
+  });
+  var picture = stream.getVideoTracks()[0];
+  var sound = stream.getAudioTracks()[0] || null;
+  picture.addEventListener('ended', function () { say({ ended: true }); });
+
+  // The sound goes through a mixer, which keeps a sound track going while
+  // the page is silent, so the recording always has picture and sound side
+  // by side on one clock.
+  var ctx = new AudioContext({ sampleRate: 48000 });
+  var dest = ctx.createMediaStreamDestination();
+  var hush = ctx.createConstantSource();
+  hush.offset.value = 0;
+  hush.connect(dest);
+  hush.start();
+  if (sound) ctx.createMediaStreamSource(new MediaStream([sound])).connect(dest);
+  if (ctx.state === 'suspended') await ctx.resume();
+
+  out = new MediaStream([await steady(picture), dest.stream.getAudioTracks()[0]]);
+  record(opts.bps);
+  return { sound: !!sound };
+};
+
+// A fresh recording of the same capture: asked for when the one being sent couldn't be used.
+window.again = function (bps) {
+  if (!out) return false;
+  if (rec) {
+    try { rec.stop(); } catch (e) {}
+  }
+  record(bps);
+  return true;
+};
+</script>
+</body>
+</html>

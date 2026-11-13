@@ -1,8 +1,8 @@
 /*
- * Keeps a shared screen's picture coming at a steady pace.
+ * Keeps the picture of the page coming at a steady pace.
  *
- * A browser only hands over a new frame of a captured tab or screen when
- * something on it changes. A still picture (a paused video, a page nobody is
+ * A browser only hands over a new frame of a captured tab when something on
+ * it changes. A still picture (a paused video, a page nobody is
  * scrolling) is then a recording with no picture in it for as long as it
  * lasts, and whoever plays it falls that far behind for good once it moves
  * again. So every frame is passed on as it comes, and whenever none has come

@@ -21,7 +21,9 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY src ./src
 COPY public ./public
 
-RUN mkdir -p /data && chown node:node /data
+# /run/drivepost-browser: where the key shared with the browser container is
+# left for it (see src/webpage.js). A volume both containers mount.
+RUN mkdir -p /data /run/drivepost-browser && chown node:node /data /run/drivepost-browser
 USER node
 VOLUME /data
 EXPOSE 8080

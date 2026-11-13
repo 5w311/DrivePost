@@ -49,25 +49,33 @@
           <button id="queueBtn" type="button">Paste &amp; Up Next</button>
         </div>
         <p id="sendHint" class="muted hint">Copy a video's link in YouTube, X, Reddit, Instagram or on a web page, then tap a button.</p>
+        <button id="pageBtn" type="button" class="ghost page-open hidden">No video to find? Open the page itself</button>
       </div>
     </section>
 
-    <section class="card hidden" id="shareCard">
-      <div class="card-head">Share this screen</div>
+    <section class="card hidden" id="pageCard">
+      <div class="card-head">Page <span id="pageSite" class="muted page-site"></span></div>
       <div class="card-body">
-        <p id="shareSay" class="share-say"></p>
-        <div class="seg hidden" id="shareSize" aria-label="Picture">
-          <button data-s="480" type="button">480p</button>
-          <button data-s="720" type="button">720p</button>
-          <button data-s="1080" type="button">1080p</button>
+        <p id="pageSay" class="page-say"></p>
+        <div id="pageView" class="page-view" role="application" aria-label="The page. Tap to click, drag to scroll.">
+          <img id="pageImg" alt="" draggable="false">
+          <div id="pageVeil" class="page-veil">Tap to see the page</div>
+        </div>
+        <form id="pageTypeForm" class="field-row page-type" autocomplete="off" novalidate>
+          <input id="pageText" type="text" placeholder="Type into the page" aria-label="Type into the page" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button type="submit">Type</button>
+        </form>
+        <div class="btn-row page-keys">
+          <button id="pageEnter" type="button">Enter</button>
+          <button id="pageDel" type="button">Delete</button>
+          <button id="pageBack" type="button">Back</button>
+          <button id="pageReload" type="button">Reload</button>
         </div>
         <div class="btn-row send-row">
-          <button id="shareBtn" type="button" class="primary hidden">Share to the car</button>
-          <button id="shareShow" type="button" class="primary hidden">Show it in the car</button>
-          <button id="shareStop" type="button" class="hidden">Stop sharing</button>
-          <button id="shareTurn" type="button" class="hidden">Turn the picture</button>
+          <button id="pageFill" type="button" class="primary">Fill the screen with the video</button>
+          <button id="pageShow" type="button" class="primary hidden">Show it in the car</button>
+          <button id="pageClose" type="button">Close the page</button>
         </div>
-        <p id="shareNote" class="muted hint hidden"></p>
       </div>
     </section>
 
@@ -139,7 +147,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="/static/common.js"></script>
-  <script src="/static/screen-share.js"></script>
+  <script src="/static/page-card.js"></script>
   <script src="/static/remote.js"></script>
 </body>
 </html>

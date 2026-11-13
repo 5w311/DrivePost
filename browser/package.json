@@ -1,0 +1,14 @@
+{
+  "name": "drivepost-browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The browser DrivePost opens pages in, and the small program that drives it",
+  "type": "module",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

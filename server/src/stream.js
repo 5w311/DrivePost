@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { config } from './config.js';
 import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, NO_SUCH_FORMAT, TEST_PATTERN_ID } from './youtube.js';
 import { isLinkId, linkStreamInfo, forgetLink, guardedFetch, LINK_PROTOCOLS } from './links.js';
-import { isScreenId, sharedScreen, shareExpected } from './mirror.js';
+import { isPageId, pageStream, shareExpected } from './mirror.js';
 import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
@@ -24,9 +24,10 @@ const SILENT_AFTER = 20;
 const startedOverForSound = new Map();
 const BACKLOG_HIGH = 4 * 1024 * 1024;
 const BACKLOG_LOW = 1024 * 1024;
-// A shared screen is made as it is watched, so the car can only ever hold a
-// few seconds of it. Holding more than this means the car has fallen that far
-// behind the screen (a slow patch, a paused player): see fellBehind below.
+// A page in the server's browser is recorded as it is watched, so the car can
+// only ever hold a few seconds of it. Holding more than this means the car
+// has fallen that far behind the page (a slow patch, a paused player): see
+// fellBehind below.
 const SCREEN_AHEAD = 10;
 
 // MP2 audio needs more bits than modern formats; 192k is where it stops
@@ -119,7 +120,7 @@ function inputArgs(input, startAt, live, cut) {
     return a;
   }
   if (input.mirror) {
-    // A shared screen (mirror.js): a live stream kept on this machine, one
+    // A page in the server's browser (mirror.js): a live stream kept on this machine, one
     // new piece a second. Start three pieces back from the newest: the car
     // then has a couple of seconds in hand from the first moment, which is
     // what carries it over a late piece. Give up once the stream has stopped
@@ -425,12 +426,12 @@ export async function cutLists(info, startAt, lists, handedOver = []) {
 // One car connection = one ffmpeg process.
 export async function handleStream(ws, { id, startAt, quality, audioRate, want, group = 'main' }) {
   const handedOver = []; // lists made fetchable for this stream's ffmpeg
-  // A shared screen (mirror.js) is played from a stream on this machine: there is nothing to look up or to forget.
-  const screen = isScreenId(id);
+  // A page in the server's browser (mirror.js) is played from a stream on this machine: there is nothing to look up or to forget.
+  const page = isPageId(id);
   // YouTube's videos come by one of several routes, which are kept score of. The test pattern and other sites' links don't.
-  const byRoute = id !== TEST_PATTERN_ID && !isLinkId(id) && !screen;
+  const byRoute = id !== TEST_PATTERN_ID && !isLinkId(id) && !page;
   const forget = () => {
-    if (screen) return;
+    if (page) return;
     if (isLinkId(id)) forgetLink(id);
     else forgetStream(id, quality);
   };
@@ -458,10 +459,11 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   // How fast this machine converts, measured while filling the car's buffer.
   // Shows in `docker compose logs` and in the car's Stats readout.
   let firstDataAt = null;
+  let startedAtEdge = null; // for a page: how far its stream had got where this car's copy starts
   let speedLogged = false;
   function logSpeed(note) {
-    // A shared screen arrives at the pace it is made: its speed says nothing about this machine.
-    if (screen) return;
+    // A page's picture arrives at the pace it is made: its speed says nothing about this machine.
+    if (page) return;
     if (speedLogged || firstDataAt === null || lastSentPts === null || splitter.firstVideoPts === null) return;
     const media = lastSentPts - splitter.firstVideoPts;
     const wall = (Date.now() - firstDataAt) / 1000;
@@ -512,7 +514,11 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
           sendJson(ws, { type: 'base', pts: splitter.firstVideoPts });
           baseSent = true;
         }
-        if (firstDataAt === null) firstDataAt = Date.now();
+        if (firstDataAt === null) {
+          firstDataAt = Date.now();
+          // A page's stream is read from three pieces back from its newest (see inputArgs).
+          if (page && playable.share) startedAtEdge = Math.max(0, playable.share.edge() - 3);
+        }
         // H.264 frames aren't sent in display order, so keep the furthest one.
         lastSentPts = lastSentPts === null ? pts : Math.max(lastSentPts, pts);
       } else {
@@ -546,14 +552,22 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     const a = ahead();
     const backlog = ws.bufferedAmount;
     const limit = AHEAD[codec] || AHEAD.mpeg1;
-    // A shared screen doesn't wait: holding it back here would only put the
+    // A page doesn't wait: holding its picture back here would only put the
     // car further behind it. A car that has fallen behind (its connection
     // can't keep up, or it is paused) plays out what it has been sent, then
-    // comes back for the screen as it is by then.
+    // comes back for the page as it is by then.
     // (Until the car has said where it is in the stream, it is only starting
     // up, which a slow one is given the usual time for.)
     const behindAt = clientClock === null ? limit.high : SCREEN_AHEAD;
-    if (screen && (a > behindAt || backlog > BACKLOG_HIGH)) return fellBehind(backlog > BACKLOG_HIGH);
+    if (page && (a > behindAt || backlog > BACKLOG_HIGH)) return fellBehind(backlog > BACKLOG_HIGH ? 'connection' : 'car');
+    // And this end of it: what has been sent should keep pace with the
+    // stream it is converted from. That much short of it, the conversion
+    // here isn't keeping up (a busy machine), and carrying on would only
+    // show the car an older and older page.
+    if (page && startedAtEdge !== null && lastSentPts !== null && splitter.firstVideoPts !== null) {
+      const reached = startedAtEdge + (lastSentPts - splitter.firstVideoPts);
+      if (playable.share.edge() - reached > SCREEN_AHEAD) return fellBehind('server');
+    }
     if (!flowPaused && (a > limit.high || backlog > BACKLOG_HIGH)) {
       logSpeed(backlog > BACKLOG_HIGH ? "held back by the car's connection, not the CPU" : '');
       ff.stdout.pause();
@@ -563,9 +577,10 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       flowPaused = false;
     }
   }
-  function fellBehind(connection) {
+  function fellBehind(why) {
     if (killed || closed) return;
-    console.log(`[stream ${id}] the car ${connection ? "can't be sent the shared screen as fast as it is made" : `is ${Math.round(ahead())} s behind the shared screen`}: it starts afresh from where the screen is now`);
+    const said = why === 'connection' ? "the car can't be sent the page as fast as it is made" : why === 'server' ? "this server isn't converting the page as fast as it is made" : `the car is ${Math.round(ahead())} s behind the page`;
+    console.log(`[stream ${id}] ${said}: it starts afresh from where the page is now`);
     killed = true;
     ff.kill('SIGKILL');
     sendJson(ws, { type: 'end', complete: false });
@@ -594,8 +609,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     }
   });
 
-  const playable = screen
-    ? await sharedScreen(group)
+  const playable = page
+    ? await pageStream(group)
     : await findPlayable(id, quality, {
         // Only worth mentioning when it's long enough to wonder about.
         onWait: (seconds) => {
@@ -604,8 +619,7 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       });
   if (closed) return;
   if (playable.over) {
-    // The shared screen this car came back for has stopped being shared
-    // meanwhile. That isn't an error: it has ended, and the car moves on.
+    // The page this car came back for has been closed meanwhile. That isn't an error: it has ended, and the car moves on.
     sendJson(ws, { type: 'end', complete: true });
     return;
   }
@@ -678,15 +692,15 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       if (lastSentPts === null) {
         // Checked out fine, yet ffmpeg couldn't use it: the next try takes another route.
         if (byRoute) routeRefused(info.routeName, why.raw);
-        sendJson(ws, { type: 'error', message: `${screen ? "Couldn't show the shared screen" : "Couldn't play this video"}: ${why.said}` });
+        sendJson(ws, { type: 'error', message: `${page ? "Couldn't show the page" : "Couldn't play this video"}: ${why.said}` });
         ws.close();
         return;
       }
     }
     const played = lastSentPts !== null && splitter.firstVideoPts !== null ? lastSentPts - splitter.firstVideoPts : 0;
-    // A shared screen's stream ends when the share does. If that was only a
-    // drop, or another share took its place, it isn't over: the car asks again.
-    const complete = screen
+    // A page's stream ends when its recording does. If that was only a
+    // break in it, or a fresh recording took its place, it isn't over: the car asks again.
+    const complete = page
       ? !shareExpected(group)
       : code === 0 && (info.live || !info.duration || startAt + played >= info.duration - 5);
     sendJson(ws, { type: 'end', complete });

@@ -238,6 +238,32 @@ export async function addressAllowed(url, lookup = dns.lookup, allowLocal = conf
   if (!found.length || found.some((a) => isPrivateAddress(a.address))) throw new Error(REFUSED);
 }
 
+/*
+ * Where a name leads, for something about to connect there: one address,
+ * checked the way addressAllowed checks (and by the same rules), so that the
+ * connection goes to the very address that was looked at and not to wherever
+ * the name leads a moment later. Throws, in words for the screen, when the
+ * name leads inside this server's own network.
+ */
+export async function whereTo(hostname, lookup = dns.lookup, allowLocal = config.links.local) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) throw new Error("That isn't a web address.");
+  if (net.isIP(host)) {
+    if (!allowLocal && isPrivateAddress(host)) throw new Error(REFUSED);
+    return { address: host, family: net.isIP(host) };
+  }
+  if (!allowLocal && (!host.includes('.') || INSIDE_NAMES.test(host))) throw new Error(REFUSED);
+  let found;
+  try {
+    found = await lookup(host, { all: true, verbatim: true });
+  } catch {
+    throw new Error(`Couldn't find ${host.slice(0, 60)}.`);
+  }
+  if (!found.length) throw new Error(`Couldn't find ${host.slice(0, 60)}.`);
+  if (!allowLocal && found.some((a) => isPrivateAddress(a.address))) throw new Error(REFUSED);
+  return found.find((a) => a.family === 4) || found[0];
+}
+
 // fetch() that asks addressAllowed about the address and about wherever it is sent on to.
 export async function guardedFetch(url, opts = {}) {
   let at = String(url);

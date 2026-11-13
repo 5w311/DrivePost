@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
 import { isLinkId, isLinkAddress, linkId, rememberLink, siteOf } from './links.js';
-import { SCREEN_ID, screenItem, cleanSurface } from './mirror.js';
+import { PAGE_ID, pageItem } from './mirror.js';
 import { QUALITIES } from './config.js';
 
 const HISTORY_MAX = 40;
@@ -71,9 +71,11 @@ export class Store extends EventEmitter {
     this.now = now ? { ...this.keyed(now), seq: ++this.seq, startAt: this.resumePoint(now) } : null;
     this.paused = !!this.now;
     this.autoCap = null; // lower quality the car fell back to for this video
-    // A screen being shared to this profile's car right now (mirror.js):
-    // { surface, since }. Never saved: after a restart there is no share.
-    this.screen = null;
+    // A page open for this profile in the server's own browser right now
+    // (webpage.js): { url, title, site, phase, since }. `phase` is 'opening'
+    // until its picture can be played, then 'live'. Never saved: after a
+    // restart no page is open.
+    this.page = null;
     this.position = null; // last report from the car: { seq, t, state, at }
     this.carOnline = false;
     this.saveTimer = null;
@@ -115,7 +117,7 @@ export class Store extends EventEmitter {
       playQuality: this.playQuality(),
       carOnline: this.carOnline,
       position: this.position,
-      screen: this.screen,
+      page: this.page,
     };
   }
 
@@ -182,8 +184,8 @@ export class Store extends EventEmitter {
     this.now = { ...this.keyed(item), seq: ++this.seq, startAt: start };
     this.paused = false;
     this.position = { seq: this.now.seq, t: start, state: 'loading', at: Date.now() };
-    // A shared screen isn't something to find again under Recent.
-    if (item.id !== TEST_PATTERN_ID && item.id !== SCREEN_ID) {
+    // A page open in the server's browser isn't a video to find again under Recent.
+    if (item.id !== TEST_PATTERN_ID && item.id !== PAGE_ID) {
       const { key, ...rest } = item;
       this.history = [rest, ...this.history.filter((h) => h.id !== item.id)].slice(0, HISTORY_MAX);
     }
@@ -219,47 +221,66 @@ export class Store extends EventEmitter {
     this.setNow(next ? next : null);
   }
 
-  // ---- a shared screen ----
+  // ---- a page in the server's browser ----
 
-  // A screen has started being shared to this car (`info`: { surface }), or stopped (null).
-  setScreen(info) {
-    if (!info && !this.screen) return;
-    this.screen = info ? { surface: cleanSurface(info.surface), since: Date.now() } : null;
+  // A page is being opened (`info`: { url, title, site, phase }), has changed
+  // (the same, with what is new), or has been closed (null).
+  setPage(info) {
+    if (!info) {
+      if (!this.page) return;
+      this.page = null;
+      return this.changed();
+    }
+    const clean = (v, n) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+    const before = this.page || { since: Date.now() };
+    this.page = {
+      url: clean(info.url ?? before.url, 2000),
+      title: clean(info.title ?? before.title, 200),
+      site: clean(info.site ?? before.site, 80),
+      phase: info.phase === 'live' || (info.phase === undefined && before.phase === 'live') ? 'live' : 'opening',
+      since: before.since,
+    };
+    // The car's row for it keeps up with where the page has gone.
+    if (this.now && this.now.id === PAGE_ID) {
+      const row = pageItem(this.page);
+      if (row.title !== this.now.title || row.site !== this.now.site) this.now = { ...this.now, title: row.title, site: row.site };
+    }
     this.changed();
   }
 
-  // The shared screen is what the car plays, from this moment of it.
-  showScreen() {
-    if (!this.screen) return 'Nothing is being shared right now.';
-    this.setNow(screenItem(this.screen.surface), { startAt: 0 });
+  // The page is what the car plays, from this moment of it.
+  showPage() {
+    if (!this.page) return 'No page is open right now.';
+    if (this.page.phase !== 'live') return 'The page is still opening.';
+    this.setNow(pageItem(this.page), { startAt: 0 });
     return null;
   }
 
-  // Sharing is over: the car moves on, unless it was left paused on it.
-  screenOver() {
-    this.screen = null;
-    if (this.now && this.now.id === SCREEN_ID) {
+  // The page has been closed: the car moves on, unless it was left paused on it.
+  pageOver() {
+    this.page = null;
+    if (this.now && this.now.id === PAGE_ID) {
       if (this.paused) this.setNow(null);
       else this.advance();
     }
     this.changed();
   }
 
-  // A shared screen can't be picked up where it was left: playing it again
-  // after a pause shows what is on it now, in a new stream.
+  // A page can't be picked up where it was left: playing it again after a
+  // pause shows it as it is now, in a new stream.
   backToNow() {
-    if (!this.now || this.now.id !== SCREEN_ID || !this.paused) return;
+    if (!this.now || this.now.id !== PAGE_ID || !this.paused) return;
     this.now = { ...this.now, seq: ++this.seq };
     this.position = { seq: this.now.seq, t: 0, state: 'loading', at: Date.now() };
   }
 
   // Apply a command from the car or a phone. Returns an error string or null.
   command(action, data = {}) {
-    // The shared screen is played or it isn't: it has no place in Up Next,
-    // and only this server says what it is.
-    if (data.item && data.item.id === SCREEN_ID) {
-      if (action !== 'play') return "A shared screen can be played, not lined up.";
-      const error = this.showScreen();
+    // The page in the server's browser is played or it isn't: it has no
+    // place in Up Next, and only this server says what it is.
+    if (data.item && data.item.id === PAGE_ID) {
+      if (action !== 'play') return 'A page can be played, not lined up.';
+      const error = this.showPage();
       if (!error) this.changed();
       return error;
     }

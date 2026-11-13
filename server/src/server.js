@@ -9,7 +9,9 @@ import { config, QUALITIES } from './config.js';
 import { Auth, clientIp, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
-import { SCREEN_ID, isScreenId, startShare, endShare, onShare, clearOldShares } from './mirror.js';
+import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
+import { usePages, pagesEncodeH264, pagesReady, isAgent, attachAgent, guardAllows, browserKey, openPage, closePage, pageOf, watchPage, dropWatchers } from './webpage.js';
+import { startGuard } from './guard.js';
 import { stampPage, feedbackLink } from './pages.js';
 import { recommendFor } from './recommend.js';
 import {
@@ -76,7 +78,7 @@ function storeFor(id) {
       broadcast(id, { type: 'state', state });
       // Look up what's playing and what's next ahead of time, so they start faster.
       const warm = (id, quality) => {
-        if (isScreenId(id)) return; // a shared screen is already on this machine
+        if (isPageId(id)) return; // a page's picture is already on this machine
         if (isLinkId(id)) prewarmLink(id, quality);
         else prewarm(id, quality);
       };
@@ -626,7 +628,7 @@ async function route(req, res) {
       } else if (body.action === 'remove') {
         auth.removeProfile(id);
         dropScreens(id);
-        endShare(id);
+        closePage(id);
         const gone = stores.get(id);
         if (gone) {
           clearTimeout(gone.saveTimer);
@@ -723,10 +725,19 @@ async function route(req, res) {
       return send(res, 200, { ok: true });
     }
 
-    // Stop the screen being shared to this profile's car. From any of its
-    // devices: the one that shares it (as its page is closed), or a phone.
-    if (req.method === 'POST' && p === '/api/screen/stop') {
-      endShare(profile);
+    // Open an address as a page in the server's own browser, for the links
+    // no video can be pulled out of. The car is shown the page.
+    if (req.method === 'POST' && p === '/api/page/open') {
+      const body = await readJson(req);
+      const done = await openPage(profile, body.url || body.text);
+      if (done.error) return send(res, 400, { error: done.error });
+      // Already open and sent somewhere new: back on in the car, if something else was.
+      const store = storeFor(profile);
+      if (done.going && !(store.now && isPageId(store.now.id))) store.command('play', { item: { id: PAGE_ID } });
+      return send(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && p === '/api/page/close') {
+      closePage(profile);
       return send(res, 200, { ok: true });
     }
 
@@ -823,7 +834,7 @@ function broadcast(profile, msg) {
 // try to come back, find they're signed out, and show the sign-in page.
 function dropScreens(profile) {
   for (const c of controlClients) if (c.profile === profile) c.ws.close(4401, 'signed out');
-  for (const c of sharers) if (c.profile === profile) c.ws.close(4401, 'signed out');
+  dropWatchers(profile);
 }
 
 function hello(profile) {
@@ -832,7 +843,7 @@ function hello(profile) {
     version: VERSION,
     feedback: !!config.feedbackUrl,
     otherSites: config.links.on,
-    screenShare: config.screen.on,
+    pages: pagesReady(),
     profile: profileLabel(profile),
   };
 }
@@ -897,116 +908,71 @@ function handleControl(ws, profile) {
   });
 }
 
-// ---------- screen sharing ----------
-// A device shares a tab, a window or its screen to the car: its browser
-// records what it captures and sends the recording up this socket as it is
-// made. mirror.js turns that into a live stream; the car plays it like any
-// live video.
-const screenWss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
-const sharers = new Set(); // { ws, profile }
-const SCREEN_STALL_MS = 12 * 1000; // a recording that stops arriving for this long has lost its connection
-const SCREEN_PLAY_OUT_MS = 12 * 1000; // how long a car gets to play out the end of a share before it is moved on
-let screenH264 = true; // whether this ffmpeg can make H.264 for the copy it keeps
-canEncodeH264().then((can) => (screenH264 = can));
+// ---------- pages ----------
+// A link with no video to fetch is opened as a page in the server's own
+// browser, and the car is shown that (webpage.js). Three sockets serve it:
+// the browser's program connects in on /ws/browser, a phone that steers the
+// page on /ws/page, and the car plays its picture like any live video.
+const agentWss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+const pageWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+const PAGE_PLAY_OUT_MS = 12 * 1000; // how long a car gets to play out the end of a page before it is moved on
+canEncodeH264().then(pagesEncodeH264);
 clearOldShares();
 
-function handleScreen(ws, profile) {
-  const client = { ws, profile };
-  sharers.add(client);
-  let share = null;
-  let stopped = false;
-  const say = (msg) => {
-    if (ws.readyState === 1) ws.send(JSON.stringify(msg));
-  };
-  const who = profileLabel(profile);
-  const stall = setInterval(() => {
-    if (share && !share.done && Date.now() - share.lastDataAt > SCREEN_STALL_MS) ws.close(4408, 'nothing arriving');
-  }, 2000);
+usePages({
+  shown: (profile) => {
+    const store = auth.profile(profile) ? storeFor(profile) : null;
+    return !!store && !!store.now && isPageId(store.now.id) && store.carOnline && !store.paused;
+  },
+  changed: (profile, info) => {
+    if (!auth.profile(profile)) return;
+    const store = storeFor(profile);
+    if (info) store.setPage(info);
+    else store.pageOver();
+  },
+  toast: (profile, message) => broadcast(profile, { type: 'toast', message }),
+  // Phones show "Open as a page" only while there is a browser to open it in.
+  availability: () => {
+    for (const c of controlClients) if (c.ws.readyState === 1) c.ws.send(JSON.stringify(hello(c.profile)));
+  },
+});
 
-  ws.on('message', (data, isBinary) => {
-    if (isBinary) {
-      if (share) share.write(data);
-      return;
-    }
-    let msg;
-    try {
-      msg = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (msg.type === 'start' && !share) {
-      try {
-        share = startShare(profile, { size: msg.size, audio: msg.audio, surface: msg.surface, again: msg.again === true, turn: msg.turn, h264: screenH264 });
-      } catch (err) {
-        console.error(`[screen] could not start: ${err.message}`);
-        say({ type: 'error', message: "This server couldn't start taking the screen in." });
-        return ws.close(4500, 'failed');
-      }
-      share.onReady = () => say({ type: 'ready' });
-      share.onFail = (message, wasPlaying) => {
-        // `again`: it was working until now, so a fresh recording is worth a try.
-        say({ type: 'error', message, again: wasPlaying });
-        ws.close(4500, 'failed');
-      };
-      share.onReplaced = () => {
-        say({ type: 'replaced' });
-        ws.close(4000, 'replaced');
-      };
-      // Stopped from another of the profile's devices.
-      share.onStopped = () => {
-        stopped = true;
-        console.log(`[screen${who ? ` ${who}` : ''}] sharing stopped from another device`);
-        say({ type: 'stopped' });
-        ws.close(1000, 'stopped');
-      };
-      console.log(`[screen${who ? ` ${who}` : ''}] ${share.again ? 'back: ' : ''}sharing a ${share.surface === 'browser' ? 'tab' : share.surface === 'window' ? 'window' : 'screen'} at ${share.size}p${share.audio ? '' : ', without sound'}${share.turn ? `, turned ${share.turn} degrees` : ''}`);
-      // Now the recording can begin: nothing of it is sent before this.
-      say({ type: 'go' });
-    } else if (msg.type === 'stop') {
-      stopped = true;
-      if (share && !share.done) {
-        console.log(`[screen${who ? ` ${who}` : ''}] sharing stopped`);
-        share.finish('stopped');
-      }
-      ws.close(1000, 'stopped');
-    }
-  });
-
-  ws.on('close', () => {
-    sharers.delete(client);
-    clearInterval(stall);
-    if (share && !share.done) {
-      console.log(`[screen${who ? ` ${who}` : ''}] ${stopped ? 'sharing stopped' : 'the share dropped'}`);
-      share.finish(stopped ? 'stopped' : 'dropped');
-    }
-  });
-}
-
+// The picture of a page can be played, or has ended (mirror.js).
 onShare((profile, what, share) => {
   if (!auth.profile(profile)) return;
   const store = storeFor(profile);
   if (what === 'live') {
-    store.setScreen({ surface: share.surface });
-    // Sharing a screen is asking for it to be shown. One that only dropped
-    // and came back leaves alone whatever was put on in the meantime.
-    if (!share.again || !store.now) store.command('play', { item: { id: SCREEN_ID } });
+    if (!pageOf(profile)) return;
+    store.setPage({ phase: 'live' });
+    // Opening a page is asking for it to be shown. A fresh recording of one
+    // that was already on leaves alone whatever was put on in the meantime.
+    if (!share.again || !store.now) store.command('play', { item: { id: PAGE_ID } });
     return;
   }
-  // Over. Stopped on purpose, a car that is showing it has a few seconds of
-  // it still to play, and moves on by itself when it has. This is for when
-  // it doesn't (or there is no car).
-  const showing = store.now && isScreenId(store.now.id) ? store.now.key : null;
+  // Over. The browser is closed with it, if it is still up.
+  closePage(profile);
+  // Closed on purpose, a car that is showing it has a few seconds of it
+  // still to play, and moves on by itself when it has. This is for when it
+  // doesn't (or there is no car).
+  const showing = store.now && isPageId(store.now.id) ? store.now.key : null;
   if (share && share.done === 'stopped' && showing && !store.paused && store.carOnline) {
-    store.setScreen(null);
+    store.setPage(null);
     setTimeout(() => {
-      if (!store.screen && store.now && store.now.key === showing) store.screenOver();
-    }, SCREEN_PLAY_OUT_MS).unref();
-  } else store.screenOver();
+      if (!store.page && store.now && store.now.key === showing) store.pageOver();
+    }, PAGE_PLAY_OUT_MS).unref();
+  } else store.pageOver();
 });
+
+// The browser's one way out to the internet (guard.js). Only worth opening
+// where a browser can sign in at all.
+if (config.pages.on && browserKey()) {
+  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows });
+  guard.on('error', (err) => console.log(`[page] the browser's way out couldn't be opened on port ${config.pages.guardPort} (${err.code || err.message}): pages won't load`));
+}
 
 // Keep sockets alive through proxies and drop dead ones.
 setInterval(() => {
-  for (const ws of [...wss.clients, ...screenWss.clients]) {
+  for (const ws of [...wss.clients, ...agentWss.clients, ...pageWss.clients]) {
     if (ws.isAlive === false) {
       ws.terminate();
       continue;
@@ -1019,21 +985,30 @@ setInterval(() => {
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://local');
   const profile = auth.profileOf(req);
-  if (!profile || !['/ws/control', '/ws/stream', '/ws/screen'].includes(url.pathname)) {
+  // The browser's program signs in with the key it shares with this server, not as a profile.
+  if (url.pathname === '/ws/browser') {
+    if (!isAgent(req)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    agentWss.handleUpgrade(req, socket, head, (ws) => {
+      ws.isAlive = true;
+      ws.on('pong', () => (ws.isAlive = true));
+      attachAgent(ws, req);
+    });
+    return;
+  }
+  if (!profile || !['/ws/control', '/ws/stream', '/ws/page'].includes(url.pathname)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
   }
-  if (url.pathname === '/ws/screen') {
-    if (!config.screen.on) {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-    screenWss.handleUpgrade(req, socket, head, (ws) => {
+  if (url.pathname === '/ws/page') {
+    pageWss.handleUpgrade(req, socket, head, (ws) => {
       ws.isAlive = true;
       ws.on('pong', () => (ws.isAlive = true));
-      handleScreen(ws, profile);
+      watchPage(ws, profile);
     });
     return;
   }
@@ -1042,7 +1017,7 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('pong', () => (ws.isAlive = true));
     if (url.pathname === '/ws/control') return handleControl(ws, profile);
     const id = url.searchParams.get('id');
-    if (!isPlayableId(id) && !isScreenId(id)) return ws.close(4400, 'bad id');
+    if (!isPlayableId(id) && !isPageId(id)) return ws.close(4400, 'bad id');
     const startAt = Math.max(0, Math.floor(Number(url.searchParams.get('t')) || 0));
     const quality = QUALITIES.includes(url.searchParams.get('q')) ? url.searchParams.get('q') : storeFor(profile).playQuality();
     const audioRate = parseInt(url.searchParams.get('ar'), 10) || 48000;

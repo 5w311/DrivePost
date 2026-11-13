@@ -1,17 +1,15 @@
 /*
- * Screen sharing: a tab, a window or a whole screen, shown in the car.
+ * A live picture sent to this server as it is made, kept so the car can
+ * play it.
  *
- * The device that shares does the capturing itself, in its browser, the way
- * a video call shares a screen (the phone page's "Share this screen" card).
- * Its browser records what it captures and sends the recording here as it
- * is made. This module turns that into a short live video stream on this
- * machine, which the car then plays like any other live video: converted and
- * sent by stream.js, with the same player, sound and controls.
+ * It comes from the browser DrivePost opens pages in (webpage.js, and the
+ * browser container): a tab there records the page being shown and the
+ * recording arrives here piece by piece. This module turns that into a short
+ * live video stream on this machine, which the car then plays like any other
+ * live video: converted and sent by stream.js, with the same player, sound
+ * and controls.
  *
- * So nothing is fetched from anywhere. Whatever is on that screen is played
- * by the device it is on, and the car gets a picture of it.
- *
- * One share per profile. A new one replaces the one before it.
+ * One at a time per profile. A new one replaces the one before it.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -19,17 +17,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.js';
 
-// What the car is asked to play while a screen is shared.
-export const SCREEN_ID = 'screen';
-export const isScreenId = (id) => id === SCREEN_ID;
+// What the car is asked to play while a page is open in the server's browser.
+export const PAGE_ID = 'page';
+export const isPageId = (id) => id === PAGE_ID;
 
-const TITLES = { browser: 'Shared tab', window: 'Shared window', monitor: 'Shared screen' };
-export const cleanSurface = (s) => (Object.hasOwn(TITLES, s) ? s : 'monitor');
-export function screenItem(surface) {
-  return { id: SCREEN_ID, title: TITLES[cleanSurface(surface)], channel: '', duration: null, live: true, site: 'Screen share', thumb: '' };
+// The row for it: named for the page, and for the site it is on.
+export function pageItem({ title, site } = {}) {
+  const clean = (v, n) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
+  return { id: PAGE_ID, title: clean(title, 200) || clean(site, 80) || 'A web page', channel: '', duration: null, live: true, site: clean(site, 80) || 'Web page', thumb: '' };
 }
 
-// The picture the shared screen is fitted into, whatever its own shape, and
+// The picture the recording is fitted into, whatever its own shape, and
 // the most the copy kept on this machine may take per second.
 export const SCREEN_SIZES = {
   480: { width: 854, height: 480, kbps: 3000 },
@@ -37,23 +35,19 @@ export const SCREEN_SIZES = {
   1080: { width: 1920, height: 1080, kbps: 8000 },
 };
 export const cleanSize = (s) => (Object.hasOwn(SCREEN_SIZES, String(s)) ? String(s) : '720');
-// A picture that arrives on its side (a phone held sideways can send one) is
-// turned upright here: a quarter turn clockwise, a half turn, or three quarters.
-const TURNS = { 90: 'transpose=1', 180: 'hflip,vflip', 270: 'transpose=2' };
-export const cleanTurn = (t) => (Object.hasOwn(TURNS, String(t)) ? Number(t) : 0);
 
 const SEGMENT_S = 1; // the stream is kept as pieces this long
 const KEPT = 12; // ...this many of them, the oldest making way for the newest
 const READY_WITH = 3; // pieces there must be before the car is sent to it (stream.js starts it that far back)
 const READY_WITHIN_MS = 20 * 1000; // a recording that hasn't become video by then isn't going to
 const FRESH_MS = 5 * 1000; // a stream that hasn't grown for this long has stalled
-// A share that drops (the device's connection, mostly) usually comes straight
+// A recording that breaks off (the browser's agent reconnecting, mostly) usually comes straight
 // back. The car waits this long for it before moving on.
 export const BACK_WITHIN_MS = Number(process.env.SCREEN_BACK_MS) || 20 * 1000;
-const WAIT_FOR_IT_MS = 20 * 1000; // how long a car that asks for the screen waits for it to be there
+const WAIT_FOR_IT_MS = 20 * 1000; // how long a car that asks for the page waits for it to be there
 
 function baseDir() {
-  if (config.screen.dir) return config.screen.dir;
+  if (config.pages.dir) return config.pages.dir;
   // Memory, where there is some to write to: these files are rewritten every second.
   try {
     fs.accessSync('/dev/shm', fs.constants.W_OK);
@@ -63,11 +57,11 @@ function baseDir() {
   }
 }
 
-// Folders left behind by a server that was stopped mid-share.
+// Folders left behind by a server that was stopped while a page was open.
 export function clearOldShares(dir = baseDir()) {
   try {
     for (const name of fs.readdirSync(dir)) {
-      if (/^drivepost-screen-/.test(name)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+      if (/^drivepost-(page|screen)-/.test(name)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
     }
   } catch {}
 }
@@ -82,10 +76,9 @@ export function clearOldShares(dir = baseDir()) {
  * picture size at 30 frames a second, each piece starting on a whole frame,
  * so that the stream the car's ffmpeg reads never changes shape.
  */
-export function ingestArgs({ list, size = '720', audio = true, h264 = true, turn = 0 }) {
+export function ingestArgs({ list, size = '720', audio = true, h264 = true }) {
   const { width, height, kbps } = SCREEN_SIZES[cleanSize(size)];
   const fit = [
-    ...(cleanTurn(turn) ? [TURNS[cleanTurn(turn)]] : []),
     'fps=30',
     `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic`,
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
@@ -126,8 +119,8 @@ const backBy = new Map(); // profile → when a dropped share stops being waited
 const backTimers = new Map();
 const listeners = new Set();
 
-// fn(profile, what, share): 'live' when a share can be played, 'over' when
-// sharing has ended for good (stopped, or dropped and not come back).
+// fn(profile, what, share): 'live' when a picture can be played, 'over' when
+// it has ended for good (stopped, or dropped and not come back).
 export function onShare(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -155,27 +148,27 @@ function stopWaitingFor(profile) {
 }
 
 class Share {
-  constructor(profile, { size, audio, surface, again, h264, turn, spawnImpl = spawn }) {
+  constructor(profile, { size, audio, again, h264, spawnImpl = spawn }) {
     this.profile = profile;
     this.size = cleanSize(size);
-    this.turn = cleanTurn(turn);
     this.audio = audio !== false;
-    this.surface = cleanSurface(surface);
-    this.again = !!again; // the same sharing as a moment ago, back after a drop
+    this.again = !!again; // the same picture as a moment ago, in a fresh recording
     this.since = Date.now();
-    this.dir = fs.mkdtempSync(path.join(baseDir(), 'drivepost-screen-'));
+    this.dir = fs.mkdtempSync(path.join(baseDir(), 'drivepost-page-'));
     this.list = path.join(this.dir, 'index.m3u8');
     this.ready = false;
     this.done = null; // why it ended, once it has
     this.taken = 0; // bytes of recording taken in
+    this.edgeAt = 0;
+    this.edgeIs = 0;
     this.lastDataAt = Date.now();
     this.stderr = '';
     this.onFail = null; // (message, wasPlaying): the recording couldn't be used
     this.onReady = null;
     this.onReplaced = null;
-    this.onStopped = null; // stopped by someone other than whoever shares it
+    this.onStopped = null; // ended from outside (endShare)
 
-    this.ff = spawnImpl(config.ffmpegBin, ingestArgs({ list: this.list, size: this.size, audio: this.audio, h264, turn: this.turn }), {
+    this.ff = spawnImpl(config.ffmpegBin, ingestArgs({ list: this.list, size: this.size, audio: this.audio, h264 }), {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
     this.ff.stdin.on('error', () => {}); // it went away mid-write: its exit is dealt with below
@@ -185,7 +178,7 @@ class Share {
     this.ff.on('error', (err) => this.fail(`Could not start ffmpeg: ${err.message}`));
     this.ff.on('close', (code) => {
       clearInterval(this.watch);
-      if (!this.done) this.fail(this.taken ? "This browser's recording couldn't be turned into video." : 'Nothing arrived from the screen being shared.', code);
+      if (!this.done) this.fail(this.taken ? "The recording of the page couldn't be turned into video." : 'Nothing arrived from the browser.', code);
       // ffmpeg closes the stream when it ends in good order. When it didn't,
       // close it for it: the cars reading it then stop at once, instead of
       // waiting ten seconds for a next piece that isn't coming.
@@ -212,7 +205,7 @@ class Share {
             tell(profile, 'live', this);
           }
         } else if (Date.now() - this.since > READY_WITHIN_MS) {
-          this.fail(this.taken ? "This browser's recording couldn't be turned into video." : 'Nothing arrived from the screen being shared.');
+          this.fail(this.taken ? "The recording of the page couldn't be turned into video." : 'Nothing arrived from the browser.');
         }
       }
     }, 150);
@@ -225,8 +218,22 @@ class Share {
     this.taken += chunk.length;
     this.lastDataAt = Date.now();
     // ffmpeg not keeping up with a recording made in real time means something is wrong with it.
-    if (this.ff.stdin.writableLength > 32 * 1024 * 1024) return this.fail('This server fell too far behind the screen being shared.');
+    if (this.ff.stdin.writableLength > 32 * 1024 * 1024) return this.fail('This server fell too far behind the page.');
     this.ff.stdin.write(chunk);
+  }
+
+  // How many seconds of stream there have been so far: the pieces that have
+  // come and gone, and the ones still listed. (Looked up at most once a second.)
+  edge(now = Date.now()) {
+    if (now - this.edgeAt > 1000) {
+      this.edgeAt = now;
+      try {
+        const text = fs.readFileSync(this.list, 'utf8');
+        const from = Number((/^#EXT-X-MEDIA-SEQUENCE:(\d+)/m.exec(text) || [])[1]) || 0;
+        this.edgeIs = (from + readList(text).pieces) * SEGMENT_S;
+      } catch {}
+    }
+    return this.edgeIs;
   }
 
   // Is the stream growing? (Its list is rewritten with every new piece.)
@@ -248,15 +255,15 @@ class Share {
       height,
       fps: 30,
       duration: null,
-      route: 'a shared screen',
-      routeName: 'screen',
-      site: 'the shared screen',
+      route: 'the page in the browser',
+      routeName: 'page',
+      site: 'the page',
     };
   }
 
   /*
    * End it. `why`:
-   *   stopped   whoever shared it said so: sharing is over
+   *   stopped   it was closed: over
    *   dropped   the connection to them went: it may be back in a moment
    *   replaced  another share took its place
    *   failed    the recording couldn't be used
@@ -294,9 +301,9 @@ class Share {
   fail(message, code) {
     if (this.done) return;
     const said = this.stderr.trim().split('\n').pop() || (code !== undefined ? `ffmpeg exited with ${code}` : '');
-    console.warn(`[screen] ${message}${said ? ` | ${said.slice(0, 300)}` : ''}`);
+    console.warn(`[page] ${message}${said ? ` | ${said.slice(0, 300)}` : ''}`);
     // One that was playing may only have tripped over something in the
-    // recording (its picture changing size, say). Whoever shares it is told
+    // recording (its picture changing size, say). Whoever sends it is told
     // so and tries again with a fresh recording, and the car waits for that
     // as it does after a drop.
     const wasPlaying = this.ready;
@@ -307,7 +314,7 @@ class Share {
 
 /*
  * Start a share for a profile, in place of the one it has (if any).
- * `opts`: { size, audio, surface, again, h264, turn }.
+ * `opts`: { size, audio, again, h264 }.
  */
 export function startShare(profile, opts = {}) {
   const before = shares.get(profile);
@@ -334,21 +341,21 @@ export function endShare(profile) {
 }
 
 /*
- * For a car asking to play the shared screen: { info } once the stream is
- * there and growing, { over: true } when sharing has ended, or { message }
- * to show when a share is on but isn't coming through. A share that is only
+ * For a car asking to play the page: { info } once the stream is there and
+ * growing, { over: true } when the page has been closed, or { message } to
+ * show when it is open but isn't coming through. One that is only
  * just starting, or that dropped a moment ago, is waited for.
  */
-export async function sharedScreen(profile, deps = {}) {
+export async function pageStream(profile, deps = {}) {
   const sleep = deps.sleep || ((ms) => new Promise((done) => setTimeout(done, ms)));
   const now = deps.now || Date.now;
   const until = now() + (deps.wait ?? WAIT_FOR_IT_MS);
   for (;;) {
     const share = shares.get(profile);
-    if (share && share.ready && share.fresh(now())) return { info: share.info() };
-    // Nothing shared, and nothing on its way back: for the car that is the end of it.
+    if (share && share.ready && share.fresh(now())) return { info: share.info(), share };
+    // Nothing open, and nothing on its way back: for the car that is the end of it.
     if (!shareExpected(profile, now())) return { over: true };
-    if (now() >= until) return { message: "The shared screen isn't coming through. Check the device that is sharing it." };
+    if (now() >= until) return { message: "The page isn't coming through from the server's browser." };
     await sleep(200);
   }
 }

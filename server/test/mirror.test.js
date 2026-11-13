@@ -7,11 +7,11 @@ import path from 'node:path';
 
 // A dropped share is waited for this long (20 seconds on a real server).
 process.env.SCREEN_BACK_MS = '250';
-process.env.SCREEN_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-screens-'));
+process.env.PAGES_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-pages-'));
 const mirror = await import('../src/mirror.js');
 const { Store } = await import('../src/state.js');
 const { ffmpegArgs, chooseCodec } = await import('../src/stream.js');
-const { SCREEN_ID, ingestArgs, readList, screenItem, startShare, endShare, shareExpected, sharedScreen, onShare } = mirror;
+const { PAGE_ID, ingestArgs, readList, pageItem, startShare, endShare, shareExpected, pageStream, onShare } = mirror;
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -81,12 +81,6 @@ test('the recording is turned into one fixed picture, whatever it comes as', () 
   assert.match(silent, / -an /);
   assert.doesNotMatch(silent, /0:a:0|aac/);
 
-  // A picture that arrives on its side is turned before anything else is done to it.
-  assert.match(ingestArgs({ list: '/x/index.m3u8', turn: 90 }).join(' '), /-vf transpose=1,fps=30,scale=1280:720/);
-  assert.match(ingestArgs({ list: '/x/index.m3u8', turn: 270 }).join(' '), /-vf transpose=2,fps=30/);
-  assert.match(ingestArgs({ list: '/x/index.m3u8', turn: 180 }).join(' '), /-vf hflip,vflip,fps=30/);
-  assert.match(ingestArgs({ list: '/x/index.m3u8', turn: '45; rm -rf /' }).join(' '), /-vf fps=30/, 'anything else is no turn at all');
-
   const old = ingestArgs({ list: '/x/index.m3u8', h264: false }).join(' ');
   assert.match(old, /-c:v mpeg2video/, 'an ffmpeg without H.264 still keeps a copy');
   assert.doesNotMatch(old, /libx264/);
@@ -98,19 +92,20 @@ test('a list is read for how much of the stream there is', () => {
   assert.deepEqual(readList('#EXTM3U\n#EXTINF:1.0,\na.ts\n#EXT-X-ENDLIST\n'), { pieces: 1, ended: true });
 });
 
-test('what the car is asked to play says what is shared', () => {
-  assert.deepEqual(screenItem('browser'), { id: SCREEN_ID, title: 'Shared tab', channel: '', duration: null, live: true, site: 'Screen share', thumb: '' });
-  assert.equal(screenItem('window').title, 'Shared window');
-  assert.equal(screenItem('monitor').title, 'Shared screen');
-  assert.equal(screenItem('<script>').title, 'Shared screen', 'anything else a page claims is a screen');
+test('what the car is asked to play is named for the page', () => {
+  assert.deepEqual(pageItem({ title: 'Stand-in TV - watch', site: 'standin.tv' }), { id: PAGE_ID, title: 'Stand-in TV - watch', channel: '', duration: null, live: true, site: 'standin.tv', thumb: '' });
+  assert.equal(pageItem({ title: '', site: 'standin.tv' }).title, 'standin.tv', 'a page with no name goes by its site');
+  assert.equal(pageItem({}).title, 'A web page');
+  assert.equal(pageItem({ title: '  two\n  lines  ', site: 'x.com' }).title, 'two lines');
+  assert.equal(pageItem({ title: 'x'.repeat(500) }).title.length, 200);
 });
 
 test('a share is playable once its stream has a few pieces, and over when stopped', async () => {
   const { made, spawnImpl } = fakeFfmpeg();
   const { seen, off } = events('p1');
-  assert.deepEqual(await sharedScreen('p1'), { over: true }, 'nothing shared: nothing to wait for');
+  assert.deepEqual(await pageStream('p1'), { over: true }, 'nothing shared: nothing to wait for');
 
-  const share = startShare('p1', { size: '480', surface: 'browser', spawnImpl });
+  const share = startShare('p1', { size: '480', spawnImpl });
   let ready = false;
   share.onReady = () => (ready = true);
   assert.equal(shareExpected('p1'), true);
@@ -119,7 +114,7 @@ test('a share is playable once its stream has a few pieces, and over when stoppe
   assert.equal(share.taken, 1000);
 
   // A car that asks now waits for it instead of being turned away.
-  const asked = sharedScreen('p1', { wait: 5000 });
+  const asked = pageStream('p1', { wait: 5000 });
   writeList(share, 2);
   await wait(400);
   assert.equal(ready, false, 'two pieces are not enough to start from');
@@ -135,7 +130,7 @@ test('a share is playable once its stream has a few pieces, and over when stoppe
   share.finish('stopped');
   assert.equal(shareExpected('p1'), false, 'stopped is over: nothing is waited for');
   assert.deepEqual(seen, [['live', null], ['over', 'stopped']]);
-  assert.deepEqual(await sharedScreen('p1'), { over: true });
+  assert.deepEqual(await pageStream('p1'), { over: true });
   share.write(Buffer.alloc(10)); // late pieces are dropped quietly
   assert.equal(made[0].written, 1000);
   off();
@@ -151,7 +146,7 @@ test('a share that drops is waited for, then given up on', async () => {
   assert.equal(shareExpected('p2'), true, 'it may be back in a moment');
   assert.deepEqual(seen, [['live', null]], 'nobody is told it is over yet');
   // A car asking meanwhile waits too, and hears that it is over when the wait runs out.
-  assert.deepEqual(await sharedScreen('p2', { wait: 5000 }), { over: true });
+  assert.deepEqual(await pageStream('p2', { wait: 5000 }), { over: true });
   assert.equal(shareExpected('p2'), false);
   assert.deepEqual(seen, [['live', null], ['over', 'dropped']]);
   off();
@@ -166,7 +161,7 @@ test('a share that drops and comes back carries on', async () => {
   first.finish('dropped');
   const back = startShare('p3', { again: true, spawnImpl });
   assert.equal(back.again, true);
-  const asked = sharedScreen('p3', { wait: 5000 });
+  const asked = pageStream('p3', { wait: 5000 });
   writeList(back, 3);
   assert.equal((await asked).info.inputs[0].url, back.list, 'the car is given the new stream');
   await wait(400); // past the time the first one was waited for
@@ -209,7 +204,7 @@ test('a recording that never becomes video fails in words', async () => {
   assert.equal(shareExpected('p5'), false);
 });
 
-test('the car reads a shared screen as live video from this machine', () => {
+test('the car reads a page as live video from this machine', () => {
   const info = { inputs: [{ url: '/dev/shm/x/index.m3u8', list: true, mirror: true, hasVideo: true, hasAudio: true }], live: true, mirror: true, height: 720, fps: 30, duration: null };
   assert.equal(chooseCodec('h264', info), 'mpeg1', 'converted, as live video is');
   const args = ffmpegArgs(info, 0, '480', 48000, 'mpeg1');
@@ -230,36 +225,56 @@ function makeStore() {
 }
 const A = { id: 'aaaaaaaaaaa', title: 'First', duration: 300 };
 const B = { id: 'bbbbbbbbbbb', title: 'Second', duration: 300 };
+const TV = { url: 'https://standin.tv/watch', title: 'Stand-in TV', site: 'standin.tv' };
 
-test('the shared screen plays only while one is shared, and only this server says what it is', () => {
+test('the page plays only once its picture is there, and only this server says what it is', () => {
   const s = makeStore();
-  assert.equal(s.command('play', { item: { id: SCREEN_ID } }), 'Nothing is being shared right now.');
+  assert.equal(s.command('play', { item: { id: PAGE_ID } }), 'No page is open right now.');
   assert.equal(s.now, null);
 
-  s.setScreen({ surface: 'browser' });
-  assert.equal(s.publicState().screen.surface, 'browser');
-  assert.equal(s.command('play', { item: { id: SCREEN_ID, title: 'Free money', url: 'https://example.com/x', duration: 99 } }), null);
-  assert.equal(s.now.title, 'Shared tab', 'whatever a page sends with it is ignored');
+  s.setPage(TV);
+  assert.equal(s.publicState().page.phase, 'opening');
+  assert.equal(s.command('play', { item: { id: PAGE_ID } }), 'The page is still opening.');
+  assert.equal(s.now, null);
+
+  s.setPage({ phase: 'live' });
+  assert.deepEqual({ ...s.publicState().page, since: 0 }, { ...TV, phase: 'live', since: 0 }, 'what is new is added to what was known');
+  assert.equal(s.command('play', { item: { id: PAGE_ID, title: 'Free money', url: 'https://example.com/x', duration: 99 } }), null);
+  assert.equal(s.now.title, 'Stand-in TV', 'whatever a phone sends with it is ignored');
+  assert.equal(s.now.site, 'standin.tv');
   assert.equal(s.now.live, true);
   assert.equal(s.now.duration, null);
   assert.equal(s.now.url, undefined);
   assert.deepEqual(s.history, [], 'it is not kept under Recent');
 
   for (const action of ['enqueue', 'playNext']) {
-    assert.match(s.command(action, { item: { id: SCREEN_ID } }), /not lined up/);
+    assert.match(s.command(action, { item: { id: PAGE_ID } }), /not lined up/);
   }
   assert.deepEqual(s.queue, []);
 });
 
-test('pausing a shared screen and playing it again starts a fresh stream', () => {
+test('the row in the car keeps up with where the page goes', () => {
   const s = makeStore();
-  s.setScreen({ surface: 'monitor' });
-  s.command('play', { item: { id: SCREEN_ID } });
+  s.setPage({ ...TV, phase: 'live' });
+  s.command('play', { item: { id: PAGE_ID } });
+  const { seq, key } = s.now;
+  s.setPage({ url: 'https://standin.tv/news', title: 'Stand-in News' });
+  assert.equal(s.now.title, 'Stand-in News');
+  assert.equal(s.now.seq, seq, 'without the stream starting over');
+  assert.equal(s.now.key, key);
+  assert.equal(s.page.phase, 'live', 'and it stays live');
+  assert.equal(s.page.url, 'https://standin.tv/news');
+});
+
+test('pausing a page and playing it again starts a fresh stream', () => {
+  const s = makeStore();
+  s.setPage({ ...TV, phase: 'live' });
+  s.command('play', { item: { id: PAGE_ID } });
   const seq = s.now.seq;
   s.command('pause');
   assert.equal(s.now.seq, seq);
   s.command('resume');
-  assert.ok(s.now.seq > seq, 'play shows the screen as it is now');
+  assert.ok(s.now.seq > seq, 'play shows the page as it is now');
   assert.equal(s.paused, false);
 
   const again = s.now.seq;
@@ -276,43 +291,43 @@ test('pausing a shared screen and playing it again starts a fresh stream', () =>
   assert.equal(s.now.seq, other);
 });
 
-test('when sharing is over the car moves on', () => {
+test('when the page is closed the car moves on', () => {
   const s = makeStore();
-  s.setScreen({ surface: 'window' });
+  s.setPage({ ...TV, phase: 'live' });
   s.command('play', { item: A });
   s.command('enqueue', { item: B });
-  s.command('play', { item: { id: SCREEN_ID } });
-  s.screenOver();
-  assert.equal(s.screen, null);
+  s.command('play', { item: { id: PAGE_ID } });
+  s.pageOver();
+  assert.equal(s.page, null);
   assert.equal(s.now.id, B.id, 'on to Up Next');
 
   // Left paused on it: nothing starts playing by itself.
-  s.setScreen({ surface: 'window' });
+  s.setPage({ ...TV, phase: 'live' });
   s.command('enqueue', { item: A });
-  s.command('play', { item: { id: SCREEN_ID } });
+  s.command('play', { item: { id: PAGE_ID } });
   s.command('pause');
-  s.screenOver();
+  s.pageOver();
   assert.equal(s.now, null);
   assert.equal(s.queue.length, 1, 'Up Next is still there');
 
   // Something else was on: it is left alone.
-  s.setScreen({ surface: 'window' });
+  s.setPage({ ...TV, phase: 'live' });
   s.command('play', { item: B });
-  s.screenOver();
+  s.pageOver();
   assert.equal(s.now.id, B.id);
-  assert.equal(s.publicState().screen, null);
+  assert.equal(s.publicState().page, null);
 });
 
-test('a shared screen is not brought back by a restart', () => {
+test('a page is not brought back by a restart', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-'));
   const s = new Store({ dataDir, defaultQuality: '720' });
   s.command('play', { item: A });
-  s.setScreen({ surface: 'browser' });
-  s.command('play', { item: { id: SCREEN_ID } });
+  s.setPage({ ...TV, phase: 'live' });
+  s.command('play', { item: { id: PAGE_ID } });
   s.saveNow();
   clearTimeout(s.saveTimer);
   const after = new Store({ dataDir, defaultQuality: '720' });
-  assert.equal(after.now, null, 'there is no share after a restart');
-  assert.equal(after.screen, null);
+  assert.equal(after.now, null, 'no page is open after a restart');
+  assert.equal(after.page, null);
   assert.deepEqual(after.history.map((h) => h.id), [A.id]);
 });
