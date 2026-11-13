@@ -683,39 +683,139 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
 .more[open] summary { margin-bottom: 6px; }
 .kv .k { color: var(--rig-ink-3); font-size: 13px; font-weight: 600; }
 
-/* A page open in the server's browser, steered from the phone: what is
-   happening, a small live view of it to tap and drag on, then the buttons. */
-.page-site { font-weight: 400; margin-left: 6px; }
-.page-say { margin: 0 0 12px; font-size: 15px; line-height: 1.4; }
+/* A page open in the server's browser, steered from the phone. The card is
+   drawn as a small browser: a bar (Back, Reload, where the page is, Bigger)
+   with a live view of the browser's screen under it, to tap and drag on.
+   Under that, a box to type into the page, a few keys, and the ad switch. */
 .page-open { width: 100%; margin-top: 8px; min-height: 44px; font-size: 14.5px; }
+
+/* The card's head: how the page stands with the car, as a badge with a dot (rig-badge). */
+.page-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.page-status {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px;
+  background: var(--rig-surface-2); box-shadow: inset 0 0 0 1px var(--rig-line);
+  color: var(--rig-ink-2); font-size: 12.5px; font-weight: 650; white-space: nowrap;
+}
+.page-status:empty { display: none; }
+.page-status::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.page-status.ok { background: var(--rig-ok-soft); box-shadow: inset 0 0 0 1px var(--ok-ring); color: var(--rig-ok); }
+.page-status.busy { background: var(--rig-accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ring); color: var(--rig-accent); }
+.page-status.busy::before { animation: page-busy 0.9s ease-in-out infinite alternate; }
+@keyframes page-busy { to { opacity: 0.25; } }
+
+/* Something to do about it (the car is off, or on something else): an alert (rig-alert), with its button. */
+.page-note {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 12px; padding: 12px 14px;
+  border-radius: var(--rig-radius); background: var(--rig-surface-2); box-shadow: inset 0 0 0 1px var(--rig-line);
+}
+.page-note.act { background: linear-gradient(var(--rig-accent-soft), var(--rig-accent-soft)), var(--rig-surface); box-shadow: inset 0 0 0 1px var(--accent-ring); }
+.page-note p { flex: 1 1 170px; margin: 0; font-size: 14.5px; line-height: 1.4; }
+.page-note button { flex: none; min-height: 40px; padding: 0 14px; font-size: 14.5px; }
+
+/* The browser: its bar, and its screen. */
+.page-window { border: 1px solid var(--rig-line-2); border-radius: var(--rig-radius); background: var(--rig-surface-2); overflow: hidden; }
+.page-bar { display: flex; align-items: center; gap: 2px; padding: 4px; }
+.page-bar .icon-btn { flex: none; min-width: 42px; min-height: 40px; border-radius: 7px; }
+.page-bar .icon-btn:active { background: var(--rig-surface-3); }
+.page-bar .icon-btn .icon { width: 22px; height: 22px; }
+/* Where the page is: the site, then the page's own name as far as it fits. */
+.page-where {
+  flex: 1; min-width: 0; height: 32px; margin: 0 4px; padding: 0 12px; display: flex; align-items: center; gap: 8px;
+  border-radius: 999px; background: var(--rig-surface); box-shadow: inset 0 0 0 1px var(--rig-line);
+  font-size: 13.5px; white-space: nowrap;
+}
+.page-host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+.page-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rig-ink-3); }
 .page-view {
-  position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: var(--rig-radius-sm); overflow: hidden;
+  position: relative; aspect-ratio: 16 / 9; background: #000; overflow: hidden;
   touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer;
 }
 .page-view img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+.page-view img:not([src]) { visibility: hidden; }
+.page-view.pointing { outline: 2px solid var(--rig-accent); outline-offset: -2px; }
 .page-veil {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px;
-  background: rgba(8, 12, 18, 0.72); color: #e6ebf2; font-weight: 600;
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  padding: 12px; text-align: center; background: rgba(8, 12, 18, 0.72); color: #e6ebf2; font-size: 15px; font-weight: 600;
 }
-.page-type { margin-top: 10px; }
-.page-type input { flex: 1; min-width: 0; }
-.page-under { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; }
-.page-under .page-hint { flex: 1; margin: 0; }
-.page-under button { flex: none; min-height: 36px; padding: 0 12px; font-size: 14px; }
-/* Five across, on the narrowest phone too. */
-.page-keys { margin-top: 8px; }
-.page-keys button { flex: 1 1 0; min-width: 0; padding: 0 2px; font-size: 14px; }
-.page-keys button[aria-pressed="true"] { border-color: var(--rig-accent, #2f6bff); color: var(--rig-accent, #2f6bff); font-weight: 600; }
-#pageAdsSay { margin: 8px 0 0; }
-.page-view.pointing { outline: 2px solid var(--rig-accent, #2f6bff); outline-offset: -2px; }
-/* The live view over the whole of the phone's screen: turn the phone for the largest picture. */
-.page-view.big {
-  position: fixed; inset: 0; z-index: 60; width: auto; height: auto; aspect-ratio: auto; border-radius: 0;
+.page-veil .spinner { width: 26px; height: 26px; margin: 0; border-width: 2.5px; }
+/* Where a finger tapped (a ring that opens and fades) or is pointing (a ring that stays, wide enough to show round the finger). */
+.page-touch {
+  position: absolute; left: 0; top: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
+  pointer-events: none; opacity: 0; background: rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1.5px rgba(0, 0, 0, 0.5);
 }
-/* Its way back sits in a corner the picture leaves empty (beside it on a phone held sideways, under it upright). */
+.page-touch.tap { animation: page-tap 0.45s ease-out; }
+@keyframes page-tap { from { opacity: 1; transform: scale(0.3); } to { opacity: 0; transform: scale(1); } }
+.page-touch.point { opacity: 1; transform: scale(1.7); background: transparent; box-shadow: inset 0 0 0 1.5px #fff, 0 0 0 1px rgba(0, 0, 0, 0.5); }
+@media (prefers-reduced-motion: reduce) {
+  .page-touch.tap { animation-name: page-tap-still; }
+  .page-status.busy::before { animation: none; }
+}
+@keyframes page-tap-still { from { opacity: 1; } to { opacity: 0; } }
+
+/* The live view over the whole of the phone's screen. */
+.page-view.big { position: fixed; inset: 0; z-index: 60; width: auto; height: auto; aspect-ratio: auto; }
+/* On a screen taller than it is wide, the long way round: drawn on its side, for a phone turned to look at it. */
+.page-view.big.turned {
+  inset: auto; left: 50%; top: 50%; width: var(--long, 100vh); height: var(--short, 100vw);
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+/* Its way back, in the corner where a player keeps its own. (Drawn on its
+   side, the view's top is the phone's right edge and its right is the
+   phone's bottom, so those are the edges to keep clear of.) */
 .page-done {
-  position: absolute; left: max(6px, env(safe-area-inset-left)); bottom: max(6px, env(safe-area-inset-bottom));
-  min-height: 34px; padding: 0 12px; font-size: 13px;
-  background: rgba(8, 12, 18, 0.8); color: #e6ebf2; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px;
+  position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right));
+  width: 44px; height: 44px; min-height: 0; padding: 0; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(16, 18, 22, 0.6); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
 }
+.page-done:active { background: rgba(16, 18, 22, 0.8); }
+.page-done .icon { width: 24px; height: 24px; }
+.page-view.turned .page-done { top: max(8px, env(safe-area-inset-right)); right: max(8px, env(safe-area-inset-bottom)); }
+/* Said once as the sideways view opens. */
+.page-turn {
+  position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%); padding: 9px 16px; border-radius: 999px;
+  background: rgba(16, 18, 22, 0.78); color: #fff; font-size: 14px; font-weight: 650; white-space: nowrap; pointer-events: none;
+  animation: page-turn 2.6s ease both;
+}
+@keyframes page-turn { 0% { opacity: 0; } 10%, 80% { opacity: 1; } 100% { opacity: 0; } }
 html.page-big, html.page-big body { overflow: hidden; }
+
+.card-body .page-hint { margin: 10px 0 0; font-size: 13.5px; line-height: 1.45; color: var(--rig-ink-2); }
+.page-type { margin-top: 14px; }
+.page-type input { flex: 1; min-width: 0; }
+/* Keys of a keyboard, not things the app does: flatter than its buttons, and four across on the narrowest phone too. */
+.page-keys { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.page-keys.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.page-keys button {
+  min-width: 0; min-height: 44px; padding: 0 4px; font-size: 14.5px;
+  background: var(--rig-surface-2); box-shadow: inset 0 0 0 1px var(--rig-line);
+}
+.page-keys button:active { background: var(--rig-surface-3); }
+/* The key a button presses, as a key cap. */
+.page-keys kbd {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; margin-left: 6px; padding: 0 5px; vertical-align: 1px;
+  border-radius: 5px; background: var(--rig-surface); box-shadow: inset 0 0 0 1px var(--rig-line-2), 0 1px 0 var(--rig-line-2);
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rig-ink-2);
+}
+/* Block ads: a row with a switch (rig-switch), the whole of it to tap, across the foot of the card. */
+.page-switch {
+  display: flex; align-items: center; gap: 14px; width: calc(100% + 32px); min-height: 0; margin: 16px -16px -16px; padding: 14px 16px 16px;
+  text-align: left; font-weight: 400; background: transparent; border-radius: 0; box-shadow: none; border-top: 1px solid var(--rig-line);
+}
+.page-switch:active { background: var(--rig-surface-2); transform: none; }
+.page-switch:focus-visible { outline-offset: -3px; }
+.page-switch-words { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.page-switch-name { font-size: 15.5px; font-weight: 650; }
+.page-switch-say { font-size: 13.5px; line-height: 1.4; color: var(--rig-ink-2); }
+.switch {
+  position: relative; flex: none; width: 48px; height: 28px; border-radius: 999px;
+  background: var(--rig-surface-3); box-shadow: inset 0 0 0 1px var(--rig-line-2); transition: background-color 0.18s;
+}
+.switch::after {
+  content: ''; position: absolute; left: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32); transition: transform 0.18s cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+[aria-checked='true'] > .switch { background: var(--rig-accent); box-shadow: none; }
+[aria-checked='true'] > .switch::after { transform: translateX(20px); }
+@media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }

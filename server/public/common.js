@@ -169,7 +169,10 @@
     restart: '<path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/>',
     expand: '<path d="M5 5h5v2H7v3H5zM14 5h5v5h-2V7h-3zM5 14h2v3h3v2H5zM17 14h2v5h-5v-2h3z"/>',
     compress: '<path d="M8 5h2v5H5V8h3zM14 5h2v3h3v2h-5zM5 14h5v5H8v-3H5zM14 14h5v2h-3v3h-2z"/>',
-    clock: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm-1 2.5v5.1l3.7 2.2 1-1.7-2.7-1.6V7.5z"/>'
+    clock: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm-1 2.5v5.1l3.7 2.2 1-1.7-2.7-1.6V7.5z"/>',
+    // A browser's Back and Reload, for a page open in the server's browser.
+    arrowLeft: '<path d="M11.3 5.3 4.6 12l6.7 6.7 1.4-1.4L8.4 13H19v-2H8.4l4.3-4.3z"/>',
+    reload: '<path d="M18.5 12a6.5 6.5 0 1 1-1.9-4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18.4 3.4v5.4H13z"/>'
   };
   DT.icon = function (name, cls) {
     var span = document.createElement('span');

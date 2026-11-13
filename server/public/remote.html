@@ -54,39 +54,51 @@
     </section>
 
     <section class="card hidden" id="pageCard">
-      <div class="card-head">Page <span id="pageSite" class="muted page-site"></span></div>
+      <div class="card-head">
+        <span class="page-head">Page <span id="pageStatus" class="page-status"></span></span>
+        <button id="pageClose" class="ghost" type="button">Close</button>
+      </div>
       <div class="card-body">
-        <p id="pageSay" class="page-say"></p>
-        <div id="pageView" class="page-view" role="application" aria-label="The page. Tap to click, drag to scroll, press and hold to point.">
-          <img id="pageImg" alt="" draggable="false">
-          <div id="pageVeil" class="page-veil">Tap to see the page</div>
-          <button id="pageDone" type="button" class="page-done hidden">Done</button>
+        <!-- Only when there is something to do about it: the car is off, or playing something else. -->
+        <div id="pageNote" class="page-note hidden">
+          <p id="pageSay"></p>
+          <button id="pageShow" type="button" class="primary hidden">Show it in the car</button>
         </div>
-        <div class="page-under">
-          <p class="hint page-hint">Tap to click, drag to scroll. Press and hold to point without clicking: that wakes a player's buttons.</p>
-          <button id="pageBig" type="button">Bigger</button>
+        <!-- The server's browser, drawn as one: its bar, and its screen under it. -->
+        <div class="page-window">
+          <div class="page-bar">
+            <button id="pageBack" type="button" class="icon-btn" aria-label="Back" title="Back"></button>
+            <button id="pageReload" type="button" class="icon-btn" aria-label="Reload" title="Reload"></button>
+            <div class="page-where"><span id="pageHost" class="page-host"></span><span id="pageSite" class="page-title"></span></div>
+            <button id="pageBig" type="button" class="icon-btn" aria-label="Bigger: the page over the whole of the phone's screen" title="Bigger"></button>
+          </div>
+          <div id="pageView" class="page-view" role="application" aria-label="The page. Tap to click, drag to scroll, press and hold to point.">
+            <img id="pageImg" alt="" draggable="false">
+            <div id="pageTouch" class="page-touch"></div>
+            <div id="pageVeil" class="page-veil"><span id="pageSpin" class="spinner hidden"></span><span id="pageVeilSay">Tap to see the page</span></div>
+            <div id="pageTurn" class="page-turn hidden">Turn the phone sideways</div>
+            <button id="pageDone" type="button" class="page-done hidden" aria-label="Done: back to the card" title="Done"></button>
+          </div>
         </div>
+        <p class="hint page-hint">Tap to click, drag to scroll. Hold to point, which wakes a player's buttons. The car follows a few seconds behind.</p>
         <form id="pageTypeForm" class="field-row page-type" autocomplete="off" novalidate>
           <input id="pageText" type="text" placeholder="Type into the page" aria-label="Type into the page" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
-          <button type="submit">Type</button>
+          <button type="submit">Send</button>
         </form>
-        <div class="btn-row page-keys">
+        <div class="page-keys">
           <button id="pageEnter" type="button">Enter</button>
           <button id="pageDel" type="button">Delete</button>
           <button id="pageEsc" type="button">Esc</button>
-          <button id="pageBack" type="button">Back</button>
-          <button id="pageReload" type="button">Reload</button>
+          <button id="pageTab" type="button">Tab</button>
         </div>
-        <div class="btn-row page-keys">
-          <button id="pageF" type="button" aria-label="Full screen: presses the F key">Full screen (F)</button>
-          <button id="pageC" type="button" aria-label="Captions: presses the C key">Captions (C)</button>
-          <button id="pageAds" type="button" aria-pressed="false">Block ads: off</button>
+        <div class="page-keys two">
+          <button id="pageF" type="button" aria-label="Full screen: presses the F key">Full screen <kbd>F</kbd></button>
+          <button id="pageC" type="button" aria-label="Captions: presses the C key">Captions <kbd>C</kbd></button>
         </div>
-        <p id="pageAdsSay" class="hint page-hint hidden"></p>
-        <div class="btn-row send-row">
-          <button id="pageShow" type="button" class="primary hidden">Show it in the car</button>
-          <button id="pageClose" type="button">Close the page</button>
-        </div>
+        <button id="pageAds" type="button" class="page-switch" role="switch" aria-checked="false">
+          <span class="page-switch-words"><span class="page-switch-name">Block ads</span><span id="pageAdsSay" class="page-switch-say"></span></span>
+          <span class="switch" aria-hidden="true"></span>
+        </button>
       </div>
     </section>
 
