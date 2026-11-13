@@ -87,9 +87,25 @@ function storeFor(id) {
       if (store.queue[0]) warm(store.queue[0].id, store.settings.quality);
     });
     store.on('pageMedia', (what, by) => pageMedia(id, what, by));
+    // A page kept under Recent was asked for again.
+    store.on('openPage', (url) => {
+      openFor(id, url).then((done) => {
+        if (done.error) broadcast(id, { type: 'toast', message: done.error });
+      });
+    });
     stores.set(id, store);
   }
   return store;
+}
+// Open an address as a page for a profile: what a phone pasted, or a page
+// kept under Recent. Returns what openPage does ({ ok } or { error }).
+async function openFor(profile, text) {
+  const done = await openPage(profile, text);
+  if (done.error) return done;
+  // Already open and sent somewhere new: back on in the car, if something else was.
+  const store = storeFor(profile);
+  if (done.going && !(store.now && isPageId(store.now.id))) store.command('play', { item: { id: PAGE_ID } });
+  return done;
 }
 // A name for the log and the screens. Only shown once there's more than one profile.
 function profileLabel(id) {
@@ -731,11 +747,8 @@ async function route(req, res) {
     // no video can be pulled out of. The car is shown the page.
     if (req.method === 'POST' && p === '/api/page/open') {
       const body = await readJson(req);
-      const done = await openPage(profile, body.url || body.text);
+      const done = await openFor(profile, body.url || body.text);
       if (done.error) return send(res, 400, { error: done.error });
-      // Already open and sent somewhere new: back on in the car, if something else was.
-      const store = storeFor(profile);
-      if (done.going && !(store.now && isPageId(store.now.id))) store.command('play', { item: { id: PAGE_ID } });
       return send(res, 200, { ok: true });
     }
     if (req.method === 'POST' && p === '/api/page/close') {

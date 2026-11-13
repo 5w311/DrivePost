@@ -172,7 +172,9 @@
     clock: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm-1 2.5v5.1l3.7 2.2 1-1.7-2.7-1.6V7.5z"/>',
     // A browser's Back and Reload, for a page open in the server's browser.
     arrowLeft: '<path d="M11.3 5.3 4.6 12l6.7 6.7 1.4-1.4L8.4 13H19v-2H8.4l4.3-4.3z"/>',
-    reload: '<path d="M18.5 12a6.5 6.5 0 1 1-1.9-4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18.4 3.4v5.4H13z"/>'
+    reload: '<path d="M18.5 12a6.5 6.5 0 1 1-1.9-4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18.4 3.4v5.4H13z"/>',
+    // A page that was opened in the server's browser, where a video has its picture.
+    page: '<path fill-rule="evenodd" d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 5.5V18h14V9.5zM6.6 5.7a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>'
   };
   DT.icon = function (name, cls) {
     var span = document.createElement('span');
@@ -188,7 +190,7 @@
   DT.thumbOf = function (item, lazy) {
     function standIn() {
       return item.site
-        ? DT.el('div', { class: 'thumb-site' }, [DT.icon('play'), DT.el('span', { text: item.site })])
+        ? DT.el('div', { class: 'thumb-site' }, [DT.icon(item.page ? 'page' : 'play'), DT.el('span', { text: item.site })])
         : DT.el('div', { class: 'thumb-pattern' });
     }
     if (!item.thumb) return standIn();
@@ -206,7 +208,8 @@
     opts = opts || {};
     var progress = opts.progress || 0;
     // Who posted it, where (for a video that isn't YouTube's), and how long it is.
-    var sub = [item.channel, item.site, item.live ? 'LIVE' : item.duration ? DT.fmt(item.duration) : null]
+    // (Or that it isn't a video at all, but a page that was opened in the server's browser.)
+    var sub = [item.channel, item.site, item.page ? 'Page' : item.live ? 'LIVE' : item.duration ? DT.fmt(item.duration) : null]
       .filter(Boolean)
       .join(' · ');
     var thumb = DT.el('div', { class: 'thumb' }, [

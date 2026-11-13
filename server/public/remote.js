@@ -260,7 +260,7 @@
   }
 
   DT.autocomplete($('#q'), {
-    local: function () { return state ? state.history.map(function (h) { return h.title; }) : []; },
+    local: function () { return state ? state.history.filter(function (h) { return !h.page; }).map(function (h) { return h.title; }) : []; },
     recent: function () { return state ? state.searches || [] : []; },
     listWhenEmpty: false, // they are listed under the box already
     onPick: runSearch,
@@ -396,10 +396,22 @@
     var box = $('#recent');
     box.innerHTML = '';
     if (!state.history.length) {
-      box.appendChild(el('div', { class: 'empty', text: "Videos you've played show up here." }));
+      box.appendChild(el('div', { class: 'empty', text: "Videos you've played and pages you've opened show up here." }));
       return;
     }
     state.history.slice(0, 12).forEach(function (item) {
+      // A page that was opened in the server's browser: a tap opens it again.
+      if (item.page) {
+        box.appendChild(DT.itemRow(item, {
+          active: !!state.page && state.page.url === item.url && !!state.now && state.now.id === 'page',
+          onclick: function () {
+            DT.api('/api/page/open', { body: { url: item.url } }).then(function () {
+              DT.toast('Opening the page in the car…');
+            }, function (e) { DT.toast(e.message); });
+          }
+        }));
+        return;
+      }
       box.appendChild(DT.itemRow(item, {
         progress: state.progress[item.id],
         active: state.now && state.now.id === item.id,

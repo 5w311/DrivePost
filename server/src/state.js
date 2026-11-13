@@ -3,11 +3,15 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
-import { isLinkId, isLinkAddress, linkId, rememberLink, siteOf } from './links.js';
+import { isLinkId, isLinkAddress, linkId, rememberLink, siteOf, isPageRowId, pageRowId } from './links.js';
 import { PAGE_ID, pageItem } from './mirror.js';
 import { QUALITIES } from './config.js';
 
 const HISTORY_MAX = 40;
+// A page says its name a moment after it opens, and may change it once or
+// twice as it loads. After this long, a new name means the page has been
+// steered somewhere else, and Recent keeps the name it opened with.
+const PAGE_NAMING_MS = 20000;
 const SEARCHES_MAX = 20;
 const PROGRESS_MAX = 300;
 const RESUME_MIN = 15; // don't bother resuming in the first 15 s
@@ -37,6 +41,13 @@ export function cleanItem(raw) {
     duration: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : null,
     live: raw.live === true,
   };
+  if (isPageRowId(raw.id)) {
+    // A page that was opened in the server's browser, as Recent keeps it to
+    // be opened again. It isn't a video: it has an address and a name.
+    if (!isLinkAddress(raw.url) || pageRowId(raw.url) !== raw.id) return null;
+    const site = siteOf(raw.url);
+    return { id: raw.id, title: clampStr(raw.title, 200) || site, channel: '', duration: null, live: false, url: raw.url, site, thumb: '', page: true };
+  }
   if (isLinkId(raw.id)) {
     // A video from another site (links.js). Its row carries its address,
     // which is what its ID is made from, and the picture the site gave for it.
@@ -242,12 +253,35 @@ export class Store extends EventEmitter {
       blocker: ['up', 'late'].includes(info.blocker ?? before.blocker) ? info.blocker ?? before.blocker : '',
       since: before.since,
     };
+    this.keepPage(before);
     // The car's row for it keeps up with where the page has gone.
     if (this.now && this.now.id === PAGE_ID) {
       const row = pageItem(this.page);
       if (row.title !== this.now.title || row.site !== this.now.site) this.now = { ...this.now, title: row.title, site: row.site };
     }
     this.changed();
+  }
+
+  /*
+   * A page that is opened is kept under Recent, to be opened again: by the
+   * address it was opened at (where it is steered to afterwards isn't known
+   * here), under the name the page gave itself as it opened. `before` is what
+   * was known of the page until now.
+   */
+  keepPage(before) {
+    const p = this.page;
+    if (!isLinkAddress(p.url)) return;
+    const id = pageRowId(p.url);
+    const fresh = before.url !== p.url; // newly opened, or sent to a new address
+    if (fresh) this.pageUrlAt = Date.now();
+    const had = this.history.find((h) => h.id === id);
+    const site = siteOf(p.url);
+    const unnamed = !had || had.title === had.site;
+    const naming = Date.now() - (this.pageUrlAt || 0) < PAGE_NAMING_MS;
+    const title = ((naming || unnamed) && p.title) || (had && had.title) || site;
+    const row = { id, title, channel: '', duration: null, live: false, url: p.url, site, thumb: '', page: true };
+    if (!had || fresh) this.history = [row, ...this.history.filter((h) => h.id !== id)].slice(0, HISTORY_MAX);
+    else if (had.title !== title) this.history = this.history.map((h) => (h.id === id ? row : h));
   }
 
   // The page is what the car plays, from this moment of it.
@@ -294,6 +328,13 @@ export class Store extends EventEmitter {
       return error;
     }
     const item = data.item ? cleanItem(data.item) : null;
+    // A page kept under Recent is opened again, in the server's browser
+    // (server.js hears this). It isn't a video to play here, or to line up.
+    if (item && item.page) {
+      if (action !== 'play') return 'A page can be opened again, not lined up.';
+      this.emit('openPage', item.url);
+      return null;
+    }
     switch (action) {
       case 'play':
         if (!item) return 'Bad video';

@@ -148,6 +148,8 @@ Some links have no video in them that can be fetched: the page has a player of i
 - **Block ads**, a switch, off to begin with. See "Blocking ads" below.
 - The card's head says how the page stands with the car (**In the car**, **Paused**, **Not in the car**, **Car offline**) and has **Close**, which ends it; the car goes on to Up Next. When the car is on another video, the card offers **Show it in the car**.
 
+**To open one again.** A page you have opened is kept under **Recent**, on the phone and in the car, marked *Page*: tap it there and it is opened again, at the address it was first opened at. It can't be lined up in Up Next, since a page isn't a video with an end.
+
 The live view stops after a minute untouched, to save the phone's data, and comes back with a tap. Once the video is playing, the phone is free. The car runs about five seconds behind the page, so steer by the phone's live view, which is immediate, and not by the car.
 
 **The car's own buttons work the page's video.** Pause, in the car or on a phone, pauses the video in the page itself, and Play takes it back to where the car's picture had got to before playing on, so nothing is missed. The two ten-second buttons skip back and on in it. This goes through the browser's own media controls, the ones a keyboard's play key uses, so it works with any site's player that the browser knows is playing. What a site doesn't let you skip in (most live television) can't be skipped in from here either.

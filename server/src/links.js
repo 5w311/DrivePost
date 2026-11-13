@@ -30,6 +30,11 @@ export const isLinkId = (id) => typeof id === 'string' && LINK_ID.test(id);
 // Anything the car can be asked to play: a YouTube video, the test pattern, or a link.
 export const isPlayableId = (id) => isValidId(id) || isLinkId(id);
 export const linkId = (url) => `link-${crypto.createHash('sha256').update(String(url)).digest('hex').slice(0, 16)}`;
+// A page that was opened in the server's own browser (webpage.js), as Recent
+// keeps it so that it can be opened again: named, like a link, for its address.
+const PAGE_ROW_ID = /^open-[0-9a-f]{16}$/;
+export const isPageRowId = (id) => typeof id === 'string' && PAGE_ROW_ID.test(id);
+export const pageRowId = (url) => `open-${crypto.createHash('sha256').update(String(url)).digest('hex').slice(0, 16)}`;
 
 // Additions to a shared link that say who shared it and from where, not which video it is.
 const TRACKING = /^(utm_[a-z_]+|fbclid|gclid|igsh|igshid|share_id|ref_src|ref_url)$/i;

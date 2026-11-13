@@ -818,7 +818,7 @@
   // ---------- search ----------
 
   function recentTitles() {
-    return state ? state.history.map(function (h) { return h.title; }) : [];
+    return state ? state.history.filter(function (h) { return !h.page; }).map(function (h) { return h.title; }) : [];
   }
   function searchedBefore() {
     return state ? state.searches || [] : [];
@@ -1051,9 +1051,26 @@
         DT.api('/api/setup').then(function (cfg) { control.cmd('play', { item: cfg.testItem }); });
       } })
     ]));
-    if (!state.history.length) r.appendChild(el('div', { class: 'empty', text: "Videos you've played show up here." }));
+    if (!state.history.length) r.appendChild(el('div', { class: 'empty', text: "Videos you've played and pages you've opened show up here." }));
     else {
       state.history.forEach(function (item) {
+        // A page that was opened in the server's browser: it is opened again, there.
+        if (item.page) {
+          r.appendChild(DT.itemRow(item, {
+            active: !!state.page && state.page.url === item.url && !!state.now && state.now.id === 'page',
+            onclick: function () {
+              itemSheet(item, function (act) {
+                return [act('Open the page again', function () {
+                  DT.api('/api/page/open', { body: { url: item.url } }).then(function () {
+                    DT.toast('Opening the page…');
+                    scrollToVideo();
+                  }, function (e) { DT.toast(e.message); });
+                }, true)];
+              });
+            }
+          }));
+          return;
+        }
         r.appendChild(DT.itemRow(item, {
           progress: progress[item.id],
           active: state.now && state.now.id === item.id,

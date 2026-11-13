@@ -9,7 +9,8 @@ import path from 'node:path';
 process.env.SCREEN_BACK_MS = '250';
 process.env.PAGES_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-pages-'));
 const mirror = await import('../src/mirror.js');
-const { Store } = await import('../src/state.js');
+const { Store, cleanItem } = await import('../src/state.js');
+const { pageRowId, isPageRowId } = await import('../src/links.js');
 const { ffmpegArgs, chooseCodec } = await import('../src/stream.js');
 const { PAGE_ID, ingestArgs, readList, pageItem, startShare, endShare, shareExpected, pageStream, onShare } = mirror;
 
@@ -268,7 +269,8 @@ test('the page plays only once its picture is there, and only this server says w
   assert.equal(s.now.live, true);
   assert.equal(s.now.duration, null);
   assert.equal(s.now.url, undefined);
-  assert.deepEqual(s.history, [], 'it is not kept under Recent');
+  assert.deepEqual(s.history, [{ id: pageRowId(TV.url), title: 'Stand-in TV', channel: '', duration: null, live: false, url: TV.url, site: 'standin.tv', thumb: '', page: true }],
+    'Recent keeps the page, to open again by its address, and not the picture of it that the car plays');
 
   for (const action of ['enqueue', 'playNext']) {
     assert.match(s.command(action, { item: { id: PAGE_ID } }), /not lined up/);
@@ -383,5 +385,59 @@ test('a page is not brought back by a restart', () => {
   const after = new Store({ dataDir, defaultQuality: '720' });
   assert.equal(after.now, null, 'no page is open after a restart');
   assert.equal(after.page, null);
-  assert.deepEqual(after.history.map((h) => h.id), [A.id]);
+  assert.deepEqual(after.history.map((h) => h.id), [pageRowId(TV.url), A.id], 'but Recent still has it, to open again');
+  assert.equal(after.history[0].page, true);
+  assert.equal(after.history[0].url, TV.url);
+});
+
+test('a page that was opened is kept under Recent, to be opened again', () => {
+  const s = makeStore();
+  s.command('play', { item: A });
+  const id = pageRowId(TV.url);
+  assert.ok(isPageRowId(id) && id !== pageRowId('https://standin.tv/other'));
+
+  // As it opens it has no name yet: the site's stands in.
+  s.setPage({ url: TV.url, site: TV.site, title: '', phase: 'opening' });
+  assert.deepEqual(s.history.map((h) => h.id), [id, A.id]);
+  assert.equal(s.history[0].title, 'standin.tv');
+  // Then it says its name, perhaps twice as it loads.
+  s.setPage({ title: 'Loading' });
+  s.setPage({ title: 'Stand-in TV: the news at ten', phase: 'live' });
+  assert.equal(s.history[0].title, 'Stand-in TV: the news at ten');
+  assert.equal(s.history.length, 2, 'one row for it, however often it changes');
+  // Later it is steered somewhere else on the site. Recent keeps what it opened as.
+  s.pageUrlAt = Date.now() - 60000;
+  s.setPage({ title: 'Stand-in TV: something else entirely' });
+  assert.equal(s.history[0].title, 'Stand-in TV: the news at ten');
+  assert.equal(s.history[0].url, TV.url);
+
+  // Something else is played, and the page is closed.
+  s.command('play', { item: B });
+  s.setPage(null);
+  assert.deepEqual(s.history.map((h) => h.id), [B.id, id, A.id]);
+
+  // Asked for from Recent, it is opened again (server.js does that), not played as a video.
+  const asked = [];
+  s.on('openPage', (url) => asked.push(url));
+  const row = s.publicState().history[1];
+  assert.equal(s.command('play', { item: row }), null);
+  assert.deepEqual(asked, [TV.url]);
+  assert.equal(s.now.id, B.id, 'what the car is playing is left alone until the page is there');
+  for (const action of ['enqueue', 'playNext']) assert.match(s.command(action, { item: row }), /not lined up/);
+  assert.equal(s.queue.length, 0);
+  // Opening again puts it back on top, under the name it had.
+  s.setPage({ url: TV.url, site: TV.site, title: '', phase: 'opening' });
+  assert.deepEqual(s.history.map((h) => h.id), [id, B.id, A.id]);
+  assert.equal(s.history[0].title, 'Stand-in TV: the news at ten');
+  // Sent on to another address in the same browser: that is another row.
+  s.setPage({ url: 'https://other.example/live', site: 'other.example', title: '' });
+  assert.deepEqual(s.history.map((h) => h.site || h.id), ['other.example', 'standin.tv', B.id, A.id]);
+
+  // A row is only what this server made it: an address, and the ID that goes with that address.
+  assert.equal(cleanItem({ ...row, url: 'https://evil.example/' }), null);
+  assert.equal(cleanItem({ ...row, url: 'javascript:alert(1)' }), null);
+  assert.equal(cleanItem({ id: pageRowId('http://192.168.1.1/'), url: 'http://192.168.1.1/', title: 'x' }).site, '192.168.1.1', "(whether an address may be opened is the guard's to say, when it is asked for)");
+  const kept = cleanItem({ ...row, title: 'x'.repeat(500), duration: 99, live: true, thumb: 'https://evil.example/p.png', channel: 'someone' });
+  assert.deepEqual({ ...kept, title: '' }, { id, title: '', channel: '', duration: null, live: false, url: TV.url, site: 'standin.tv', thumb: '', page: true });
+  assert.equal(kept.title.length, 200);
 });
