@@ -372,6 +372,33 @@ docker compose --profile tunnel up -d
 
 Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine first: two machines running the same tunnel would split traffic between them. If the old machine updates itself, turn that off there first with `./scripts/install-auto-update.sh --remove`, or its next update starts it again.
 
+## Security
+
+DrivePost answers on a public address, so it is built to be left on one. This is what guards it, and what stays with you.
+
+**What the app does**
+
+- **Nothing opens without a sign-in.** A visitor without one gets the sign-in page and can ask for a profile, which opens nothing until you allow it in Admin. A device is signed in by a passcode, or by the one-time code in its car's QR (good for ten minutes). A profile's Send to Car link can send a link to that profile's car and nothing else.
+- **Passcodes can't be guessed at any speed.** One address gets eight tries in ten minutes, and all the addresses of one IPv6 network count as one. After 40 wrong passcodes within an hour, from anywhere at all, signing in with a passcode closes until those are an hour old. Devices that are signed in don't notice, and a phone can still join from the QR on its car. Passcodes are stored scrambled (scrypt), so the data doesn't give them away either.
+- **Only its own pages can work it.** A phone that is signed in visits other sites too. Anything that changes something, and every live connection, is refused unless it was made by one of DrivePost's own pages, so no other site can play, skip or steer anything with that phone's sign-in. That includes sites on sister addresses of your domain, which a browser trusts more than strangers. A link somewhere else that leads to `/share` only puts its address in the remote's box, where it waits for a tap.
+- **Browsers are told to keep its pages to themselves.** The pages can't be shown inside another site's page, run no script but their own, and tell the sites they link to nothing about where the visitor came from. Reached over https, browsers are told to use nothing else for the next year.
+- **Links and pages are kept off your home network.** A link that leads to an address on your own network is refused before anything is fetched, unless `OTHER_SITES_LOCAL=on`. The server's browser lives in a container with no network of its own; everything it fetches goes through the app, which refuses the same addresses, anything but web ports, and the app's own doors (see [Opening a page](#opening-a-page)).
+- **The containers have no powers to lose.** Both run as an ordinary user, with every capability dropped and no way of gaining one.
+- **Nonsense doesn't stop it.** A request or message it can't make sense of is dropped, whoever sent it, and the server carries on.
+
+**What stays with you**
+
+- **Passcodes.** The limits above make a long passcode impossible to guess and only slow down a short one: at 40 guesses an hour, four digits last days, and a few words last longer than the server will. That goes for `DRIVE_PASSCODE` most of all. Any passcode that works picks its own profile, so the shortest one on the server is the one a guesser finds.
+- **Your GitHub account**, if automatic updates are on. Whatever is pushed to the branch the machine follows is built and run on it, so the account that can push there is a key to the machine: give it two-factor sign-in.
+- **`.env`.** It holds the Admin passcode and the tunnel's token. Keep it readable by you alone (`chmod 600 .env`). If either has been pasted or photographed somewhere, replace it: a new `DRIVE_PASSCODE` signs every device out of Admin, and the tunnel's token is renewed in the Cloudflare dashboard.
+- **Port 8080 on your home network.** Besides the tunnel, the app answers every device on your home network there, without https. If the tunnel is all you use, `LISTEN_ON=127.0.0.1` in `.env` keeps that port to the machine itself. A firewall such as `ufw` doesn't do this: Docker opens its ports past it.
+- **The Send to Car link.** It has its key in it, so treat it as a password. **Setup & sharing** makes a new one, which stops the old one working.
+- **The machine.** Keep its system updated, and its own sign-in (SSH) to keys or a good password.
+
+**What isn't covered.** Once yt-dlp or ffmpeg is fetching a video, a site that sends them on to another address isn't checked again at each hop, so a link from the internet can still make the server ask for something on your home network. It takes a signed-in device to send such a link, and nothing but a video comes back from it. DrivePost also trusts the people you give profiles to with what they play: a profile can open any site in the server's browser.
+
+A wrong passcode limit that suits a busier server is `WRONG_PASSCODES_AN_HOUR` in `.env` (40 if you don't say). Restarting the app (`docker compose restart drivepost`) forgets the count.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -398,6 +425,9 @@ Use the same `TUNNEL_TOKEN` and your domain moves with it. Stop the old machine 
 | H.264 misbehaves in the car | On the phone remote, set **Video format** to **MPEG-1**. Everything then works as it did before H.264 was added. |
 | No sound | Tap the screen once. Browsers only allow sound after a tap. |
 | Phone says "Car offline" | The car page isn't open, or the car is offline. |
+| Sign-in says it is closed for a while | Forty wrong passcodes were tried within an hour, by you or by someone guessing (see [Security](#security)). It opens again by itself as they pass an hour old, and `docker compose restart drivepost` opens it now. `docker compose logs drivepost` has a `[security]` line for when it closed. Devices that are signed in are not affected. |
+| Buttons do nothing and the page says it can't connect, right after putting the server behind a different address or proxy | The app only takes orders from its own pages, and tells them by their address. `docker compose logs drivepost` then has a line starting `[security] turned away a request made by a page on`. Set `PUBLIC_URL` in `.env` to the address people type, and restart. |
+| A link shared to DrivePost lands in the remote's box instead of playing | It came by way of another site's page or link, not from the phone's own share sheet. That is on purpose (see [Security](#security)): tap a button to send it. |
 
 ## Fullscreen in a Tesla
 

@@ -98,18 +98,31 @@ function waiting(u, res, said) {
 const WHY = "DrivePost's browser doesn't open addresses on its own network.";
 const AD = "Stopped by DrivePost's ad block list.";
 
+// The way out is for the web: the two ports the web lives on, and the high
+// ones some sites use. Not the low ones that mail, remote logins and file
+// shares listen on. A browser refuses those by itself; this holds whatever
+// else might be running in the browser's container to the same.
+const webPort = (port) => port === 80 || port === 443 || (port >= 1024 && port <= 65535);
+const NOT_WEB = "DrivePost's browser only goes to web ports.";
+const onThisMachine = (address) => /^127\./.test(address) || address === '::1';
+
 function turnAway(socket, code, text) {
   const body = `${text}\n`;
   socket.end(`HTTP/1.1 ${code} ${http.STATUS_CODES[code] || 'Refused'}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
 }
 
 /*
- * Start it. `opts`: { port, allowed(address), blocked(name), waited(up), lookup, allowLocal, connect }.
+ * Start it. `opts`: { port, allowed(address), blocked(name), waited(up), own, lookup, allowLocal, connect }.
+ * `own` lists the app's own ports on this machine, which are never fetched from: with
+ * OTHER_SITES_LOCAL=on a page may be sent to the home network, but not round to the app's back door.
  * `waited(up)` hears from the waiting page as it leaves: whether the browser's ad blocker came up in time.
  * Returns the http.Server (its 'listening' and 'error' events are the caller's to hear).
  */
-export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal, connect = net.connect, blocked = null, waited = null }) {
+export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal, connect = net.connect, blocked = null, waited = null, own = [] }) {
   const lead = (name) => whereTo(name, lookup, allowLocal);
+  const mine = new Set([port, ...own].map(Number).filter(Boolean));
+  // (Its own port is whichever it ends up listening on.)
+  const backDoor = (to, at) => onThisMachine(to.address) && (mine.has(at) || at === (server.address() || {}).port);
 
   // http:// pages: the browser sends the whole address and this fetches it.
   const server = http.createServer(async (req, res) => {
@@ -127,12 +140,14 @@ export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal
     if (u.protocol !== 'http:') return deny(400, 'Only web addresses.');
     if (u.hostname === READY_HOST) return waiting(u, res, waited);
     if (blocked && blocked(u.hostname)) return deny(403, AD);
+    if (!webPort(Number(u.port) || 80)) return deny(403, NOT_WEB);
     let to;
     try {
       to = await lead(u.hostname);
     } catch {
       return deny(403, WHY);
     }
+    if (backDoor(to, Number(u.port) || 80)) return deny(403, WHY);
     // (Via is what a proxy says of itself; it also lets a site see it wasn't asked directly.)
     const headers = { ...req.headers, host: u.host, via: '1.1 drivepost' };
     delete headers['proxy-connection'];
@@ -157,12 +172,14 @@ export function startGuard({ port, host = '0.0.0.0', allowed, lookup, allowLocal
     const port = m ? Number(m[2]) : 0;
     if (!m || port < 1 || port > 65535) return turnAway(client, 400, 'Where to?');
     if (blocked && blocked(m[1])) return turnAway(client, 403, AD);
+    if (!webPort(port)) return turnAway(client, 403, NOT_WEB);
     let to;
     try {
       to = await lead(m[1]);
     } catch {
       return turnAway(client, 403, WHY);
     }
+    if (backDoor(to, port)) return turnAway(client, 403, WHY);
     if (client.destroyed) return;
     let joined = false;
     const up = connect({ host: to.address, port, family: to.family });

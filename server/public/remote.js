@@ -240,6 +240,16 @@
   });
   labelSend();
 
+  // A link that arrived by way of another site's page (a link there to this
+  // server's share address): put in the box, and sent nowhere until a button
+  // is tapped. Only what the phone's own share sheet sends goes straight on.
+  if (params.get('link')) {
+    linkBox.value = String(params.get('link')).slice(0, 500);
+    labelSend();
+    history.replaceState(null, '', '/remote');
+    DT.toast('That link is in the box. Tap a button to send it to the car.');
+  }
+
   // ---------- search ----------
 
   function addButtons(item) {

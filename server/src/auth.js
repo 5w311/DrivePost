@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 
 /*
@@ -31,6 +32,9 @@ export const ORIGINAL = 'main';
 export const MAX_PROFILES = 12;
 export const MAX_REQUESTS = 5; // people waiting for the main profile's OK at one time
 const REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Wrong passcodes, from everywhere together, before sign-in is closed for a while (see allowAttempt).
+const WRONG_MOST = Number(process.env.WRONG_PASSCODES_AN_HOUR) || 40;
+const WRONG_WINDOW_MS = 60 * 60 * 1000;
 
 function b64url(buf) {
   return Buffer.from(buf).toString('base64url');
@@ -53,7 +57,15 @@ export function parseCookies(header) {
     const i = part.indexOf('=');
     if (i < 0) continue;
     const k = part.slice(0, i).trim();
-    if (k) out[k] = decodeURIComponent(part.slice(i + 1).trim());
+    if (!k) continue;
+    const raw = part.slice(i + 1).trim();
+    // Anyone can send any cookie. One that isn't written the way cookies are
+    // isn't one of ours: taken as it stands, it matches nothing.
+    try {
+      out[k] = decodeURIComponent(raw);
+    } catch {
+      out[k] = raw;
+    }
   }
   return out;
 }
@@ -67,6 +79,24 @@ export function clientIp(req) {
   );
 }
 
+/*
+ * Whose tries an address's are counted with. Someone on IPv6 has a whole
+ * network of addresses to themselves (2^64 of them, usually) and can come
+ * from a different one every time, so those all count as one.
+ */
+export function networkOf(ip) {
+  let s = String(ip || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (mapped) s = mapped[1];
+  if (net.isIP(s) !== 6) return s.slice(0, 64) || 'unknown';
+  const halves = s.split('::');
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+  const dotted = tail.some((g) => g.includes('.')) ? 1 : 0; // (an IPv4 ending stands for two groups)
+  const groups = halves.length > 1 ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length - dotted)).fill('0'), ...tail] : head;
+  return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':')}::/64`;
+}
+
 // Add a cookie to the answer without dropping one that is already on it.
 function addCookie(res, cookie) {
   const had = typeof res.getHeader === 'function' ? res.getHeader('Set-Cookie') : undefined;
@@ -75,7 +105,7 @@ function addCookie(res, cookie) {
 
 // Only mark the cookie https-only when this request really came over https
 // (through the tunnel). Testing on the home network over http keeps working.
-function isHttps(req) {
+export function isHttps(req) {
   if ((req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') return true;
   if (/"scheme"\s*:\s*"https"/.test(req.headers['cf-visitor'] || '')) return true;
   return !!req.socket.encrypted;
@@ -458,13 +488,42 @@ export class Auth {
 
   // ---- sign-in attempts and phone pairing ----
 
-  // Returns true if the attempt is allowed (8 tries per 10 minutes per IP).
-  allowAttempt(ip) {
-    const now = Date.now();
-    const recent = (this.attempts.get(ip) || []).filter((t) => now - t < 10 * 60 * 1000);
+  /*
+   * May this address try a passcode? Two limits, and both have to allow it.
+   *
+   * One is per address: 8 tries in 10 minutes. But an address is only what a
+   * request says it is (the header a tunnel adds can be typed in by anyone
+   * who reaches the server without one), and someone with many addresses has
+   * as many lots of 8. So the other limit is on wrong passcodes from
+   * everywhere together: after 40 in an hour, nobody gets another try until
+   * some of those are an hour old. That makes guessing a passcode take
+   * months instead of an afternoon. Devices that are already signed in
+   * aren't affected, and a phone can still join from its car's QR code.
+   */
+  allowAttempt(ip, now = Date.now()) {
+    this.wrong = (this.wrong || []).filter((t) => now - t < WRONG_WINDOW_MS);
+    if (this.wrong.length >= WRONG_MOST) {
+      // `refusal` is what to tell whoever was turned away.
+      this.refusal = 'Too many wrong passcodes have been tried on this server in the last hour, so sign-in is closed for a while. A phone can still join from the QR code on its car.';
+      return false;
+    }
+    const key = networkOf(ip);
+    const recent = (this.attempts.get(key) || []).filter((t) => now - t < 10 * 60 * 1000);
     recent.push(now);
-    this.attempts.set(ip, recent);
+    // (Kept small whoever is asking: the oldest addresses are forgotten first.)
+    this.attempts.delete(key);
+    this.attempts.set(key, recent);
+    if (this.attempts.size > 2000) this.attempts.delete(this.attempts.keys().next().value);
+    this.refusal = 'Too many tries. Wait a few minutes.';
     return recent.length <= 8;
+  }
+
+  // A try that was allowed turned out to be wrong (or could have told a guesser something).
+  wrongAttempt(now = Date.now()) {
+    (this.wrong = this.wrong || []).push(now);
+    if (this.wrong.length === WRONG_MOST) {
+      console.log(`[security] ${WRONG_MOST} wrong passcodes within an hour, so signing in with a passcode is closed until they are an hour old. Devices that are signed in carry on, and a phone can still join from the QR code on its car.`);
+    }
   }
 
   // A one-time code from a car's QR: the phone that scans it joins that car's profile.

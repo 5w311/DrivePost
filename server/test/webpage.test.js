@@ -246,3 +246,35 @@ test('a browser with uBlock Origin Lite is told which profiles want it, and reop
   assert.equal(pagesReady(), false);
   assert.equal(adBlocker(), '');
 });
+
+test("the browser's way out goes to web ports only, and never round to the app's own door", async () => {
+  const reached = [];
+  const guard = startGuard({
+    port: 0, host: '127.0.0.1', allowed: () => true, allowLocal: true, own: [8080],
+    lookup: async (host) => [{ address: host === 'loop.example' ? '127.0.0.1' : '93.184.216.34', family: 4 }],
+    connect: (to) => { reached.push(`${to.host}:${to.port}`); const s = new net.Socket(); setImmediate(() => s.emit('error', new Error('nowhere'))); return s; },
+  });
+  await new Promise((done) => guard.once('listening', done));
+  const port = guard.address().port;
+  const ask = (request) => new Promise((done) => {
+    const s = net.connect(port, '127.0.0.1', () => s.write(request));
+    let got = '';
+    s.on('data', (d) => (got += d));
+    s.on('close', () => done(got.split('\r\n')[0] + ' | ' + got.split('\r\n\r\n')[1]));
+    s.on('error', () => done(got));
+  });
+  const line = (target) => ask(`CONNECT ${target} HTTP/1.1\r\nHost: x\r\n\r\n`);
+  // Mail, remote logins, file shares: not the web.
+  for (const p of [22, 25, 23, 110, 143, 445, 465, 587, 993]) assert.match(await line(`example.com:${p}`), /403 .*only goes to web ports/s, `port ${p}`);
+  assert.match(await ask('GET http://example.com:25/ HTTP/1.1\r\nHost: example.com:25\r\nConnection: close\r\n\r\n'), /403 .*web ports/s);
+  // The web, wherever a site keeps it.
+  for (const p of [443, 80, 8443, 8080, 2053]) assert.match(await line(`example.com:${p}`), /^HTTP\/1\.1 502 /, `port ${p} is passed on (here, to nowhere)`);
+  // With the home network allowed (OTHER_SITES_LOCAL=on), this machine's other doors are too, but not the app's own.
+  assert.match(await line('127.0.0.1:9000'), /^HTTP\/1\.1 502 /);
+  assert.match(await line('127.0.0.1:8080'), /^HTTP\/1\.1 403 /, "the app's own port on this machine");
+  assert.match(await line('loop.example:8080'), /^HTTP\/1\.1 403 /, 'by any name');
+  assert.match(await line(`127.0.0.1:${port}`), /^HTTP\/1\.1 403 /, 'nor the guard itself');
+  assert.match(await ask('GET http://127.0.0.1:8080/internal/busy HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n'), /^HTTP\/1\.1 403 /);
+  guard.close();
+  assert.ok(!reached.some((r) => r.endsWith(':8080') && r.startsWith('127.')) && !reached.some((r) => /:(22|25)$/.test(r)), String(reached));
+});

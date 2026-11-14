@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
 import { config, QUALITIES } from './config.js';
-import { Auth, clientIp, ORIGINAL } from './auth.js';
+import { Auth, clientIp, isHttps, ORIGINAL } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
 import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
@@ -47,6 +47,13 @@ if (!config.passcode) {
   console.error('DRIVE_PASSCODE is not set. Set it in your .env file and restart.');
   process.exit(1);
 }
+
+// This server is on the internet, where anyone can send it anything. A
+// request nobody thought of must cost that request and nothing else: not the
+// video every car is in the middle of. So an error that got past everything
+// is written down and the server carries on.
+process.on('uncaughtException', (err) => console.error('[error] carried on after:', err));
+process.on('unhandledRejection', (err) => console.error('[error] carried on after:', err));
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 const auth = new Auth({
@@ -216,7 +223,8 @@ function updateView() {
 function fromThisMachine(req) {
   const from = req.socket.remoteAddress || '';
   const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from);
-  return local && !req.headers['x-forwarded-for'] && !req.headers['cf-connecting-ip'];
+  // (Nor anything the page browser's guard passed on: that says "via" of itself.)
+  return local && !req.headers['x-forwarded-for'] && !req.headers['cf-connecting-ip'] && !req.headers.via;
 }
 
 // Where the list of updates is, to compare the running one against: the
@@ -329,10 +337,89 @@ const TYPES = {
   '.ico': 'image/x-icon',
 };
 
+// What a browser is told about anything this server sends that isn't a page:
+// it is data, to be read by the pages that asked for it and shown as nothing.
+const CSP_DATA = "default-src 'none'; frame-ancestors 'none'";
+/*
+ * And about the pages: they run this server's own scripts and no others, so
+ * text that came from somewhere else (a video's title, a page's name) can't
+ * turn into a script even if a mistake here ever put it on a page as markup.
+ * Pictures come from anywhere (video thumbnails); nothing may frame a page.
+ * The car's page also needs leave for its MPEG-1 decoder, which is compiled
+ * (WebAssembly) as it loads.
+ */
+const CSP_PAGE =
+  "default-src 'self'; img-src 'self' data: blob: https: http:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; " +
+  "connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const cspFor = (file) => `${CSP_PAGE}; script-src 'self'${file === 'car.html' ? " 'wasm-unsafe-eval' 'unsafe-eval'" : ''}`;
+
 function send(res, status, body, type = 'application/json') {
   const data = type === 'application/json' && typeof body !== 'string' ? JSON.stringify(body) : body;
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'Content-Security-Policy': CSP_DATA });
   res.end(data);
+}
+
+// On everything this server sends.
+function guardHeaders(req, res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  // Reached over https (through the tunnel), it is only ever to be reached that way.
+  if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+}
+
+/*
+ * Did this request come from one of this server's own pages (or from no page
+ * at all: the iPhone Shortcut, the updater, a script)? A device stays signed
+ * in for months, and its browser sends that sign-in along with requests that
+ * other sites' pages make here. Browsers hold most of those back by
+ * themselves, but not from a page on a sister address (another name under
+ * the same domain), and not when a socket is opened. So anything that changes
+ * something, and every socket, is only taken from this server's own pages.
+ *
+ * A browser says where a request comes from in two ways. The address of the
+ * page that made it ("Origin") comes with every socket and with everything
+ * that changes something, in every browser, so that is gone by first: it is
+ * compared with the address this server was reached at. PUBLIC_URL counts as
+ * its address too, for a server behind something that changes the name on the
+ * way in. The other is whether it is the same site ("Sec-Fetch-Site"), which a
+ * page can't set either; it vouches for a request when the names don't match
+ * up, and decides when there is no address. Browsers don't agree on it for
+ * sockets (a page on https and its socket on wss count as two sites to some),
+ * so a socket goes by the address alone.
+ *
+ * With neither, it isn't a page asking: the iPhone Shortcut, a script, the
+ * browser container. Those bring no sign-in of somebody else's along.
+ */
+const refusedFrom = new Map(); // which other sites' pages were turned away, and when that was last written down
+const bareHost = (h) => String(h || '').split(',')[0].trim().toLowerCase().replace(/:(80|443)$/, '');
+function fromOwnPage(req, { socket = false } = {}) {
+  const origin = req.headers.origin;
+  const site = socket ? '' : req.headers['sec-fetch-site'];
+  if (!origin && !site) return true;
+  if (site === 'same-origin' || site === 'none') return true;
+  let theirs = null;
+  try {
+    theirs = new URL(origin);
+  } catch {}
+  if (!theirs || !theirs.host) return false; // "null": a page with no address of its own, such as a sandboxed frame
+  // A page fetched without https has no say over a server reached with it.
+  if (theirs.protocol === 'http:' && isHttps(req)) return false;
+  const mine = [req.headers.host, req.headers['x-forwarded-host']].map(bareHost);
+  try {
+    if (config.publicUrl) mine.push(bareHost(new URL(config.publicUrl).host));
+  } catch {}
+  return mine.includes(bareHost(theirs.host));
+}
+function refuseOtherPage(req) {
+  const from = String(req.headers.origin || req.headers['sec-fetch-site'] || 'another site').replace(/[^\x21-\x7e]/g, '').slice(0, 100);
+  const now = Date.now();
+  if (now - (refusedFrom.get(from) || 0) > 60 * 60 * 1000) {
+    if (refusedFrom.size > 50) refusedFrom.clear();
+    refusedFrom.set(from, now);
+    console.log(`[security] turned away a request made by a page on ${from} (this server was reached as ${String(req.headers.host || '?').replace(/[^\x21-\x7e]/g, '').slice(0, 100)}). If that is this server's own address, set PUBLIC_URL to it in .env.`);
+  }
 }
 
 function redirect(res, location) {
@@ -352,6 +439,7 @@ function serveFile(res, file, { versioned = false } = {}) {
       // for by its version never changes, so it can be kept for good.
       'Cache-Control': isPage ? 'no-store' : versioned ? 'public, max-age=31536000, immutable' : 'no-cache',
       'X-Content-Type-Options': 'nosniff',
+      ...(isPage ? { 'Content-Security-Policy': cspFor(file) } : {}),
     });
     res.end(isPage ? stampPage(data.toString('utf8'), VERSION) : data);
   });
@@ -376,7 +464,9 @@ function readBody(req, limit = 64 * 1024) {
 async function readJson(req) {
   const text = await readBody(req);
   try {
-    return text ? JSON.parse(text) : {};
+    const said = text ? JSON.parse(text) : {};
+    // (A body that is a bare word, number or "null" has no fields to read: it is taken as text.)
+    return said && typeof said === 'object' ? said : { text };
   } catch {
     return { text };
   }
@@ -443,7 +533,12 @@ function signedShortcut() {
 // ---------- routes ----------
 
 async function route(req, res) {
-  const url = new URL(req.url, 'http://local');
+  let url;
+  try {
+    url = new URL(req.url, 'http://local');
+  } catch {
+    return send(res, 400, { error: 'Bad request' });
+  }
   const p = url.pathname;
   const profile = auth.profileOf(req); // which profile this device is signed in to, if any
   const authed = !!profile;
@@ -554,12 +649,23 @@ async function route(req, res) {
   if (req.method === 'GET' && p === '/share') {
     if (!authed) return redirect(res, `/login?next=${encodeURIComponent(p + url.search)}`);
     const text = [url.searchParams.get('url'), url.searchParams.get('text'), url.searchParams.get('title')].join(' ');
+    // Only a visit the person made themselves (their phone's share sheet, or
+    // the address typed in) sends anything to the car. Following a link, or
+    // being sent here by some other site's page, is a visit too, and a browser
+    // brings the sign-in along on those: then the link is put in the remote's
+    // box, where it goes nowhere until a button is tapped.
+    const visit = req.headers['sec-fetch-site'];
+    if (visit !== 'none' && visit !== 'same-origin') {
+      const to = linkedTo(text);
+      if (to.error) return redirect(res, `/remote?msg=${encodeURIComponent(to.error)}`);
+      return redirect(res, `/remote?link=${encodeURIComponent(to.url || (to.id === TEST_PATTERN_ID ? to.id : `https://www.youtube.com/watch?v=${to.id}`))}`);
+    }
     const result = await shareText(storeFor(profile), text);
     return redirect(res, `/remote?msg=${encodeURIComponent(result.message)}`);
   }
 
   if (req.method === 'POST' && p === '/api/login') {
-    if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
+    if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: auth.refusal });
     const body = await readJson(req);
     // The server's own passcode opens Admin, and only Admin.
     if (auth.checkAdminPasscode(body.passcode)) {
@@ -572,6 +678,7 @@ async function route(req, res) {
       // The passcode of someone who asked for a profile and is still waiting.
       const waiting = auth.requestFor(body.passcode);
       if (waiting) return send(res, 202, { waiting: auth.showRequest(waiting) });
+      auth.wrongAttempt();
       // canAsk: the sign-in page may offer asking for a profile with it.
       return send(res, 401, { error: 'Wrong passcode', canAsk: auth.canAsk() });
     }
@@ -581,9 +688,12 @@ async function route(req, res) {
 
   // ---- Admin: opened by the server's own passcode, apart from any profile ----
   if (req.method === 'POST' && p === '/api/admin/login') {
-    if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
+    if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: auth.refusal });
     const body = await readJson(req);
-    if (!auth.checkAdminPasscode(body.passcode)) return send(res, 401, { error: 'Wrong passcode' });
+    if (!auth.checkAdminPasscode(body.passcode)) {
+      auth.wrongAttempt();
+      return send(res, 401, { error: 'Wrong passcode' });
+    }
     auth.issueAdminCookie(req, res);
     return send(res, 200, { ok: true });
   }
@@ -667,14 +777,19 @@ async function route(req, res) {
   if (p === '/api/join') {
     if (req.method === 'GET') return send(res, 200, { open: auth.canAsk() });
     if (req.method === 'POST') {
-      if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: 'Too many tries. Wait a few minutes.' });
+      if (!auth.allowAttempt(clientIp(req))) return send(res, 429, { error: auth.refusal });
       const body = await readJson(req);
       try {
         const before = auth.requests.length;
         const waiting = auth.askForProfile(body.name, body.passcode);
-        if (auth.requests.length > before) console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
+        if (auth.requests.length > before) {
+          console.log(`[profiles] ${waiting.name} asked for a profile (number ${waiting.code})`);
+          // (Asking says whether a passcode is already someone's, so it counts as a guess at one.)
+          auth.wrongAttempt();
+        }
         return send(res, 200, { waiting });
       } catch (err) {
+        auth.wrongAttempt();
         return send(res, 400, { error: err.message });
       }
     }
@@ -845,6 +960,12 @@ async function route(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  guardHeaders(req, res);
+  // Anything that changes something is only taken from this server's own pages (fromOwnPage).
+  if (!['GET', 'HEAD'].includes(req.method) && !fromOwnPage(req)) {
+    refuseOtherPage(req);
+    return send(res, 403, { error: "That request was made by another site's page, so it wasn't carried out." });
+  }
   route(req, res).catch((err) => {
     console.error(err);
     if (!res.headersSent) send(res, 500, { error: 'Server error' });
@@ -903,6 +1024,7 @@ function handleControl(ws, profile) {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'hello') {
       client.role = msg.role === 'car' ? 'car' : 'remote';
       refreshCarOnline(profile);
@@ -1000,7 +1122,7 @@ onShare((profile, what, share) => {
 // where a browser can sign in at all.
 if (config.pages.on && browserKey()) {
   const wantsAdsBlocked = (id) => !!(auth.profile(id) && storeFor(id).settings.blockAds);
-  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows, blocked: (name) => adRefused(name, wantsAdsBlocked, adListed), waited: blockerSaid });
+  const guard = startGuard({ port: config.pages.guardPort, allowed: guardAllows, blocked: (name) => adRefused(name, wantsAdsBlocked, adListed), waited: blockerSaid, own: [config.port] });
   guard.on('error', (err) => console.log(`[page] the browser's way out couldn't be opened on port ${config.pages.guardPort} (${err.code || err.message}): pages won't load`));
 }
 
@@ -1016,39 +1138,56 @@ setInterval(() => {
   }
 }, 30000).unref();
 
+// A socket that breaks (a frame cut short on a weak signal, one that is too
+// big, one that isn't a frame at all) is closed. It must not be the end of
+// the server: an error on a socket nobody listens to for errors would be.
+function settle(ws) {
+  ws.isAlive = true;
+  ws.on('pong', () => (ws.isAlive = true));
+  ws.on('error', () => {});
+}
+function turnAway(socket, code, words) {
+  socket.on('error', () => {});
+  socket.write(`HTTP/1.1 ${code} ${words}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
+}
+
 server.on('upgrade', (req, socket, head) => {
+  try {
+    openSocket(req, socket, head);
+  } catch (err) {
+    // (Whatever was asked for couldn't even be read.)
+    turnAway(socket, 400, 'Bad Request');
+  }
+});
+
+function openSocket(req, socket, head) {
   const url = new URL(req.url, 'http://local');
-  const profile = auth.profileOf(req);
   // The browser's program signs in with the key it shares with this server, not as a profile.
   if (url.pathname === '/ws/browser') {
-    if (!isAgent(req)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
+    if (!isAgent(req)) return turnAway(socket, 401, 'Unauthorized');
     agentWss.handleUpgrade(req, socket, head, (ws) => {
-      ws.isAlive = true;
-      ws.on('pong', () => (ws.isAlive = true));
+      settle(ws);
       attachAgent(ws, req);
     });
     return;
   }
-  if (!profile || !['/ws/control', '/ws/stream', '/ws/page'].includes(url.pathname)) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
+  const profile = auth.profileOf(req);
+  if (!profile || !['/ws/control', '/ws/stream', '/ws/page'].includes(url.pathname)) return turnAway(socket, 401, 'Unauthorized');
+  // A signed-in device's sockets are opened by this server's own pages, not by another site's.
+  if (!fromOwnPage(req, { socket: true })) {
+    refuseOtherPage(req);
+    return turnAway(socket, 403, 'Forbidden');
   }
   if (url.pathname === '/ws/page') {
     pageWss.handleUpgrade(req, socket, head, (ws) => {
-      ws.isAlive = true;
-      ws.on('pong', () => (ws.isAlive = true));
+      settle(ws);
       watchPage(ws, profile);
     });
     return;
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
-    ws.isAlive = true;
-    ws.on('pong', () => (ws.isAlive = true));
+    settle(ws);
     if (url.pathname === '/ws/control') return handleControl(ws, profile);
     const id = url.searchParams.get('id');
     if (!isPlayableId(id) && !isPageId(id)) return ws.close(4400, 'bad id');
@@ -1061,7 +1200,7 @@ server.on('upgrade', (req, socket, head) => {
       ws.close();
     });
   });
-});
+}
 
 function shutdown() {
   for (const st of stores.values()) st.saveNow();

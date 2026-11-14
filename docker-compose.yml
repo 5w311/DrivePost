@@ -10,7 +10,11 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "8080:8080"
+      # Port 8080 of this machine: every device on your home network can reach
+      # the app there. The tunnel doesn't come in this way, so if the tunnel is
+      # all you use, LISTEN_ON=127.0.0.1 in .env keeps the port to this machine
+      # alone. (Left out, the line reads ":8080:8080", which is every address.)
+      - "${LISTEN_ON:-}:8080:8080"
     volumes:
       # This volume was named while the app was still called DriveTest. It
       # holds your sign-ins, profiles and history, so it keeps its name: under
@@ -26,6 +30,15 @@ services:
           - drivetest
       # Where the browser container lives (below).
       fence: {}
+    # The app runs as an ordinary user and needs no powers beyond that. It
+    # reads video from all over the internet (yt-dlp, ffmpeg), so it is given
+    # none: no extra capabilities, no way to gain any, and a ceiling on how
+    # many programs it can have running, far above what it uses.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 4096
 
   # The browser DrivePost opens pages in, for links with no video to fetch:
   # the page itself is opened here and the car is shown it. (browser/agent.js)

@@ -76,9 +76,11 @@ export function browserKey() {
 
 export function isAgent(req) {
   const mine = browserKey();
-  const theirs = String(req.headers['x-drivepost-browser'] || '');
-  if (!mine || !config.pages.on || theirs.length !== mine.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(theirs), Buffer.from(mine));
+  // (Compared as bytes: a key of the right length in letters can be the wrong length in bytes.)
+  const theirs = Buffer.from(String(req.headers['x-drivepost-browser'] || ''));
+  const wanted = Buffer.from(mine);
+  if (!mine || !config.pages.on || theirs.length !== wanted.length) return false;
+  return crypto.timingSafeEqual(theirs, wanted);
 }
 
 const plain = (address) => String(address || '').replace(/^::ffff:/, '');
@@ -180,6 +182,7 @@ export function attachAgent(ws, req) {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     // What it says of itself as it signs in: among other things, whether it has an ad blocker.
     if (msg.t === 'hello') {
       mine.ublock = String(msg.ublock || '').replace(/[^0-9a-z.]/gi, '').slice(0, 24);
@@ -374,6 +377,7 @@ export function watchPage(ws, profile) {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     mine.idleSince = 0;
     if (msg.t === 'input' && KINDS.has(msg.kind)) {
       toAgent({ t: 'input', id: mine.id, kind: msg.kind, x: Number(msg.x) || 0, y: Number(msg.y) || 0, dy: Number(msg.dy) || 0, text: String(msg.text || '').slice(0, 500), key: String(msg.key || '').slice(0, 20) });
