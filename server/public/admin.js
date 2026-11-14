@@ -125,7 +125,7 @@
         if (name !== null && name.trim()) act({ action: 'rename', id: p.id, name: name }, 'Renamed');
       } }),
       DT.el('button', { type: 'button', text: 'Passcode', onclick: function () {
-        var pass = prompt('New passcode for ' + p.name + ' (at least 4 characters). Devices already signed in stay signed in.');
+        var pass = prompt('New passcode for ' + p.name + ' (at least 8 characters). Devices already signed in stay signed in.');
         if (pass !== null && pass) act({ action: 'passcode', id: p.id, passcode: pass }, 'Passcode changed');
       } }),
       DT.el('button', { type: 'button', text: 'Sign out', onclick: function () {

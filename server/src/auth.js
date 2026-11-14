@@ -47,6 +47,42 @@ function safeEqual(a, b) {
 }
 
 // Passcodes of added profiles are kept scrambled, not as typed.
+// A new passcode has to be at least this long. Ones from before the rule keep
+// working: only their scrambled form is kept, so there is nothing to measure.
+export const PASSCODE_MIN = 8;
+
+// What .env.example has for DRIVE_PASSCODE. Anyone can read that file, so a
+// server that still has it has no Admin passcode worth the name: Admin stays
+// closed until its owner sets one. (The profiles carry on.)
+export const EXAMPLE_PASSCODE = 'change-me';
+export const ADMIN_CLOSED = "Admin is closed: DRIVE_PASSCODE in this server's .env file is still the example's. Set your own there and restart.";
+
+// The limits on wrong passcodes leave a guesser a few hundred tries a day, so
+// length alone isn't enough: these are the ones tried in the first hour.
+const FIRST_GUESSES = new Set([
+  'password', 'passcode', 'password1', 'password12', 'password123', 'passw0rd', 'p@ssw0rd', 'p@ssword',
+  'iloveyou', 'letmein1', 'letmein123', 'welcome1', 'welcome123', 'changeme', 'whatever', 'trustno1',
+  'admin123', 'admin1234', 'abc12345', 'abcd1234', 'a1b2c3d4', 'q1w2e3r4', '1q2w3e4r', '1q2w3e4r5t',
+  'qwerty12', 'qwerty123', 'zxcvbnm1', 'sunshine', 'princess', 'football', 'baseball', 'superman',
+  'starwars', 'computer', 'internet', 'drivepost', 'drivetest', 'tesla123', 'tesla1234', 'teslamodel3',
+  EXAMPLE_PASSCODE,
+]);
+// Straight along the digits, the alphabet or the keyboard, in either direction.
+const ROWS = ['01234567890123456789', 'abcdefghijklmnopqrstuvwxyz', 'qwertyuiopasdfghjklzxcvbnm', '1qaz2wsx3edc4rfv5tgb6yhn7ujm'];
+export function easyToGuess(passcode) {
+  const t = String(passcode || '').toLowerCase();
+  if (FIRST_GUESSES.has(t)) return true;
+  if (new Set(t).size <= 2) return true; // "aaaaaaaa", "12121212"
+  if (ROWS.some((row) => row.includes(t) || [...row].reverse().join('').includes(t))) return true; // "12345678", "qwertyui"
+  // The same few characters over and over: "12341234", "abcabcabc".
+  for (let n = 1; n <= t.length / 2; n++) {
+    if (t.length % n === 0 && t.slice(0, n).repeat(t.length / n) === t) return true;
+  }
+  return false;
+}
+const TOO_SHORT = `Use a passcode of at least ${PASSCODE_MIN} characters.`;
+const TOO_EASY = "That passcode is one of the first anyone would try. Pick one that's harder to guess.";
+
 function scramble(passcode, salt) {
   return crypto.scryptSync(String(passcode), Buffer.from(salt, 'base64url'), 32).toString('base64url');
 }
@@ -188,9 +224,10 @@ export class Auth {
 
   checkNewPasscode(passcode, exceptId) {
     const typed = String(passcode || '');
-    if (typed.length < 4) throw new Error('Use a passcode of at least 4 characters.');
+    if (typed.length < PASSCODE_MIN) throw new Error(TOO_SHORT);
     if (typed.length > 100) throw new Error('That passcode is too long.');
     this.notTheServers(typed);
+    if (easyToGuess(typed)) throw new Error(TOO_EASY);
     // The passcode is what tells profiles apart, so no two can share one.
     const taken = this.checkPasscode(typed);
     if (taken && taken !== exceptId) throw new Error('Another profile already uses that passcode. Pick a different one.');
@@ -295,10 +332,11 @@ export class Auth {
   askForProfile(name, passcode) {
     if (!this.allowRequests) throw new Error("This DrivePost isn't taking requests for new profiles. Ask its owner for a passcode.");
     const typed = String(passcode || '');
-    if (typed.length < 4) throw new Error('Use a passcode of at least 4 characters.');
+    if (typed.length < PASSCODE_MIN) throw new Error(TOO_SHORT);
     if (typed.length > 100) throw new Error('That passcode is too long.');
     this.notTheServers(typed);
     if (this.checkPasscode(typed)) throw new Error('That passcode already opens a profile. Go back and sign in with it.');
+    if (easyToGuess(typed)) throw new Error(TOO_EASY);
     const already = this.requestFor(typed);
     if (already) return this.showRequest(already); // asked before with this passcode: still waiting
     const clean = this.cleanName(name);
@@ -419,9 +457,19 @@ export class Auth {
   // is on that car's profile without ever having typed a passcode, and must
   // not get to manage the server that way.
 
+  // Is DRIVE_PASSCODE still what the example file has?
+  get adminClosed() {
+    return this.passcode === EXAMPLE_PASSCODE;
+  }
+
   checkAdminPasscode(input) {
     const typed = String(input || '');
-    return !!typed && !!this.passcode && safeEqual(typed, this.passcode);
+    return !!typed && !!this.passcode && !this.adminClosed && safeEqual(typed, this.passcode);
+  }
+
+  // What to tell someone who types the example's passcode on such a server: its owner, most likely.
+  adminClosedFor(input) {
+    return this.adminClosed && String(input || '') === EXAMPLE_PASSCODE ? ADMIN_CLOSED : null;
   }
 
   // The passcode is part of what gets signed, so changing DRIVE_PASSCODE
@@ -451,7 +499,7 @@ export class Auth {
   // Has this device typed the server's passcode on the Admin page?
   isAdmin(req) {
     const value = parseCookies(req.headers.cookie)[ADMIN_COOKIE];
-    if (!value || !this.passcode) return false;
+    if (!value || !this.passcode || this.adminClosed) return false;
     const [expStr, sig] = value.split('.');
     const exp = parseInt(expStr, 10);
     if (!exp || !sig || exp < Date.now() / 1000) return false;

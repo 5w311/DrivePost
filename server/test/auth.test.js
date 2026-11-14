@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Auth, ORIGINAL, MAX_PROFILES, MAX_REQUESTS } from '../src/auth.js';
+import { Auth, ORIGINAL, MAX_PROFILES, MAX_REQUESTS, PASSCODE_MIN, easyToGuess } from '../src/auth.js';
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'drivepost-auth-'));
@@ -106,21 +106,23 @@ test('each profile has its own passcode, which decides who signs in where', () =
 
 test('passcodes must be different, names are required, and there is a limit', () => {
   const auth = make();
-  const a = auth.addProfile('A', 'aaaa-1');
-  assert.throws(() => auth.addProfile('B', 'aaaa-1'), /already uses that passcode/);
+  const a = auth.addProfile('A', 'aaaa-1111');
+  assert.throws(() => auth.addProfile('B', 'aaaa-1111'), /already uses that passcode/);
   assert.throws(() => auth.addProfile('B', 'server-pass'), /can't be used for a profile/, "the server's own passcode is for Admin only");
-  assert.throws(() => auth.addProfile('B', 'abc'), /at least 4/);
-  assert.throws(() => auth.addProfile('   ', 'bbbb-1'), /name/);
-  const b = auth.addProfile('B', 'bbbb-1');
-  assert.throws(() => auth.setPasscode(b, 'aaaa-1'), /already uses/);
+  assert.throws(() => auth.addProfile('B', 'abc'), /at least 8/);
+  assert.throws(() => auth.addProfile('B', 'seven-7'), /at least 8/);
+  assert.throws(() => auth.addProfile('B', 'password'), /first anyone would try/);
+  assert.throws(() => auth.addProfile('   ', 'bbbb-1111'), /name/);
+  const b = auth.addProfile('B', 'bbbb-1111');
+  assert.throws(() => auth.setPasscode(b, 'aaaa-1111'), /already uses/);
   assert.throws(() => auth.setPasscode(b, 'server-pass'), /can't be used for a profile/);
-  auth.setPasscode(b, 'bbbb-1'); // its own passcode again is fine
-  auth.setPasscode(b, 'bbbb-2');
-  assert.equal(auth.checkPasscode('bbbb-1'), null);
-  assert.equal(auth.checkPasscode('bbbb-2'), b);
+  auth.setPasscode(b, 'bbbb-1111'); // its own passcode again is fine
+  auth.setPasscode(b, 'bbbb-2222');
+  assert.equal(auth.checkPasscode('bbbb-1111'), null);
+  assert.equal(auth.checkPasscode('bbbb-2222'), b);
   auth.renameProfile(a, 'A long name that goes on and on and on');
   assert.equal(auth.profile(a).name.length, 24);
-  for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `pass-${i}`);
+  for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `passcode-${i}`);
   assert.throws(() => auth.addProfile('One more', 'one-more-1'), /most profiles/);
 });
 
@@ -264,7 +266,8 @@ test('requests are checked and limited', () => {
   const taken = auth.addProfile('Kid', 'kid-pass-1');
   assert.throws(() => auth.askForProfile('X', 'server-pass'), /can't be used for a profile/, "nobody gets a profile with the server's own passcode");
   assert.throws(() => auth.askForProfile('X', 'kid-pass-1'), /already opens a profile/);
-  assert.throws(() => auth.askForProfile('X', 'abc'), /at least 4/);
+  assert.throws(() => auth.askForProfile('X', 'abc'), /at least 8/);
+  assert.throws(() => auth.askForProfile('X', '12345678'), /first anyone would try/);
   assert.throws(() => auth.askForProfile('X', 'x'.repeat(101)), /too long/);
   assert.throws(() => auth.askForProfile('   ', 'fine-pass'), /name/);
   assert.equal(auth.askForProfile('Line\nbreak\u0007 and a very long name indeed', 'fine-pass').name, 'Line break and a very lo', 'names are plain, short text');
@@ -273,10 +276,10 @@ test('requests are checked and limited', () => {
   assert.throws(() => auth.addProfile('Other', 'fine-pass'), /waiting for your OK/);
   assert.throws(() => auth.setPasscode(taken, 'fine-pass'), /waiting for your OK/);
 
-  for (let i = auth.listRequests().length; i < MAX_REQUESTS; i++) auth.askForProfile(`P${i}`, `pass-${i}`);
+  for (let i = auth.listRequests().length; i < MAX_REQUESTS; i++) auth.askForProfile(`P${i}`, `passcode-${i}`);
   assert.equal(new Set(auth.listRequests().map((r) => r.code)).size, MAX_REQUESTS, 'every waiting request has its own number');
   assert.throws(() => auth.askForProfile('One more', 'one-more-1'), /already waiting/);
-  assert.equal(auth.askForProfile('P1 back', 'pass-1').name, 'P1', 'someone already waiting can still look theirs up');
+  assert.equal(auth.askForProfile('P1 back', 'passcode-1').name, 'P1', 'someone already waiting can still look theirs up');
 });
 
 test('asking can be switched off, and stays off', () => {
@@ -296,7 +299,7 @@ test('asking can be switched off, and stays off', () => {
 test('a full server takes no requests, and old requests run out', () => {
   const auth = make();
   const early = auth.askForProfile('Early', 'early-1234');
-  for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `pass-${i}`);
+  for (let i = auth.profiles.length; i < MAX_PROFILES; i++) auth.addProfile(`P${i}`, `passcode-${i}`);
   assert.equal(auth.canAsk(), false);
   assert.throws(() => auth.askForProfile('Late', 'late-1234'), /no room/);
   assert.throws(() => auth.approveRequest(early.id), /most profiles/);
@@ -380,4 +383,51 @@ test('signing in to a profile and to Admin in one answer keeps both', () => {
   const req = { headers: { cookie }, socket: {} };
   assert.equal(auth.profileOf(req), greg);
   assert.equal(auth.isAdmin(req), true);
+});
+
+test('a new passcode has to be long enough and not one of the first guesses', () => {
+  assert.equal(PASSCODE_MIN, 8);
+  for (const easy of ['password', 'PassWord', '12345678', '87654321', '1234567890', 'abcdefgh', 'qwertyui', 'asdfghjkl', 'aaaaaaaa', '12121212', '12341234', 'abcabcabc', 'drivepost', 'Tesla123']) {
+    assert.equal(easyToGuess(easy), true, easy);
+  }
+  for (const fine of ['blue-falcon-2741', 'maria-1234', 'sunroof-42', 'correct horse', 'Model Y 99', 'x7#kQ2pL', '19846203', 'whatever-1']) {
+    assert.equal(easyToGuess(fine), false, fine);
+  }
+  const auth = make();
+  const b = auth.addProfile('B', 'bbbb-1111');
+  assert.throws(() => auth.setPasscode(b, 'short-7'), /at least 8/);
+  assert.throws(() => auth.setPasscode(b, 'qwerty123'), /first anyone would try/);
+  assert.equal(auth.checkPasscode('bbbb-1111'), b, 'and a passcode that was turned down changed nothing');
+});
+
+test('a short passcode from before the rule still signs its profile in', () => {
+  const dir = tmp();
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const hash = crypto.scryptSync('pw12', Buffer.from(salt, 'base64url'), 32).toString('base64url');
+  fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify({ profiles: [{ id: 'old1', name: 'Old', epoch: 0, shareToken: 't'.repeat(32), pass: { salt, hash } }] }));
+  const auth = make(dir);
+  assert.equal(auth.checkPasscode('pw12'), 'old1');
+  assert.throws(() => auth.setPasscode('old1', 'pw13'), /at least 8/, 'its next one has to keep to the rule');
+  assert.equal(auth.checkPasscode('pw12'), 'old1');
+});
+
+test("the example file's passcode opens nothing: Admin stays closed until the owner sets one", () => {
+  const auth = new Auth({ dataDir: tmp(), passcode: 'change-me' });
+  assert.equal(auth.adminClosed, true);
+  assert.equal(auth.checkAdminPasscode('change-me'), false);
+  assert.match(auth.adminClosedFor('change-me'), /still the example's/);
+  assert.equal(auth.adminClosedFor('something-else'), null, 'any other guess is just wrong');
+  // A device that was let into Admin with it before is out again.
+  let cookie = '';
+  auth.issueAdminCookie({ headers: {}, socket: {} }, { setHeader: (k, v) => (cookie = v.split(';')[0]) });
+  assert.equal(auth.isAdmin({ headers: { cookie }, socket: {} }), false);
+  assert.throws(() => auth.addProfile('B', 'change-me'), /first anyone would try/, "and it isn't a profile's passcode either");
+  // Profiles carry on meanwhile.
+  const b = auth.addProfile('B', 'bbbb-1111');
+  assert.equal(auth.checkPasscode('bbbb-1111'), b);
+
+  const own = make();
+  assert.equal(own.adminClosed, false);
+  assert.equal(own.adminClosedFor('change-me'), null);
+  assert.equal(own.checkAdminPasscode('server-pass'), true);
 });

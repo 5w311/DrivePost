@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
 import { config, QUALITIES } from './config.js';
-import { Auth, clientIp, isHttps, ORIGINAL } from './auth.js';
+import { Auth, clientIp, easyToGuess, EXAMPLE_PASSCODE, isHttps, ORIGINAL, PASSCODE_MIN } from './auth.js';
 import { Store } from './state.js';
 import { handleStream, canEncodeH264 } from './stream.js';
 import { PAGE_ID, isPageId, onShare, clearOldShares } from './mirror.js';
@@ -679,6 +679,8 @@ async function route(req, res) {
       const waiting = auth.requestFor(body.passcode);
       if (waiting) return send(res, 202, { waiting: auth.showRequest(waiting) });
       auth.wrongAttempt();
+      const closed = auth.adminClosedFor(body.passcode);
+      if (closed) return send(res, 401, { error: closed });
       // canAsk: the sign-in page may offer asking for a profile with it.
       return send(res, 401, { error: 'Wrong passcode', canAsk: auth.canAsk() });
     }
@@ -692,7 +694,7 @@ async function route(req, res) {
     const body = await readJson(req);
     if (!auth.checkAdminPasscode(body.passcode)) {
       auth.wrongAttempt();
-      return send(res, 401, { error: 'Wrong passcode' });
+      return send(res, 401, { error: auth.adminClosedFor(body.passcode) || 'Wrong passcode' });
     }
     auth.issueAdminCookie(req, res);
     return send(res, 200, { ok: true });
@@ -1213,4 +1215,9 @@ if (auth.profile(ORIGINAL)) storeFor(ORIGINAL); // a server from before profiles
 startAutoUpdate();
 server.listen(config.port, () => {
   console.log(`DrivePost listening on :${config.port}${config.commit ? ` (${config.commit})` : ''}`);
+  if (auth.adminClosed) {
+    console.log(`[security] DRIVE_PASSCODE is still the example's ("${EXAMPLE_PASSCODE}"), which anyone can read, so Admin is closed. Set your own in .env and restart.`);
+  } else if (config.passcode.length < PASSCODE_MIN || easyToGuess(config.passcode)) {
+    console.log(`[security] DRIVE_PASSCODE is ${config.passcode.length < PASSCODE_MIN ? `shorter than ${PASSCODE_MIN} characters` : 'one of the first anyone would try'}. It opens Admin, which runs the server: set a longer one in .env.`);
+  }
 });
