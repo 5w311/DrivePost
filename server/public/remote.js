@@ -28,6 +28,7 @@
     state: function (msg) {
       if (DT.stale && !typing() && DT.reloadIfStale()) return;
       state = msg.state;
+      pageVideo.take(state);
       if (DT.pageCard) DT.pageCard.state(state);
       render();
     },
@@ -53,6 +54,28 @@
 
   // ---------- now playing ----------
 
+  // A page's own video, as the server's browser has it (the phone's view of the page is the page as it is now).
+  var pageVideo = new DT.PageVideo();
+  function pageVideoNow() {
+    return state && state.now && state.now.id === 'page' ? pageVideo.at(0) : null;
+  }
+  function pausedInPage() {
+    var v = pageVideoNow();
+    return !!(v && v.status === 'paused' && !v.waiting && !state.paused);
+  }
+  function isLive() {
+    if (!state || !state.now) return false;
+    if (state.now.id !== 'page') return !!state.now.live;
+    var v = pageVideoNow();
+    return !(v && v.d && v.t !== null);
+  }
+  function duration() {
+    if (!state || !state.now) return 0;
+    var v = pageVideoNow();
+    if (v) return v.d || 0;
+    return state.now.live ? 0 : state.now.duration || 0;
+  }
+
   var controls = $('#controls');
   var playBtn = DT.iconButton('play', 'Play or pause', function () { control.cmd('toggle'); }, 'play-btn');
   [
@@ -76,18 +99,22 @@
       np.appendChild(el('div', { class: 'thumb' }, [DT.thumbOf(n)]));
       np.appendChild(el('div', { style: 'min-width:0' }, [
         el('div', { class: 'np-title', text: n.title }),
-        el('div', { class: 'np-sub', text: [n.channel, n.site, n.live ? 'LIVE' : null, state.paused ? 'Paused' : null].filter(Boolean).join(' · ') })
+        el('div', { class: 'np-sub', text: [n.channel, n.site, isLive() ? 'LIVE' : null, state.paused || pausedInPage() ? 'Paused' : null].filter(Boolean).join(' · ') })
       ]));
     } else {
       np.appendChild(el('div', { class: 'muted', text: 'Nothing playing. Search below or paste a link.' }));
     }
     playBtn.innerHTML = '';
-    playBtn.appendChild(DT.icon(state.now && !state.paused ? 'pause' : 'play'));
+    playBtn.appendChild(DT.icon(state.now && !state.paused && !pausedInPage() ? 'pause' : 'play'));
     controls.style.opacity = state.now ? '1' : '0.4';
 
+    var auto = state.settings.quality === 'auto';
     document.querySelectorAll('#qualitySeg button').forEach(function (b) {
-      b.classList.toggle('on', b.getAttribute('data-q') === (state.playQuality || state.settings.quality));
+      b.classList.toggle('on', b.getAttribute('data-q') === (auto ? 'auto' : state.playQuality || state.settings.quality));
     });
+    $('#qualitySay').textContent = auto
+      ? 'Auto is at ' + state.playQuality + 'p. It goes down when the car can\'t keep up, and up again when the connection has room to spare.'
+      : 'Higher quality uses more data. If the car can\'t keep up, it steps down by itself for that video.';
 
     document.querySelectorAll('#screenSeg button').forEach(function (b) {
       b.classList.toggle('on', (b.getAttribute('data-fs') === '1') === !!state.settings.fullscreen);
@@ -114,10 +141,11 @@
       $('#rKnob').style.left = '0%';
       return;
     }
-    var d = state.now.duration || 0;
-    var t = preview !== null ? preview : DT.positionOf(state);
+    var d = duration();
+    var v = pageVideoNow();
+    var t = preview !== null ? preview : v && v.t !== null ? v.t : DT.positionOf(state);
     if (d) t = Math.min(t, d);
-    $('#rCur').textContent = state.now.live ? 'LIVE' : DT.fmt(t);
+    $('#rCur').textContent = isLive() ? 'LIVE' : DT.fmt(t);
     $('#rDur').textContent = d ? DT.fmt(d) : '';
     var pct = d ? (t / d) * 100 : 0;
     $('#rFill').style.width = pct + '%';
@@ -133,7 +161,9 @@
       return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
     }
     function dur() {
-      return state && state.now && !state.now.live ? state.now.duration || 0 : 0;
+      var v = pageVideoNow();
+      if (v && !v.seek) return 0; // a page's video that can't be skipped in
+      return isLive() ? 0 : duration();
     }
     scrub.addEventListener('pointerdown', function (ev) {
       if (!dur()) return;

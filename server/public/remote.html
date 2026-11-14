@@ -80,7 +80,7 @@
             <button id="pageDone" type="button" class="page-done hidden" aria-label="Done: back to the card" title="Done"></button>
           </div>
         </div>
-        <p class="hint page-hint">Tap to click, drag to scroll. Hold to point, which wakes a player's buttons. The car follows a few seconds behind.</p>
+        <p class="hint page-hint">Tap to click, drag to scroll. Hold to point, which wakes a player's buttons. The car follows a second or two behind.</p>
         <form id="pageTypeForm" class="field-row page-type" autocomplete="off" novalidate>
           <input id="pageText" type="text" placeholder="Type into the page" aria-label="Type into the page" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
           <button type="submit">Send</button>
@@ -133,12 +133,13 @@
       <div class="card-head">Quality</div>
       <div class="card-body">
         <div class="seg" id="qualitySeg">
+          <button data-q="auto" type="button">Auto</button>
           <button data-q="360" type="button">360p</button>
           <button data-q="480" type="button">480p</button>
           <button data-q="720" type="button">720p</button>
           <button data-q="1080" type="button">1080p</button>
         </div>
-        <p class="muted" style="font-size:14px;margin:10px 0 0">Higher quality uses more data. If the car can't keep up, it steps down by itself for that video.</p>
+        <p id="qualitySay" class="muted" style="font-size:14px;margin:10px 0 0">Higher quality uses more data. If the car can't keep up, it steps down by itself for that video.</p>
       </div>
     </section>
 

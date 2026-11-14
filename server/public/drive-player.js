@@ -27,6 +27,12 @@
   // ...and for a live stream, which can't be loaded ahead: what it waits for
   // here is all it has in hand when the connection dips again.
   var LIVE_REBUFFER = 6;
+  // A page in the server's browser is different again: someone is steering
+  // it and watching the car for what happens, so every second in hand is a
+  // second of delay. It starts on what it is first sent, and after running
+  // dry carries on as soon as it has a little. (The server has the page's
+  // video wait for a car that is stuck, so nothing is skipped for it.)
+  var PAGE_BUFFER = 0.7;
   var STALL_TIMEOUT = 20; // seconds with no data before giving up on a socket
   var PREROLL = 0.1; // start the clock this far before the first frame
   var VIDEO_LEAD = 0.02; // show a frame this long before it's due (about one repaint)
@@ -84,6 +90,12 @@
       // Keep it alive between videos, so a new one doesn't need another tap.
       ctx._connections = (ctx._connections || 0) + 1;
       ctx._dtPinned = true;
+      // Say when it starts or stops: the page shows whether sound is being held back (soundHeld).
+      try {
+        ctx.addEventListener('statechange', function () {
+          if (DrivePlayer.onSound) DrivePlayer.onSound();
+        });
+      } catch (e) {}
     }
     return ctx;
   }
@@ -621,8 +633,10 @@
     this.timer = setInterval(function () {
       self.tick();
     }, 12);
+    this.firstDataAt = null; // when the first of the picture arrived (see arriving)
     this.reportTimer = setInterval(function () {
-      if (self.ws && self.ws.readyState === 1 && self.clock !== null) self.ws.send(JSON.stringify({ clock: self.clock }));
+      // Where this player is in the stream, and how it is doing: for a page, the server has its video wait for a car that isn't playing.
+      if (self.ws && self.ws.readyState === 1 && self.clock !== null) self.ws.send(JSON.stringify({ clock: self.clock, state: self.state }));
     }, 500);
   }
 
@@ -730,6 +744,7 @@
         this.startAt = msg.startAt || 0;
         this.hasAudio = msg.audio !== false;
         this.why = msg.why || ''; // why another site's video is being converted, when it is
+        this.height = msg.height || null; // how tall the picture being sent is
         this.stats.fps = msg.fps || null;
         this.stats.kbps = msg.kbps || null;
         this.setup(msg.codec);
@@ -740,6 +755,12 @@
       } else if (msg.type === 'restart') {
         // The server is starting this stream over another way (no sound was
         // coming through). Don't play out what is buffered: start over now.
+        this.serverEnded = false;
+        this.finish();
+      } else if (msg.type === 'afresh') {
+        // A page: this car has fallen behind it, and is brought back up to
+        // it. What is in hand is let go of, and a new stream asked for.
+        this.afresh = true;
         this.serverEnded = false;
         this.finish();
       } else if (msg.type === 'end') {
@@ -769,7 +790,10 @@
     }
     if (view.getUint8(8) === 0) {
       this.vq.push(chunk);
-      if (this.firstVideoPts === null) this.firstVideoPts = chunk.pts;
+      if (this.firstVideoPts === null) {
+        this.firstVideoPts = chunk.pts;
+        this.firstDataAt = now();
+      }
       // H.264 frames don't arrive in display order: keep the furthest.
       if (this.lastVideoPts === null || chunk.pts > this.lastVideoPts) this.lastVideoPts = chunk.pts;
       if (this.clock === null) this.clock = chunk.pts - PREROLL;
@@ -778,6 +802,17 @@
       if (this.firstAudioPts === null) this.firstAudioPts = chunk.pts;
       this.lastAudioPts = chunk.pts;
     }
+  };
+
+  // How fast the video is arriving, against how fast it plays: 4 means four
+  // seconds of it come in every second. Measured from the first of it, while
+  // the server is still sending all it can. null until there is enough to go by.
+  StreamSession.prototype.arriving = function () {
+    if (this.firstDataAt === null || this.lastVideoPts === null || this.firstVideoPts === null) return null;
+    var wall = now() - this.firstDataAt;
+    var media = this.lastVideoPts - this.firstVideoPts;
+    if (wall < 3 || (wall < 8 && media < 12)) return null;
+    return media / wall;
   };
 
   StreamSession.prototype.noMore = function () {
@@ -1022,7 +1057,7 @@
       // Sound arrives a little behind the picture, so count whichever is shorter.
       var have = this.audioArriving() ? Math.min(this.lastVideoPts, this.lastAudioPts) : this.lastVideoPts;
       var from = fresh ? Math.max(this.clock, start - PREROLL) : this.clock;
-      var need = this.jump !== null ? JUMP_BUFFER : this.everPlayed ? (this.live ? LIVE_REBUFFER : REBUFFER) : START_BUFFER;
+      var need = this.jump !== null ? JUMP_BUFFER : this.o.page ? PAGE_BUFFER : this.everPlayed ? (this.live ? LIVE_REBUFFER : REBUFFER) : START_BUFFER;
       var enough = have - from >= need || this.noMore();
       if (this.noMore()) video.flush();
       if (this.sink && enough && video.readyFor(start)) {
@@ -1257,6 +1292,8 @@
     if (wasFailed) return;
     if (this.serverEnded && this.complete) {
       if (this.o.onEnded) this.o.onEnded(this);
+    } else if (this.afresh && this.o.onAfresh) {
+      this.o.onAfresh(this);
     } else if (this.o.onDropped) {
       this.o.onDropped(this, pos);
     }
@@ -1308,6 +1345,7 @@
       quality: spec.quality,
       format: spec.format,
       elsewhere: !!spec.elsewhere, // another site's video, not one of YouTube's
+      page: !!spec.page, // a page in the server's browser, filmed as it is watched
       paused: spec.paused,
       host: this.host,
       volume: this.volume,
@@ -1323,6 +1361,7 @@
       },
       onEnded: ifActive(cb.onEnded),
       onDropped: ifActive(cb.onDropped),
+      onAfresh: ifActive(cb.onAfresh),
       onSlow: ifActive(cb.onSlow),
       onStall: ifActive(cb.onStall),
       onVideoFail: ifActive(cb.onVideoFail),
@@ -1369,11 +1408,23 @@
     if (this.active) this.active.setVolume(v);
   };
 
-  // Call from a tap: browsers only let sound start after one.
+  // Call from a tap: most browsers only let sound start after one.
   DrivePlayer.unlockAudio = function () {
     var ctx = audioContext();
     if (ctx && wantAudio && ctx.state === 'suspended' && ctx.resume) ctx.resume();
   };
+
+  // Is the browser keeping the sound back? A video plays without it until
+  // someone taps the page: the picture doesn't wait for that. (Some browsers
+  // let sound start anyway, and one that was tapped before a reload does.)
+  // Only means something while a video is playing: sound is switched off on
+  // purpose while one is paused or lining up.
+  DrivePlayer.soundHeld = function () {
+    var ctx = JSMpeg.AudioOutput.WebAudio.CachedContext;
+    return !!(ctx && wantAudio && ctx.state !== 'running');
+  };
+  // Set to a function to be told when sound starts or stops being let out.
+  DrivePlayer.onSound = null;
 
   // What this browser can do with H.264, for the Stats readout.
   DrivePlayer.h264 = function () {

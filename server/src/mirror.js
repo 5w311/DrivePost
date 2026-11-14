@@ -36,9 +36,17 @@ export const SCREEN_SIZES = {
 };
 export const cleanSize = (s) => (Object.hasOwn(SCREEN_SIZES, String(s)) ? String(s) : '720');
 
-const SEGMENT_S = 1; // the stream is kept as pieces this long
-const KEPT = 12; // ...this many of them, the oldest making way for the newest
-const READY_WITH = 3; // pieces there must be before the car is sent to it (stream.js starts it that far back)
+// The stream is kept as pieces this long. A piece can only be read once it is
+// whole, so this is delay the car can't make up: half a second is as short
+// as they get without the browser sending a whole frame more often than its
+// picture can afford. (The browser's own film has a whole frame this often:
+// PIECE_FRAMES in its agent.js is this at 30 frames a second.)
+export const SEGMENT_S = 0.5;
+const KEPT = 24; // ...this many of them, the oldest making way for the newest
+// A car's copy starts this many pieces back from the newest (stream.js): what
+// it has in hand from the first moment, to carry it over a late piece.
+export const START_PIECES = 3;
+const READY_WITH = START_PIECES; // pieces there must be before the car is sent to it
 const READY_WITHIN_MS = 20 * 1000; // a recording that hasn't become video by then isn't going to
 const FRESH_MS = 5 * 1000; // a stream that hasn't grown for this long has stalled
 // A recording that breaks off (the browser's agent reconnecting, mostly) usually comes straight
@@ -48,7 +56,7 @@ const WAIT_FOR_IT_MS = 20 * 1000; // how long a car that asks for the page waits
 
 function baseDir() {
   if (config.pages.dir) return config.pages.dir;
-  // Memory, where there is some to write to: these files are rewritten every second.
+  // Memory, where there is some to write to: these files are rewritten twice a second.
   try {
     fs.accessSync('/dev/shm', fs.constants.W_OK);
     return '/dev/shm';
@@ -68,7 +76,7 @@ export function clearOldShares(dir = baseDir()) {
 
 /*
  * ffmpeg's arguments for taking the recording in (on its standard input) and
- * keeping it as a live stream: a list (`list`) of one-second pieces beside it.
+ * keeping it as a live stream: a list (`list`) of half-second pieces beside it.
  *
  * The recording is whatever the browser makes: its size changes when a
  * window is resized or another tab is chosen, and its frames come when the
@@ -84,7 +92,7 @@ export function ingestArgs({ list, size = '720', audio = true, h264 = true, copy
     list,
   ];
   // A recording that is already as the stream is kept (the browser's own
-  // film of its screen: H.264 at this size, a whole frame every second, AAC
+  // film of its screen: H.264 at this size, a whole frame for every piece, AAC
   // sound) is only cut into pieces. Nothing is converted, which costs this
   // machine next to nothing and the picture nothing at all.
   if (copy) {
@@ -120,7 +128,7 @@ export function ingestArgs({ list, size = '720', audio = true, h264 = true, copy
     ...(audio ? ['-map', '0:a:0?'] : []),
     '-vf', fit,
     ...picture,
-    '-g', String(30 * SEGMENT_S), '-keyint_min', String(30 * SEGMENT_S), '-sc_threshold', '0',
+    '-g', String(Math.round(30 * SEGMENT_S)), '-keyint_min', String(Math.round(30 * SEGMENT_S)), '-sc_threshold', '0',
     ...(audio ? ['-af', 'aresample=async=1', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2'] : ['-an']),
     ...keep,
   ];
@@ -130,6 +138,155 @@ export function ingestArgs({ list, size = '720', audio = true, h264 = true, copy
 export function readList(text) {
   const s = String(text || '');
   return { pieces: (s.match(/^#EXTINF:/gm) || []).length, ended: /^#EXT-X-ENDLIST/m.test(s) };
+}
+
+/*
+ * The newest few seconds of a recording, as it arrives, for a car to be
+ * played from.
+ *
+ * The pieces above can only be read once each is whole, and whoever reads
+ * them finds out about a new one by looking every half second: between them
+ * that is up to a second the car's picture is behind before it has begun. A
+ * car's ffmpeg is fed from here instead: it starts on a whole frame a little
+ * way back, and from then on gets the recording as it comes in, frame by
+ * frame. (The pieces are still kept: they are how a recording is known to be
+ * working, and what a car is played from when this can't be used.)
+ *
+ * The recording is an MPEG transport stream: packets of 188 bytes. A reader
+ * can start at a packet that begins a whole frame of the picture, given the
+ * two packets that say what is in the stream (kept here as they pass).
+ */
+const TS_PACKET = 188;
+const TAIL_MS = 5000;
+export class Tail {
+  constructor() {
+    this.rest = null; // bytes of a packet whose end hasn't arrived
+    this.chunks = []; // { data, at, key }: whole packets, when they came, and where in them a whole frame begins (-1: nowhere)
+    this.pat = null;
+    this.pmt = null;
+    this.pmtPid = -1;
+    this.readers = new Set();
+    this.over = false;
+    // How late the picture is getting here. Each frame says when it was taken,
+    // by the clock of whoever recorded it; the frame that got here soonest
+    // after that shows how long the trip takes at its best, and the rest are
+    // late by however much longer they took. (See `late` and `join`.)
+    this.clock = { least: Infinity };
+    this.lastPts = null;
+    this.lastFrameAt = 0;
+    this.trips = []; // the newest few frames' trips (ms)
+  }
+
+  // A frame of the picture, stamped `pts` (seconds), got here at `now`.
+  frame(pts, now) {
+    const trip = now - pts * 1000;
+    // (Stamps that jump: another recording, with another clock.)
+    if (this.lastPts !== null && (pts < this.lastPts - 2 || pts > this.lastPts + 60)) {
+      this.clock = { least: trip };
+      this.trips = [];
+    } else if (trip < this.clock.least) this.clock.least = trip;
+    this.lastPts = pts;
+    this.lastFrameAt = now;
+    this.trips.push(trip);
+    if (this.trips.length > 6) this.trips.shift();
+  }
+
+  /*
+   * How far behind its best the recording is arriving just now (ms): a busy
+   * machine that isn't recording the screen as fast as it happens. A car
+   * can't be shown anything newer than what has got here, so this much of
+   * its distance behind the page isn't its own.
+   */
+  late(now = Date.now()) {
+    if (!this.trips.length) return 0;
+    return Math.max(0, Math.min(...this.trips) - this.clock.least, now - this.lastFrameAt - 500);
+  }
+
+  push(buf, now = Date.now()) {
+    if (this.over) return;
+    let data = this.rest ? Buffer.concat([this.rest, buf]) : buf;
+    // (Out of step with the packets, which shouldn't happen: start again at the next one that is.)
+    if (data.length >= TS_PACKET && data[0] !== 0x47) {
+      let at = 1;
+      while (at < data.length && !(data[at] === 0x47 && (at + TS_PACKET >= data.length || data[at + TS_PACKET] === 0x47))) at++;
+      data = data.subarray(at);
+    }
+    const whole = data.length - (data.length % TS_PACKET);
+    this.rest = whole < data.length ? Buffer.from(data.subarray(whole)) : null;
+    if (!whole) return;
+    data = data.subarray(0, whole);
+    let key = -1;
+    let keyPts = null;
+    for (let o = 0; o < whole; o += TS_PACKET) {
+      if (!(data[o + 1] & 0x40)) continue; // not the start of anything
+      const pid = ((data[o + 1] & 0x1f) << 8) | data[o + 2];
+      const afc = (data[o + 3] >> 4) & 3;
+      const body = o + 4 + (afc & 2 ? 1 + data[o + 4] : 0);
+      if (pid === 0) {
+        // The list of programmes: where the one in this stream is described.
+        this.pat = Buffer.from(data.subarray(o, o + TS_PACKET));
+        const t = body + 1 + data[body]; // (past the pointer to the table)
+        if (t + 12 <= o + TS_PACKET) this.pmtPid = ((data[t + 10] & 0x1f) << 8) | data[t + 11];
+      } else if (pid === this.pmtPid) this.pmt = Buffer.from(data.subarray(o, o + TS_PACKET));
+      else if (body + 4 <= o + TS_PACKET && data[body] === 0 && data[body + 1] === 0 && data[body + 2] === 1 && data[body + 3] >= 0xe0 && data[body + 3] <= 0xef) {
+        // A frame of the picture begins here, with the time it was taken at.
+        let pts = null;
+        if (body + 14 <= o + TS_PACKET && data[body + 7] & 0x80) {
+          const b = body + 9;
+          pts = (((data[b] >> 1) & 7) * 1073741824 + data[b + 1] * 4194304 + (data[b + 2] >> 1) * 32768 + data[b + 3] * 128 + (data[b + 4] >> 1)) / 90000;
+          this.frame(pts, now);
+        }
+        // Marked as a place to start from? (Sound is marked so at every turn: it is the picture's that count.)
+        if (key < 0 && afc & 2 && data[o + 4] > 0 && data[o + 5] & 0x40) {
+          key = o;
+          keyPts = pts;
+        }
+      }
+    }
+    this.chunks.push({ data, at: now, key, keyPts });
+    while (this.chunks.length > 1 && now - this.chunks[0].at > TAIL_MS) this.chunks.shift();
+    for (const fn of this.readers) fn(data);
+  }
+
+  // Is there a whole frame to start a reader on?
+  get ready() {
+    return !this.over && !!this.pat && !!this.pmt && this.chunks.some((c) => c.key >= 0);
+  }
+
+  /*
+   * Start a reader at the newest whole frame that is at least `backMs` old
+   * (the oldest there is, if none is). `onData(buffer)` gets what comes
+   * after, and `onData(null)` when the recording ends. Returns { first,
+   * startedAt, taken, leave } or null: `first` is what to read first,
+   * `startedAt` when its first frame arrived here, and `taken()` when that
+   * frame was taken off the screen, on this machine's clock (ms), as well as
+   * is known by now. The two are a moment apart, or seconds on a machine
+   * that was too busy to keep up as the recording began.
+   */
+  join(backMs, onData, now = Date.now()) {
+    if (!this.ready) return null;
+    let pick = -1;
+    for (let i = this.chunks.length - 1; i >= 0; i--) {
+      if (this.chunks[i].key < 0) continue;
+      pick = i;
+      if (now - this.chunks[i].at >= backMs) break;
+    }
+    const parts = [this.pat, this.pmt, this.chunks[pick].data.subarray(this.chunks[pick].key)];
+    for (let i = pick + 1; i < this.chunks.length; i++) parts.push(this.chunks[i].data);
+    this.readers.add(onData);
+    const { at, keyPts } = this.chunks[pick];
+    const clock = this.clock;
+    const taken = () => (keyPts === null || !Number.isFinite(clock.least) ? at : Math.min(at, keyPts * 1000 + clock.least));
+    return { first: Buffer.concat(parts), startedAt: at, taken, leave: () => this.readers.delete(onData) };
+  }
+
+  end() {
+    if (this.over) return;
+    this.over = true;
+    for (const fn of this.readers) fn(null);
+    this.readers.clear();
+    this.chunks = [];
+  }
 }
 
 const shares = new Map(); // profile → the share that is on
@@ -185,6 +342,8 @@ class Share {
     this.onReady = null;
     this.onReplaced = null;
     this.onStopped = null; // ended from outside (endShare)
+    // The browser's own film can be read as it comes (see Tail). A recording that has to be converted first can't.
+    this.tail = copy ? new Tail() : null;
 
     this.ff = spawnImpl(config.ffmpegBin, ingestArgs({ list: this.list, size: this.size, audio: this.audio, h264, copy: !!copy }), {
       stdio: ['pipe', 'ignore', 'pipe'],
@@ -238,12 +397,13 @@ class Share {
     // ffmpeg not keeping up with a recording made in real time means something is wrong with it.
     if (this.ff.stdin.writableLength > 32 * 1024 * 1024) return this.fail('This server fell too far behind the page.');
     this.ff.stdin.write(chunk);
+    if (this.tail) this.tail.push(chunk);
   }
 
   // How many seconds of stream there have been so far: the pieces that have
-  // come and gone, and the ones still listed. (Looked up at most once a second.)
+  // come and gone, and the ones still listed. (Looked up a few times a second at most.)
   edge(now = Date.now()) {
-    if (now - this.edgeAt > 1000) {
+    if (now - this.edgeAt > 200) {
       this.edgeAt = now;
       try {
         const text = fs.readFileSync(this.list, 'utf8');
@@ -267,7 +427,8 @@ class Share {
   info() {
     const { height } = SCREEN_SIZES[this.size];
     return {
-      inputs: [{ url: this.list, list: true, mirror: true, hasVideo: true, hasAudio: this.audio }],
+      // (`tail`: it can be read as it arrives, from the newest of it. See Tail, and stream.js.)
+      inputs: [{ url: this.list, list: true, mirror: true, tail: !!(this.tail && this.tail.ready), hasVideo: true, hasAudio: this.audio }],
       live: true,
       mirror: true,
       height,
@@ -290,6 +451,7 @@ class Share {
     if (this.done) return;
     this.done = why;
     clearInterval(this.watch);
+    if (this.tail) this.tail.end();
     const current = shares.get(this.profile) === this;
     if (current) shares.delete(this.profile);
     // Closing the recording lets ffmpeg close the stream properly, so the cars reading it come to its end.

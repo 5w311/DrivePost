@@ -60,6 +60,16 @@ export function cleanItem(raw) {
   return { ...row, thumb: thumbFor(raw.id) };
 }
 
+// What is known of a page's own video, or null.
+function cleanMedia(m) {
+  if (!m || (m.status !== 'playing' && m.status !== 'paused')) return null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+  return { status: m.status, t: num(m.t), d: num(m.d), rate: num(m.rate) || 1, seek: m.seek !== false, at: num(m.at) || Date.now() };
+}
+
+const AUTO_START = '480'; // where Auto begins on a server whose own default is Auto
+const AUTO_HOLD_MS = 10 * 60 * 1000; // how long Auto stays below a quality the connection couldn't carry
+
 export class Store extends EventEmitter {
   constructor({ dataDir, defaultQuality }) {
     super();
@@ -74,7 +84,12 @@ export class Store extends EventEmitter {
     this.searches = Array.isArray(saved.searches) ? saved.searches.map(cleanSearch).filter(Boolean).slice(0, SEARCHES_MAX) : [];
     this.progress = saved.progress && typeof saved.progress === 'object' ? saved.progress : {};
     this.settings = { quality: defaultQuality, ...(saved.settings || {}) };
-    if (!QUALITIES.includes(this.settings.quality)) this.settings.quality = defaultQuality;
+    if (!QUALITIES.includes(this.settings.quality) && this.settings.quality !== 'auto') this.settings.quality = defaultQuality;
+    // Auto: where it stands (it starts in the middle and finds its level), and the most this car's screen has shown it can play.
+    if (!QUALITIES.includes(this.settings.autoLevel)) this.settings.autoLevel = QUALITIES.includes(defaultQuality) ? defaultQuality : AUTO_START;
+    if (!QUALITIES.includes(this.settings.autoMax)) delete this.settings.autoMax;
+    delete this.settings.fill; // (a setting that is no more)
+    this.autoHeld = null; // Auto came down from a quality the connection couldn't carry: { at: that quality, until } (not tried again before then)
     if (!['auto', 'mpeg1'].includes(this.settings.format)) this.settings.format = 'auto';
     this.seq = saved.seq || 0;
     // Bring back what was playing, but paused so it waits for a tap in the car.
@@ -97,11 +112,23 @@ export class Store extends EventEmitter {
   }
 
   // What actually plays: the chosen quality, unless the car stepped down for
-  // this video because it or the connection couldn't keep up.
+  // this video because it or the connection couldn't keep up. With Auto
+  // chosen, the level Auto stands at: it comes down when the car can't keep
+  // up and goes up when the car has measured room to spare (stepDown and
+  // stepUp, below), and stays where it got to from one video to the next.
   playQuality() {
+    if (this.settings.quality === 'auto') return this.settings.autoLevel;
     const chosen = this.settings.quality;
     if (this.autoCap && QUALITIES.indexOf(this.autoCap) < QUALITIES.indexOf(chosen)) return this.autoCap;
     return chosen;
+  }
+
+  // The highest quality Auto may go up to just now.
+  autoCeiling(now = Date.now()) {
+    let top = QUALITIES.length - 1;
+    if (this.settings.autoMax) top = Math.min(top, QUALITIES.indexOf(this.settings.autoMax));
+    if (this.autoHeld && now < this.autoHeld.until) top = Math.min(top, QUALITIES.indexOf(this.autoHeld.at) - 1);
+    return Math.max(0, top);
   }
 
   resumePoint(item) {
@@ -129,6 +156,8 @@ export class Store extends EventEmitter {
       carOnline: this.carOnline,
       position: this.position,
       page: this.page,
+      // This machine's clock as this is sent: a page's video is said to be at a spot "at" a moment on it.
+      clock: Date.now(),
     };
   }
 
@@ -251,6 +280,12 @@ export class Store extends EventEmitter {
       phase: info.phase === 'live' || (info.phase === undefined && before.phase === 'live') ? 'live' : 'opening',
       // The browser's own ad blocker, for this page: at work when it opened ('up'), not yet ('late'), or not known ('').
       blocker: ['up', 'late'].includes(info.blocker ?? before.blocker) ? info.blocker ?? before.blocker : '',
+      // The page's own video, as the browser's media controls have it: playing or paused, where (`t`, at the moment `at`) and how long.
+      media: cleanMedia(info.media !== undefined ? info.media : before.media),
+      // That video is being held for a car that isn't keeping up (page-keeper.js).
+      waiting: !!(info.waiting ?? before.waiting),
+      // About how far behind the browser's screen the car's picture is, in seconds.
+      lag: Number.isFinite(info.lag ?? before.lag) ? Math.max(0, Math.min(60, info.lag ?? before.lag)) : 0,
       since: before.since,
     };
     this.keepPage(before);
@@ -310,6 +345,23 @@ export class Store extends EventEmitter {
     if (!this.now || this.now.id !== PAGE_ID || !this.paused) return;
     this.now = { ...this.now, seq: ++this.seq };
     this.position = { seq: this.now.seq, t: 0, state: 'loading', at: Date.now() };
+  }
+
+  // The car is showing the page, and the page's own video has been paused
+  // from inside the page (not from the car's or a phone's own button, and
+  // not held for a car that is stuck). The screens show it as paused, and
+  // their play buttons play it.
+  pausedInPage() {
+    const p = this.page;
+    return !!(this.now && this.now.id === PAGE_ID && !this.paused && p && p.media && p.media.status === 'paused' && !p.waiting);
+  }
+
+  // Where the page's own video is at this moment (seconds), or null if the browser knows of none.
+  pageMediaTime(now = Date.now()) {
+    const m = this.page && this.page.media;
+    if (!m || m.t === null) return null;
+    const t = m.t + (m.status === 'playing' ? ((now - m.at) / 1000) * m.rate : 0);
+    return m.d !== null ? Math.min(t, m.d) : t;
   }
 
   // The page is what is on: its video is asked to pause, play or skip (server.js passes it to the browser).
@@ -383,36 +435,84 @@ export class Store extends EventEmitter {
         if (this.now) this.paused = true;
         break;
       case 'resume':
+        // (A page's video that was paused in the page itself: the car is showing the page all along, and only the video is played.)
+        if (this.pausedInPage()) {
+          this.pageMedia('play');
+          break;
+        }
         if (this.now && this.paused) this.pageMedia('play');
         this.backToNow();
         if (this.now) this.paused = false;
         break;
       case 'toggle':
+        if (this.pausedInPage()) {
+          this.pageMedia('play');
+          break;
+        }
         if (this.now) this.pageMedia(this.paused ? 'play' : 'pause');
         this.backToNow();
         if (this.now) this.paused = !this.paused;
         break;
-      case 'seek':
-        this.seekTo(Number(data.to) || 0);
+      case 'seek': {
+        // On a page, the time bar is the page's own video's: it is skipped by the difference.
+        const at = this.pageMediaTime();
+        if (this.now && this.now.id === PAGE_ID) {
+          if (at !== null) this.pageMedia('seek', (Number(data.to) || 0) - at);
+        } else this.seekTo(Number(data.to) || 0);
         break;
+      }
       case 'skip':
         if (this.now && this.now.id === PAGE_ID) this.pageMedia('seek', Number(data.by) || 0);
         else this.seekTo(this.currentTime() + (Number(data.by) || 0));
         break;
-      case 'restart':
-        this.seekTo(0);
+      case 'restart': {
+        const at = this.pageMediaTime();
+        if (this.now && this.now.id === PAGE_ID) {
+          if (at !== null) this.pageMedia('seek', -at);
+        } else this.seekTo(0);
         break;
-      case 'quality':
-        if (!QUALITIES.includes(String(data.q))) return 'Bad quality';
-        this.settings = { ...this.settings, quality: String(data.q) };
+      }
+      case 'quality': {
+        const q = String(data.q);
+        if (!QUALITIES.includes(q) && q !== 'auto') return 'Bad quality';
+        const was = this.playQuality();
+        const settings = { ...this.settings, quality: q };
+        if (q === 'auto' && this.settings.quality !== 'auto') {
+          // Auto carries on from what was playing, with a clean slate: nothing it learned last time holds it back.
+          settings.autoLevel = was;
+          delete settings.autoMax;
+          this.autoHeld = null;
+        }
+        this.settings = settings;
         this.autoCap = null;
-        this.restartStream();
+        // (Nothing to start over for when what plays stays the same.)
+        if (this.playQuality() !== was) this.restartStream();
         break;
+      }
       case 'stepDown': {
-        // From the car: drop one level for the rest of this video.
+        // From the car: it can't keep up. One level down: for the rest of
+        // this video, or, with Auto, until the car measures room to go up again.
         const i = QUALITIES.indexOf(this.playQuality());
         if (i <= 0 || !this.now) return null;
-        this.autoCap = QUALITIES[i - 1];
+        if (this.settings.quality === 'auto') {
+          const settings = { ...this.settings, autoLevel: QUALITIES[i - 1] };
+          // The screen itself can't play that quality: Auto doesn't go back up to it. The connection (or
+          // this server) couldn't carry it: that may be different a few miles on, so it is tried again later.
+          if (data.why === 'screen') settings.autoMax = QUALITIES[i - 1];
+          else this.autoHeld = { at: QUALITIES[i], until: Date.now() + AUTO_HOLD_MS };
+          this.settings = settings;
+        } else this.autoCap = QUALITIES[i - 1];
+        this.restartStream();
+        break;
+      }
+      case 'stepUp': {
+        // From the car, with Auto chosen: what it is being sent arrives several times faster than it plays, so there is room for the next quality up.
+        // (`x`: how many times faster. A level up is about twice the data; with eight times the room, two levels go in one step, and the picture starts over once instead of twice.)
+        if (this.settings.quality !== 'auto' || !this.now) return null;
+        const i = QUALITIES.indexOf(this.playQuality());
+        const to = Math.min(i + (Number(data.x) >= 8 ? 2 : 1), this.autoCeiling());
+        if (i < 0 || to <= i) return null;
+        this.settings = { ...this.settings, autoLevel: QUALITIES[to] };
         this.restartStream();
         break;
       }
@@ -431,8 +531,7 @@ export class Store extends EventEmitter {
         this.settings = { ...this.settings, blockAds: !!data.on };
         break;
       case 'fill':
-        // In fullscreen: zoom the picture to cover the window instead of fitting it.
-        this.settings = { ...this.settings, fill: !!data.on };
+        // (There was a Fill button once. A page that was open since before it went may still ask: nothing to do.)
         break;
       case 'clearHistory':
         this.history = [];

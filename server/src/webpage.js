@@ -24,13 +24,14 @@ import fs from 'node:fs';
 import { config } from './config.js';
 import { addressAllowed, linkIn, siteOf } from './links.js';
 import { startShare } from './mirror.js';
-import { pageLag } from './stream.js';
+import { pageLag, pageAfresh, onPageCar, PAGE_START_LAG_S } from './stream.js';
+import { PageKeeper } from './page-keeper.js';
 
 const OPEN_WITHIN_MS = 45 * 1000; // a page whose picture hasn't come up by then isn't going to
 const FRESH_STARTS = 2; // times in a row a recording may be started afresh before giving up
 const STALLED_MS = 12 * 1000; // a recording that stops arriving for this long has stalled
 // About how far behind the browser's screen a car's picture runs, when the car hasn't been playing long enough to say.
-const BEHIND_S = 5;
+const BEHIND_S = PAGE_START_LAG_S;
 
 let agent = null; // the browser's program, once it has connected: { ws, address }
 let page = null; // the page that is open, if one is
@@ -39,6 +40,7 @@ let h264 = true; // whether this ffmpeg can make H.264 for the copy it keeps (se
 // What the rest of the server does for this module (server.js fills these in).
 const hooks = {
   shown: () => false, // (profile): is the page what that profile's car is playing?
+  wanted: () => false, // (profile): is the page what its car is meant to be playing, whether or not the car is there just now?
   changed: () => {}, // (profile, info | null): the page is opening, has changed, or is closed
   toast: () => {}, // (profile, message)
   availability: () => {}, // pages became possible, or stopped being
@@ -144,6 +146,7 @@ export function pageAds(profile, on) {
   mine.held = null;
   mine.stopped = 0;
   mine.blocker = '';
+  mine.keeper.handOver();
   toAgent({ t: 'ads', id: mine.id, on: !!on });
   console.log(`[page] opening it again ${on ? 'with' : 'without'} the ad blocker`);
   hooks.changed(profile, view(mine));
@@ -197,6 +200,7 @@ export function attachAgent(ws, req) {
       else if (msg.phase === 'failed') endPage(String(msg.message || 'The page stopped.').slice(0, 300));
       else if (msg.phase === 'closed') endPage();
     } else if (msg.t === 'said') said(msg);
+    else if (msg.t === 'media') mediaSaid(msg.media);
   });
   ws.on('close', () => {
     if (agent !== mine) return;
@@ -249,13 +253,73 @@ function moved(msg) {
   hooks.changed(page.profile, view(page));
 }
 
+/*
+ * What the browser's media controls say the page's video is doing: playing
+ * or paused, how far in, how long (or null: nothing there). The screens are
+ * told, so their own buttons and time bar go by the video itself, and so is
+ * the keeper, which has the video wait for a car that is stuck.
+ */
+function mediaSaid(m) {
+  const mine = page;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+  mine.media =
+    m && (m.status === 'playing' || m.status === 'paused')
+      ? { status: m.status, t: num(m.t), d: num(m.d), rate: num(m.rate) || 1, seek: m.seek !== false, at: Date.now() }
+      : null;
+  mine.keeper.media(mine.media);
+  hooks.changed(mine.profile, view(mine));
+}
+
+// The car's own word on how it is getting on with the page's picture (stream.js passes it on).
+onPageCar((profile, what, info) => {
+  const mine = pageOf(profile);
+  if (!mine) return;
+  if (what === 'report') mine.keeper.car(info.stream, info.state, info.lag, info.late);
+  else mine.keeper.gone(info.stream);
+  kept(mine);
+});
+// Looked at twice a second: a car that has gone quiet says nothing, which is how it is known.
+const keepTimer = setInterval(() => {
+  if (!page || !page.keeper) return;
+  page.keeper.show(page.phase === 'live' && hooks.wanted(page.profile));
+  page.keeper.tick();
+  kept(page);
+}, 500);
+keepTimer.unref();
+// The screens are told when the video starts or stops waiting for the car, and when the car's distance behind the page has changed.
+function kept(mine) {
+  const lag = mine.keeper.lag();
+  if (mine.keeper.waiting) mine.lettingGo = 0;
+  else if (mine.waitingSaid && !mine.lettingGo) mine.lettingGo = Date.now() + 2000;
+  const waiting = view(mine).waiting;
+  const moved = lag !== null && Math.abs(lag - (mine.lagSaid ?? PAGE_START_LAG_S)) >= 1;
+  if (waiting === mine.waitingSaid && !moved) return;
+  if (waiting !== mine.waitingSaid) console.log(waiting ? "[page] the car isn't showing the page (it is loading, or its connection has dipped): the page's video waits for it" : '[page] the car is showing the page again: its video carries on');
+  mine.waitingSaid = waiting;
+  if (!waiting) mine.lettingGo = 0;
+  if (moved) mine.lagSaid = Math.round(lag * 2) / 2;
+  hooks.changed(mine.profile, view(mine));
+}
+
 function said(msg) {
   // A skip was asked for and the browser knows of nothing playing to skip in. (A pause that finds nothing has still paused the car.)
   if (msg.what === 'seek' && msg.result === 'none') hooks.toast(page.profile, 'Nothing on the page is playing that could be skipped in.');
 }
 
 // What the screens are told about it.
-const view = (p) => ({ url: p.url, title: p.title, site: p.site, phase: p.phase, blocker: p.blocker || '' });
+const view = (p) => ({
+  url: p.url,
+  title: p.title,
+  site: p.site,
+  phase: p.phase,
+  blocker: p.blocker || '',
+  // The page's own video, when the browser knows of one: { status, t, d, rate, seek, at } (t at the moment `at`).
+  media: p.media || null,
+  // That video is being held for a car that isn't keeping up. (And for the moment after it is let
+  // go of, until the video says it is playing again: a screen would otherwise take it for a pause made in the page.)
+  waiting: !!(p.keeper && p.keeper.waiting) || (Date.now() < (p.lettingGo || 0) && !!p.media && p.media.status === 'paused'),
+  lag: p.lagSaid ?? PAGE_START_LAG_S, // about how far behind the browser's screen the car's picture is (seconds)
+});
 
 // ---------- opening and closing ----------
 
@@ -287,6 +351,7 @@ export async function openPage(profile, text) {
     page.held = null;
     page.stopped = 0;
     page.blocker = '';
+    page.keeper.handOver();
     toAgent({ t: 'go', id: page.id, url });
     console.log(`[page] on to ${site}`);
     hooks.changed(profile, view(page));
@@ -301,6 +366,10 @@ export async function openPage(profile, text) {
     phase: 'opening',
     sound: true,
     held: null, // its video was paused from the car or a phone: how far behind it the car was showing (seconds)
+    media: null, // the page's own video, as the browser's media controls last said (see mediaSaid)
+    keeper: null, // keeps that video and the car together (page-keeper.js)
+    waitingSaid: false,
+    lagSaid: null,
     stopped: 0, // requests to ad machines refused for it
     blocker: '', // the browser's own ad blocker, for this page: 'up', 'late' (see blockerSaid), or '' while not known
     share: null,
@@ -311,6 +380,14 @@ export async function openPage(profile, text) {
     idleSince: 0,
     askedAgainAt: 0,
     openTimer: null,
+  });
+  const media = (what, by = 0) => toAgent({ t: 'media', id: mine.id, what, by });
+  mine.keeper = new PageKeeper({
+    base: PAGE_START_LAG_S,
+    pause: () => media('pause'),
+    play: () => media('play'),
+    seek: (by) => media('seek', by),
+    afresh: () => pageAfresh(profile),
   });
   mine.openTimer = setTimeout(() => {
     if (page === mine && mine.phase !== 'live') endPage("The page didn't come up in the server's browser.");
@@ -379,6 +456,7 @@ export function watchPage(ws, profile) {
     }
     if (!msg || typeof msg !== 'object') return;
     mine.idleSince = 0;
+    mine.keeper.steered();
     if (msg.t === 'input' && KINDS.has(msg.kind)) {
       toAgent({ t: 'input', id: mine.id, kind: msg.kind, x: Number(msg.x) || 0, y: Number(msg.y) || 0, dy: Number(msg.dy) || 0, text: String(msg.text || '').slice(0, 500), key: String(msg.key || '').slice(0, 20) });
     } else if (msg.t === 'nav' && NAVS.has(msg.what)) toAgent({ t: 'nav', id: mine.id, what: msg.what });
@@ -404,10 +482,17 @@ export function pageMedia(profile, what, by = 0) {
   if (mine && what === 'show' && mine.held !== null) what = 'play';
   if (!mine || !['pause', 'play', 'seek'].includes(what)) return false;
   if (what === 'pause') {
-    if (mine.held === null) mine.held = Math.min(30, pageLag(profile) ?? BEHIND_S);
+    // (Already waiting for a car that was stuck: it is owed exactly what it hadn't shown. A video
+    // that isn't playing has nothing to go back over.)
+    const owed = mine.keeper.handOver();
+    if (mine.held === null) mine.held = owed !== null ? owed : mine.media && mine.media.status !== 'playing' ? 0 : Math.min(30, pageLag(profile) ?? BEHIND_S);
   } else if (what === 'play') {
-    if (mine.held !== null) toAgent({ t: 'media', id: mine.id, what: 'seek', by: -Math.round(mine.held * 10) / 10 });
+    const back = mine.held;
     mine.held = null;
+    if (back) toAgent({ t: 'media', id: mine.id, what: 'seek', by: -Math.round(back * 10) / 10 });
+    // Played again after a pause made here: the car starts a new stream for
+    // it, and the video starts once the car has that picture (the keeper sees to it).
+    if (back !== null && mine.keeper.playWhenBack()) return true;
   }
   toAgent({ t: 'media', id: mine.id, what, by: what === 'seek' ? Math.max(-600, Math.min(600, Number(by) || 0)) : 0 });
   return true;

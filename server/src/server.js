@@ -91,7 +91,8 @@ function storeFor(id) {
         else prewarm(id, quality);
       };
       if (store.now) warm(store.now.id, store.playQuality());
-      if (store.queue[0]) warm(store.queue[0].id, store.settings.quality);
+      // (At the quality that will play: with Auto chosen, the level Auto stands at.)
+      if (store.queue[0]) warm(store.queue[0].id, store.settings.quality === 'auto' ? store.playQuality() : store.settings.quality);
     });
     store.on('pageMedia', (what, by) => pageMedia(id, what, by));
     // A page kept under Recent was asked for again.
@@ -1079,6 +1080,10 @@ usePages({
   shown: (profile) => {
     const store = auth.profile(profile) ? storeFor(profile) : null;
     return !!store && !!store.now && isPageId(store.now.id) && store.carOnline && !store.paused;
+  },
+  wanted: (profile) => {
+    const store = auth.profile(profile) ? storeFor(profile) : null;
+    return !!store && !!store.now && isPageId(store.now.id) && !store.paused;
   },
   changed: (profile, info) => {
     if (!auth.profile(profile)) return;

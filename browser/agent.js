@@ -18,9 +18,11 @@
  *     on to DrivePost as it is made.
  * It never reaches into a page. It can't read one, change one or run
  * anything in one, and the browser has no remote-control interface switched
- * on for it to do so. All it knows of the page is the name on its window.
- * Play, pause and skipping go through the browser's own media controls, the
- * ones the keys on a keyboard and a desktop's media buttons use.
+ * on for it to do so. All it knows of the page is the name on its window,
+ * and what the browser's own media controls say is playing: the ones the
+ * keys on a keyboard and a desktop's media buttons use. Play, pause and
+ * skipping go through those, and so does knowing whether the page's video
+ * is playing, how far in it is and how long it is (media.js).
  *
  * For a profile that has "Block ads" switched on, the browser is started
  * with one extension: uBlock Origin Lite, an ad blocker, as its author
@@ -35,6 +37,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
+import { readPlayer, isNews } from './media.js';
 
 const env = process.env;
 const SERVER = env.DRIVEPOST_WS || 'ws://drivepost:8080/ws/browser';
@@ -78,6 +81,7 @@ const WHEEL_PX = 120; // how far one notch of a mouse wheel moves a page
 // sound is set back by the middle of that, so the two are within a frame or
 // two of each other either way.
 const PICTURE_LAG_S = 0.06;
+const PIECE_FRAMES = 15; // a whole frame this often in the film (30 a second): half a second, the length DrivePost keeps its pieces at
 
 /*
  * The blocker comes up a moment after the browser does: its rules for what
@@ -292,6 +296,12 @@ class Session {
     this.stderr = '';
     this.todo = []; // steering that is waiting its turn (see steer)
     this.steering = false;
+    this.mon = null; // listens for the browser's media controls saying something changed
+    this.player = null; // the browser's name on the message bus, once something in a page has played
+    this.mediaSaid = null; // what DrivePost was last told of the page's video
+    this.mediaSaidAt = 0;
+    this.mediaPoll = null;
+    this.reading = false;
   }
 
   say(phase, extra = {}) {
@@ -306,6 +316,72 @@ class Session {
     this.film();
     // What the page calls itself can change at any time.
     this.poll = setInterval(() => this.look().catch(() => {}), 2000);
+    this.watchMedia();
+  }
+
+  /*
+   * What the page's video is doing, as the browser's media controls tell it:
+   * playing or paused, how far in, how long. DrivePost is told when that
+   * changes other than by time passing: a pause or a play made in the page
+   * itself, a skip, another video. The controls announce most changes, and
+   * are asked every couple of seconds as well (not every skip is announced).
+   */
+  watchMedia() {
+    const rules = [
+      "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/mpris/MediaPlayer2'",
+      "type='signal',interface='org.mpris.MediaPlayer2.Player',member='Seeked'",
+      "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
+    ];
+    let due = null;
+    const soon = () => {
+      if (due || this.over) return;
+      due = setTimeout(() => {
+        due = null;
+        this.readMedia().catch(() => {});
+      }, 150);
+    };
+    try {
+      const mon = (this.mon = spawn('dbus-monitor', ['--session', ...rules], { stdio: ['ignore', 'pipe', 'ignore'], env: this.desk.vars }));
+      mon.on('error', () => {});
+      mon.stdout.on('data', (d) => {
+        // (The browser was started again, or its controls came or went: its name on the bus is another.)
+        if (/NameOwnerChanged/.test(String(d))) this.player = null;
+        soon();
+      });
+    } catch {}
+    this.mediaPoll = setInterval(soon, 2000);
+  }
+
+  async readMedia() {
+    if (this.over || this.reading) return;
+    this.reading = true;
+    try {
+      const bus = (dest, ...rest) => run('dbus-send', ['--session', `--dest=${dest}`, '--type=method_call', '--print-reply', '--reply-timeout=1500', ...rest], { vars: this.desk.vars });
+      let found = null;
+      if (alive(this.proc)) {
+        if (!this.player) {
+          const names = await bus('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames');
+          const m = /org\.mpris\.MediaPlayer2\.chrom[A-Za-z0-9_.]*/.exec(names.out);
+          this.player = m ? m[0] : null;
+        }
+        if (this.player) {
+          const at = Date.now();
+          const all = await bus(this.player, '/org/mpris/MediaPlayer2', 'org.freedesktop.DBus.Properties.GetAll', 'string:org.mpris.MediaPlayer2.Player');
+          if (all.code !== 0) this.player = null;
+          else found = readPlayer(all.out, at);
+        }
+      }
+      if (this.over) return;
+      if (found && found.status === 'stopped') found = null; // controls with nothing in them
+      // Said when it is news, and every so often anyway, so that what DrivePost works out from it can't drift.
+      const now = Date.now();
+      if ((!found && !this.mediaSaid) || (!isNews(this.mediaSaid, found) && now - this.mediaSaidAt < 10000)) return;
+      this.mediaSaid = found;
+      this.mediaSaidAt = now;
+      tell({ t: 'media', id: this.id, media: found ? { status: found.status, t: found.t, d: found.d, rate: found.rate, seek: found.seek } : null });
+    } finally {
+      this.reading = false;
+    }
   }
 
   // Start the browser on an address, as a person would from a desktop.
@@ -382,10 +458,11 @@ class Session {
       '-f', 'pulse', '-itsoffset', String(PICTURE_LAG_S), '-fragment_size', '8192', '-thread_queue_size', '512', '-i', 'drivepost.monitor',
       ...screen, '-framerate', String(VIEW.fps), '-draw_mouse', '1', '-thread_queue_size', '64', '-i', this.desk.display,
       // The recording never leaves this machine, so it can be a sharp one. DrivePost makes of it what the car needs.
+      // (A whole frame twice a second: DrivePost keeps it in pieces that each begin with one, and a car can start at any of them.)
       '-map', '0:v', '-map', '1:a',
       // (Each frame keeps the time it was taken at: none are added or dropped here to even them out.)
       '-fps_mode', 'passthrough',
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '20', '-maxrate', '8M', '-bufsize', '8M', '-g', '30', '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '20', '-maxrate', '8M', '-bufsize', '8M', '-g', String(PIECE_FRAMES), '-pix_fmt', 'yuv420p',
       // (The sound is held to its times too, should the two clocks ever drift over a long evening.)
       '-af', 'aresample=async=1', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
       '-output_ts_offset', `-${since}`,
@@ -637,6 +714,9 @@ class Session {
     if (this.over) return;
     this.over = true;
     clearInterval(this.poll);
+    clearInterval(this.mediaPoll);
+    if (alive(this.mon)) this.mon.kill();
+    this.mon = null;
     if (session === this) session = null;
     this.say(phase, message ? { message } : {});
     const ff = this.ff;

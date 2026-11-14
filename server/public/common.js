@@ -156,6 +156,58 @@
     return state.now.startAt || 0;
   };
 
+  /*
+   * A page's own video. What plays on a page is in the server's browser,
+   * and where that browser's media controls know of a video, the server
+   * passes on what they say: playing or paused, where it is and how long.
+   * The time bar and the play button then go by the video itself.
+   *
+   * A screen can ask how the video was a few seconds ago, which is what the
+   * car does: its picture of the page runs that far behind the page.
+   */
+  DT.PageVideo = function () {
+    this.log = []; // what was said and from when, by the server's clock: { m, at, waiting }
+    this.skew = 0; // the server's clock minus this device's
+    this.lag = 0;
+  };
+  DT.PageVideo.prototype.take = function (state) {
+    if (state && state.clock) this.skew = state.clock - Date.now();
+    var p = state && state.now && state.now.id === 'page' ? state.page : null;
+    if (!p) {
+      this.log = [];
+      this.lag = 0;
+      return;
+    }
+    this.lag = p.lag || 0;
+    var m = p.media || null;
+    var last = this.log[this.log.length - 1];
+    var same = last && !!last.m === !!m && last.waiting === !!p.waiting &&
+      (!m || (last.m.status === m.status && last.m.t === m.t && last.m.at === m.at && last.m.d === m.d));
+    if (same) return;
+    this.log.push({ m: m, at: m ? m.at : Date.now() + this.skew, waiting: !!p.waiting });
+    if (this.log.length > 60) this.log.shift();
+  };
+  // The video as it was `behind` seconds ago: { status, t, d, seek, waiting }, or null for none.
+  DT.PageVideo.prototype.at = function (behind) {
+    var wall = Date.now() + this.skew - (behind || 0) * 1000;
+    var e = null;
+    var next = null;
+    for (var i = 0; i < this.log.length; i++) {
+      if (this.log[i].at <= wall) e = this.log[i];
+      else {
+        next = this.log[i];
+        break;
+      }
+    }
+    if (!e || !e.m) return null;
+    var m = e.m;
+    var t = m.t === null ? null : m.t + (m.status === 'playing' ? ((wall - m.at) / 1000) * (m.rate || 1) : 0);
+    if (t !== null && m.d !== null) t = Math.min(t, m.d);
+    // (It stopped a moment before word of that got here: it never played past where it stopped.)
+    if (t !== null && next && next.m && next.m.status === 'paused' && next.m.t !== null && next.m.t >= m.t) t = Math.min(t, next.m.t);
+    return { status: m.status, t: t, d: m.d, seek: m.seek !== false, waiting: e.waiting };
+  };
+
   var ICONS = {
     play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/>',
     pause: '<rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/>',

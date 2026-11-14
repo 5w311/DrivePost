@@ -94,5 +94,6 @@ export const config = {
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',
   ffprobeBin: env.FFPROBE_BIN || 'ffprobe',
   maxStreams: int('MAX_STREAMS', 3),
-  defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) ? env.DEFAULT_QUALITY : '480',
+  // (auto: each car is given what its connection has shown it can take. See Store.playQuality.)
+  defaultQuality: QUALITIES.includes(env.DEFAULT_QUALITY) || env.DEFAULT_QUALITY === 'auto' ? env.DEFAULT_QUALITY : '480',
 };

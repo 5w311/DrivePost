@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { config } from './config.js';
 import { streamInfo, forgetStream, routeOrder, routeWorked, routeRefused, routeNotice, linkStatus, NO_SUCH_FORMAT, TEST_PATTERN_ID } from './youtube.js';
 import { isLinkId, linkStreamInfo, forgetLink, guardedFetch, LINK_PROTOCOLS } from './links.js';
-import { isPageId, pageStream, shareExpected } from './mirror.js';
+import { isPageId, pageStream, shareExpected, SEGMENT_S, START_PIECES } from './mirror.js';
 import { trimList, offerList } from './segment-list.js';
 import { TsSplitter, KIND_VIDEO } from './ts-chunker.js';
 
@@ -25,11 +25,10 @@ const startedOverForSound = new Map();
 const BACKLOG_HIGH = 4 * 1024 * 1024;
 const BACKLOG_LOW = 1024 * 1024;
 // A page in the server's browser is recorded as it is watched, so a car
-// starts with only a few seconds of it in hand. Each time its connection
-// dips it falls a little further behind the page, and what has been sent in
-// the meantime is then its reserve for the next dip: a car on mobile data
-// settles some seconds back and plays smoothly from there. Further behind
-// than this, it is started afresh from where the page is now (fellBehind).
+// starts with only a second or two of it in hand. When its connection dips
+// it falls behind the page; page-keeper.js has the page's video wait for it
+// and brings it back up to the page. This is the backstop behind that: a car
+// further behind than this is started afresh from where the page is now.
 const SCREEN_AHEAD = 20;
 // A page's picture, made into H.264 for a car that can play it: about what
 // MPEG-1 needs two thirds more data for.
@@ -37,7 +36,28 @@ const PAGE_H264_KBPS = { 360: 450, 480: 850, 720: 1600, 1080: 1600 };
 // How far behind the browser's screen each profile's car is showing a page
 // (seconds), as last worked out. See pageLag.
 const pageLags = new Map();
-const CAPTURE_S = 1.5; // from the browser's screen to a piece of the stream on this machine
+const CAPTURE_S = 0.8; // from the browser's screen to a piece of the stream on this machine
+// Read as it arrives instead (mirror.js, Tail): a car's copy starts on a whole
+// frame about this far back, which is what it has in hand to carry it over a
+// hiccup in its connection, and so how far behind the page its picture is.
+const TAIL_BACK_MS = 800;
+const TAIL_CAPTURE_S = 0.15; // from the browser's screen to this machine, that way
+// How a car's stream of a page starts out: about that far behind the browser's screen (seconds).
+export const PAGE_START_LAG_S = 1.4;
+
+// Whoever keeps the page's video and the car together (page-keeper.js, by
+// way of webpage.js) is told what each profile's car says of its stream:
+// fn(group, 'report', { stream, state, lag, late }) twice a second (`late`:
+// how much of `lag` is the recording itself arriving late, seconds), and
+// fn(group, 'gone', { stream }) when a stream closes.
+let pageCar = () => {};
+export function onPageCar(fn) {
+  pageCar = fn;
+}
+// A profile's car is to start its stream of the page again, from where the page is now.
+export function pageAfresh(group) {
+  for (const entry of activeByGroup.get(group) || []) if (entry.afresh) entry.afresh();
+}
 
 // MP2 audio needs more bits than modern formats; 192k is where it stops
 // sounding rough, so the two higher tiers get that.
@@ -133,12 +153,19 @@ function inputArgs(input, startAt, live, cut) {
     return a;
   }
   if (input.mirror) {
-    // A page in the server's browser (mirror.js): a live stream kept on this machine, one
-    // new piece a second. Start three pieces back from the newest: the car
-    // then has a couple of seconds in hand from the first moment, which is
-    // what carries it over a late piece. Give up once the stream has stopped
-    // growing for a good ten seconds (ffmpeg looks again twice a second).
-    a.push('-live_start_index', '-3', '-max_reload', '24', '-m3u8_hold_counters', '24', '-i', input.url);
+    // A page in the server's browser (mirror.js): a live stream kept on this
+    // machine, a new piece twice a second. Start a few pieces back from the
+    // newest: the car then has a second or so in hand from the first moment,
+    // which is what carries it over a late piece. The stream is this
+    // machine's own and always of one make, so it isn't studied for five
+    // seconds first, as a stranger's would be: that would be five seconds the
+    // car starts behind. Give up once it has stopped growing for a good ten
+    // seconds (ffmpeg looks again twice a second).
+    a.push('-probesize', '400000', '-analyzeduration', '400000', '-fflags', '+nobuffer');
+    // Better still, it is read as it arrives (mirror.js, Tail): handed to this ffmpeg on its standard input
+    // from a whole frame a little way back, and from then on frame by frame, with no pieces to wait for.
+    if (input.piped) a.push('-f', 'mpegts', '-i', 'pipe:0');
+    else a.push('-live_start_index', String(-START_PIECES), '-max_reload', '24', '-m3u8_hold_counters', '24', '-i', input.url);
     return a;
   }
   // A file is picked up again where it left off if the connection drops. Not
@@ -476,7 +503,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   let codec = 'mpeg1';
   let passthrough = false;
 
-  const entry = { close: () => ws.close(4000, 'replaced') };
+  const entry = { close: () => ws.close(4000, 'replaced'), afresh: null };
+  let saidClock = null; // (a car whose page predates it saying how its player is doing: told by whether its clock moves)
   if (!activeByGroup.has(group)) activeByGroup.set(group, new Set());
   const active = activeByGroup.get(group);
   active.add(entry);
@@ -490,6 +518,10 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
   // Shows in `docker compose logs` and in the car's Stats readout.
   let firstDataAt = null;
   let startedAtEdge = null; // for a page: how far its stream had got where this car's copy starts
+  let tailedFrom = null; // for a page read as it arrives: when the frame this car's copy starts on arrived here (ms)
+  let tailTaken = null; // ...and when that frame was taken off the browser's screen (a function: it is known better as time goes on)
+  let tailLate = () => 0; // ...and how late the recording is arriving just now (ms)
+  let leaveTail = null;
   let speedLogged = false;
   function logSpeed(note) {
     // A page's picture arrives at the pace it is made: its speed says nothing about this machine.
@@ -546,8 +578,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
         }
         if (firstDataAt === null) {
           firstDataAt = Date.now();
-          // A page's stream is read from three pieces back from its newest (see inputArgs).
-          if (page && playable.share) startedAtEdge = Math.max(0, playable.share.edge() - 3);
+          // A page's stream is read from a few pieces back from its newest (see inputArgs).
+          if (page && playable.share) startedAtEdge = Math.max(0, playable.share.edge() - START_PIECES * SEGMENT_S);
         }
         // H.264 frames aren't sent in display order, so keep the furthest one.
         lastSentPts = lastSentPts === null ? pts : Math.max(lastSentPts, pts);
@@ -594,14 +626,14 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     // stream it is converted from. That much short of it, the conversion
     // here isn't keeping up (a busy machine), and carrying on would only
     // show the car an older and older page.
-    if (page && startedAtEdge !== null && lastSentPts !== null && splitter.firstVideoPts !== null) {
-      const reached = startedAtEdge + (lastSentPts - splitter.firstVideoPts);
-      const short = playable.share.edge() - reached;
+    if (page && lastSentPts !== null && splitter.firstVideoPts !== null && (tailedFrom !== null || startedAtEdge !== null)) {
+      const short =
+        tailedFrom !== null
+          ? (Date.now() - tailedFrom) / 1000 - (lastSentPts - splitter.firstVideoPts)
+          : playable.share.edge() - (startedAtEdge + (lastSentPts - splitter.firstVideoPts));
       if (short > SCREEN_AHEAD) return fellBehind('server');
-      // How far behind the browser's screen this car is showing the page:
-      // what it has been sent and not yet played, what hasn't been sent yet,
-      // and the moment the picture takes to get this far.
-      if (clientClock !== null) pageLags.set(group, { s: Math.max(0, a) + Math.max(0, short) + CAPTURE_S, at: Date.now() });
+      const lag = lagNow();
+      if (lag !== null) pageLags.set(group, { s: lag, at: Date.now() });
     }
     if (!flowPaused && (a > limit.high || backlog > BACKLOG_HIGH)) {
       logSpeed(backlog > BACKLOG_HIGH ? "held back by the car's connection, not the CPU" : '');
@@ -611,6 +643,31 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
       ff.stdout.resume();
       flowPaused = false;
     }
+  }
+  // How far behind the browser's screen this car is showing the page
+  // (seconds): what it has been sent and not yet played, what hasn't been
+  // sent yet, and the moment the picture takes to get this far. null until
+  // the car has said where it is.
+  function lagNow() {
+    if (!page || !ff || clientClock === null || lastSentPts === null || splitter.firstVideoPts === null) return null;
+    // Read as it arrives, the stream keeps time with the clock: the frame the car is showing was taken off the screen that long ago.
+    if (tailedFrom !== null) return Math.max(0, (Date.now() - tailTaken()) / 1000 - (clientClock - splitter.firstVideoPts)) + TAIL_CAPTURE_S;
+    if (startedAtEdge === null) return null;
+    const reached = startedAtEdge + (lastSentPts - splitter.firstVideoPts);
+    return Math.max(0, ahead()) + Math.max(0, playable.share.edge() - reached) + CAPTURE_S;
+  }
+  // The car is brought up to the page: it drops what it has and starts a new stream, from where the page is now.
+  if (page) {
+    entry.afresh = () => {
+      if (killed || closed) return;
+      killed = true;
+      if (ff) ff.kill('SIGKILL');
+      sendJson(ws, { type: 'afresh' });
+      // (A car page from before this was built doesn't know the word. A closed stream it does know: it asks for a new one.)
+      setTimeout(() => {
+        if (!closed) ws.close(4002, 'afresh');
+      }, 1500).unref();
+    };
   }
   function fellBehind(why) {
     if (killed || closed) return;
@@ -626,14 +683,23 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     try {
       const msg = JSON.parse(raw);
       if (typeof msg.clock === 'number') {
+        const moved = saidClock !== null && msg.clock - saidClock > 0.2;
+        saidClock = msg.clock;
         clientClock = msg.clock;
         checkFlow();
+        if (page && !killed && !closed) {
+          const lag = lagNow();
+          const state = typeof msg.state === 'string' ? msg.state.slice(0, 20) : moved ? 'playing' : 'waiting';
+          if (lag !== null) pageCar(group, 'report', { stream: entry, state, lag, late: tailLate() / 1000 });
+        }
       }
     } catch {}
   });
 
   ws.on('close', () => {
     closed = true;
+    if (leaveTail) leaveTail();
+    if (page) pageCar(group, 'gone', { stream: entry });
     handedOver.forEach((list) => list.done());
     active.delete(entry);
     if (!active.size && activeByGroup.get(group) === active) activeByGroup.delete(group);
@@ -676,6 +742,8 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     startAt: info.live ? 0 : startAt,
     codec,
     audio: info.inputs.some((i) => i.hasAudio),
+    // How tall the picture being sent is: a video that has nothing better than 480p is that at any quality asked for.
+    height: plan.height || null,
     // Another site's video that has to be converted: why, for the car's Stats.
     why: (codec === 'mpeg1' && want === 'h264' && !info.live && info.convert) || undefined,
     // Passed-through video keeps YouTube's own frame rate and bitrate.
@@ -696,16 +764,35 @@ export async function handleStream(ws, { id, startAt, quality, audioRate, want, 
     console.warn(`[stream ${id}] couldn't cut the segment list to start at ${Math.round(startAt)}s; ffmpeg is seeking in it by itself, so picture and sound may be out of step`);
   }
 
+  // A page whose recording can be read as it arrives is handed to ffmpeg that way.
+  const tail = page && info.inputs[0].tail && playable.share.tail && playable.share.tail.ready ? playable.share.tail : null;
   let args;
   try {
-    args = ffmpegArgs(info, startAt, quality, audioRate, codec, cuts);
+    args = ffmpegArgs(tail ? { ...info, inputs: [{ ...info.inputs[0], piped: true }] } : info, startAt, quality, audioRate, codec, cuts);
   } catch (err) {
     sendJson(ws, { type: 'error', message: err.message });
     ws.close();
     return;
   }
 
-  ff = spawn(config.ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  ff = spawn(config.ffmpegBin, args, { stdio: [tail ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  if (tail) {
+    const into = ff.stdin;
+    into.on('error', () => {}); // ffmpeg went away mid-write: its exit is dealt with below
+    const joined = tail.join(TAIL_BACK_MS, (data) => {
+      if (data === null) return into.end(); // the recording is over: ffmpeg finishes what it has and stops
+      // ffmpeg not keeping up with a recording made in real time: carrying on would only show the car an older and older page.
+      if (into.writableLength > 16 * 1024 * 1024) return fellBehind('server');
+      into.write(data);
+    });
+    if (joined) {
+      tailedFrom = joined.startedAt;
+      tailTaken = joined.taken;
+      tailLate = () => tail.late();
+      leaveTail = joined.leave;
+      into.write(joined.first);
+    } else into.end();
+  }
   ff.stdout.on('data', (d) => splitter.push(d));
   ff.stderr.on('data', (d) => {
     stderr = (stderr + d).slice(-2000);

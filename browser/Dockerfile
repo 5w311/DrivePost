@@ -40,7 +40,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
-COPY agent.js ublock-policy.js ./
+COPY agent.js media.js ublock-policy.js ./
 # House rules for the browser, the way an office sets them for its own: no
 # offers to save passwords or translate, no downloads, no first-run pages.
 COPY policies.json /etc/chromium/policies/managed/drivepost.json

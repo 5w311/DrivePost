@@ -4,7 +4,12 @@
   var el = DT.el;
 
   var state = null; // latest state from the server
-  var activated = false; // the passenger has tapped the page (needed for sound)
+  var activated = false; // someone has tapped this page (many browsers keep sound back until then)
+  var held = null; // the seq of a video this page found already under way as it opened: that one waits for a tap
+  var firstState = true;
+  var silent = null; // a video that began without sound, the browser keeping it back: { seq, from, at }
+  var pageVideo = new DT.PageVideo(); // a page's own video, as the server's browser has it
+  var REWIND_MS = 30000; // sound brought in by a tap this soon after takes the video back to where it began
   var loadedSeq = null;
   var loadedId = null; // the video the open stream is of
   var loadedFormat = null; // and the video format setting it was opened under
@@ -55,6 +60,10 @@
         startStream(state.now, Math.max(0, pos - 1));
       }, 1000 * retries.length);
     },
+    onAfresh: function (s) {
+      // A page: the server says this car has fallen behind it. Start again from where the page is now.
+      if (state && state.now && state.now.seq === s.seq) startStream(state.now, 0);
+    },
     onError: function (s, message) {
       showError(message);
       control.send({ type: 'carError', message: message });
@@ -71,7 +80,7 @@
         s.video.fail("it can't keep up even at " + s.quality + 'p');
         return;
       }
-      stepDown("This screen can't keep up with " + s.quality + 'p.');
+      stepDown("This screen can't keep up with " + s.quality + 'p.', 'screen');
     },
     onVideoFail: function (s, info) {
       // The browser's own H.264 decoder gave up. Carry on from the same spot
@@ -93,7 +102,7 @@
       var slowServer = s.stats.serverSpeed !== null && s.stats.serverSpeed < 1.1 && !s.stats.serverLimited;
       stepDown(slowServer
         ? 'Your server can\'t ' + (s.codec === 'h264' ? 'fetch ' : 'convert ') + s.quality + 'p fast enough.'
-        : "The connection can't keep up with " + s.quality + 'p.');
+        : "The connection can't keep up with " + s.quality + 'p.', slowServer ? 'server' : 'connection');
     }
   });
   player.setVolume(volume);
@@ -106,19 +115,50 @@
     feedbackLink: function () { return feedbackLink; }
   };
 
-  // Drop one quality level for the rest of this video and say why.
-  function stepDown(reason) {
+  // Drop one quality level and say why: for the rest of this video, or,
+  // with Auto chosen, until there is room to go up again. `why` is what
+  // couldn't keep up: 'screen', 'connection' or 'server'.
+  function stepDown(reason, why) {
     var i = QUALITIES.indexOf(playQuality());
     if (i <= 0 || Date.now() - lastStepDown < 15000) return;
     lastStepDown = Date.now();
     stalls = [];
-    control.cmd('stepDown');
-    control.send({ type: 'carNote', message: reason + ' Switched to ' + QUALITIES[i - 1] + 'p for this video.' });
+    control.cmd('stepDown', { why: why || 'connection' });
+    control.send({ type: 'carNote', message: reason + (isAuto() ? ' Auto has gone down to ' + QUALITIES[i - 1] + 'p.' : ' Switched to ' + QUALITIES[i - 1] + 'p for this video.') });
   }
 
+  // What is playing: a quality that was chosen, or the one Auto stands at.
   function playQuality() {
-    return (state && (state.playQuality || state.settings.quality)) || '480';
+    var q = state && (state.playQuality || state.settings.quality);
+    return QUALITIES.indexOf(q) >= 0 ? q : '480';
   }
+  function isAuto() {
+    return !!(state && state.settings && state.settings.quality === 'auto');
+  }
+
+  // ---------- Auto quality ----------
+  // With Auto chosen, the quality goes down when the car can't keep up (as
+  // it does for any video, above) and up when there is room. Room is
+  // measured, not guessed: a few seconds into a video, how fast it is
+  // arriving against how fast it plays. Three times as fast or more, and
+  // the next quality up (about twice the data) has room to spare. The
+  // server keeps the level from one video to the next, so this settles in
+  // the first minute and then leaves the picture alone.
+  var AUTO_ROOM = 3;
+  var autoAsked = null; // the stream that has been measured: once each
+  setInterval(function () {
+    var s = player.active;
+    var now = state && state.now;
+    if (!isAuto() || !s || !now || s.seq !== now.seq || autoAsked === s) return;
+    if (now.id === 'page' || s.live || s.state !== 'playing' || state.paused) return; // (a page arrives as it is made: no faster, however good the connection)
+    var x = s.arriving();
+    if (x === null) return;
+    autoAsked = s;
+    var i = QUALITIES.indexOf(playQuality());
+    // Not for a video that has no better picture to give, or after a stall, or when the server itself is the limit.
+    var hasMore = !s.height || s.height >= Number(s.quality) * 0.9;
+    if (x >= AUTO_ROOM && i >= 0 && i < QUALITIES.length - 1 && hasMore && !s.stats.stalls) control.cmd('stepUp', { x: Math.round(x * 10) / 10 });
+  }, 1000);
 
   function startStream(now, startAt) {
     errorMsg = null;
@@ -133,6 +173,7 @@
       quality: playQuality(),
       format: state.settings.format,
       elsewhere: !!now.url, // not YouTube's: a link to another site
+      page: now.id === 'page',
       paused: state.paused
     });
     renderStage();
@@ -148,6 +189,8 @@
   function skipTo(to) {
     var d = duration();
     to = Math.max(0, d ? Math.min(d - 1, to) : to);
+    // A page's video is in the server's browser: that is where it is skipped.
+    if (state && state.now && state.now.id === 'page') return control.cmd('seek', { to: to });
     var s = player.active;
     if (s && state && state.now && s.seq === state.now.seq && !errorMsg && s.jumpTo(to)) {
       jumps.push({ to: to, at: Date.now() });
@@ -175,6 +218,16 @@
     renderStage();
   }
 
+  // What is sent to the car starts by itself. Two things wait for a tap on
+  // this page instead: a video the page found already under way as it opened
+  // (the browser was closed in the middle of it, or the car switched off), and
+  // one that is paused. Neither is loaded until then.
+  function waitsForTap() {
+    var now = state && state.now;
+    if (!now || activated) return false;
+    return held === now.seq || (!!state.paused && loadedSeq !== now.seq);
+  }
+
   function syncPlayback() {
     var now = state && state.now;
     if (!now) {
@@ -184,7 +237,7 @@
       renderStage();
       return;
     }
-    if (!activated) {
+    if (waitsForTap()) {
       renderStage();
       return;
     }
@@ -220,7 +273,15 @@
       // This page is older than the server (updated while it was open, or
       // brought back from the browser's saved copy): load the new one, once
       // that won't interrupt a video.
-      if (DT.stale && !(state.now && !state.paused && activated) && DT.reloadIfStale()) return;
+      pageVideo.take(state);
+      if (firstState) {
+        firstState = false;
+        var was = state.position;
+        if (state.now && !state.paused && !activated && was && was.seq === state.now.seq && was.state !== 'loading') held = state.now.seq;
+      }
+      // (Paused, or something else put on: whatever plays next was asked for just now.)
+      if (held !== null && (!state.now || state.now.seq !== held || state.paused)) held = null;
+      if (DT.stale && !playingNow() && DT.reloadIfStale()) return;
       // A pause made when this page went out of view (below) that the server
       // hasn't taken in yet, say because the connection was down: ask again,
       // and stay paused here meanwhile.
@@ -232,7 +293,7 @@
         }
       }
       applyFullscreen();
-      $('#quality').value = playQuality();
+      showQuality();
       renderLists();
       syncPlayback();
     },
@@ -280,7 +341,7 @@
   var pauseOwed = false; // paused here, and the server hasn't confirmed it yet
 
   function playingNow() {
-    return !!(state && state.now && !state.paused && activated);
+    return !!(state && state.now && !state.paused && !waitsForTap());
   }
 
   function wentOutOfView() {
@@ -314,8 +375,19 @@
     DrivePlayer.unlockAudio();
     if (activated) return;
     activated = true;
+    held = null;
+    // A video that began without sound a moment ago goes back to where it
+    // began, so its opening isn't missed. (Not a page or a live video: those
+    // only go forward. And not one that has been watched silent for a while.)
+    var now = state && state.now;
+    if (silent && now && now.seq === silent.seq && !now.live && !state.paused && Date.now() - silent.at < REWIND_MS) skipTo(silent.from);
+    silent = null;
     if (state) syncPlayback();
   }
+  // Sound came on or went off at the browser: the stage says which.
+  DrivePlayer.onSound = function () {
+    renderStage();
+  };
   document.addEventListener('pointerdown', activate, true);
   document.addEventListener('keydown', activate, true);
 
@@ -351,7 +423,7 @@
 
     $('#nowTitle').textContent = now.title;
     $('#fsTitle').textContent = now.title;
-    $('#nowSub').textContent = [now.channel, now.site, now.live ? 'Live' : null].filter(Boolean).join(' · ');
+    $('#nowSub').textContent = [now.channel, now.site, isLive() ? 'Live' : null].filter(Boolean).join(' · ');
 
     if (errorMsg) {
       var box = el('div', {}, [
@@ -369,22 +441,33 @@
       return;
     }
 
-    if (!activated) {
+    $('#tapStart').classList.remove('for-sound');
+    if (waitsForTap()) {
       $('#tapStartBtn').textContent = 'Tap to play';
       $('#tapStart').classList.remove('hidden');
       return;
     }
+    // Playing, and the browser is keeping the sound back until someone taps
+    // the page: the picture carries on, and says what a tap would do.
+    if (s && s.state === 'playing' && !state.paused && DrivePlayer.soundHeld()) {
+      if (!silent || silent.seq !== now.seq) silent = { seq: now.seq, from: Math.max(0, s.position() - 1), at: Date.now() };
+      $('#tapStartBtn').textContent = 'Tap for sound';
+      $('#tapStart').classList.add('for-sound');
+      $('#tapStart').classList.remove('hidden');
+    } else if (silent && (silent.seq !== now.seq || (s && s.state === 'playing' && !DrivePlayer.soundHeld()))) silent = null;
 
     if (s && (s.state === 'buffering' || s.frames === 0) && !state.paused) {
       // "Buffering" only once it has lasted a moment: a skip within what is loaded takes a fraction of a second.
       msg.appendChild(el('div', { class: s.frames ? 'after-a-moment' : '' }, [el('div', { class: 'spinner' }), el('div', { style: 'margin-top:12px', text: s.frames ? 'Buffering…' : 'Loading…' })]));
     }
-    setIcon($('#playPause'), state.paused ? 'play' : 'pause');
+    // (A page's video paused in the page itself counts as paused here too: the buttons go by the video.)
+    var paused = !!state.paused || pausedInPage();
+    setIcon($('#playPause'), paused ? 'play' : 'pause');
     // Pausing (from the car or the phone) shows the controls for a moment.
     // After that a small "Paused" tag explains the still picture.
-    if (state.paused && wasPaused !== true) showOverlay(true);
-    wasPaused = !!state.paused;
-    $('#pausedTag').classList.toggle('hidden', !state.paused);
+    if (paused && wasPaused !== true) showOverlay(true);
+    wasPaused = paused;
+    $('#pausedTag').classList.toggle('hidden', !paused);
   }
 
   // "Tap to play" means play: also when the video is waiting paused, as it is
@@ -412,7 +495,7 @@
   }
 
   $('#stage').addEventListener('click', function (ev) {
-    if (!state || !state.now || !activated || errorMsg) return;
+    if (!state || !state.now || waitsForTap() || errorMsg) return;
     if (ev.target.closest('button, .scrub, .tap-start')) return;
     var o = $('#overlay');
     showOverlay(!o.classList.contains('show'));
@@ -449,7 +532,29 @@
     bump();
   });
 
+  // A page's own video, as this screen is showing it: the car's picture of a
+  // page runs a few seconds behind the page, so it is the video as it was
+  // that long ago. null when the page has none the browser knows of.
+  function pageVideoNow() {
+    return state && state.now && state.now.id === 'page' ? pageVideo.at(pageVideo.lag) : null;
+  }
+  // Paused in the page itself (from the phone's view of it, say), not from
+  // here: the car shows the page all the same, and Play plays it.
+  function pausedInPage() {
+    var v = pageVideoNow();
+    return !!(v && v.status === 'paused' && !v.waiting && !state.paused);
+  }
+  // No time bar: a live video, or a page whose video has no length (or which has no video).
+  function isLive() {
+    if (!state || !state.now) return false;
+    if (state.now.id !== 'page') return !!state.now.live;
+    var v = pageVideoNow();
+    return !(v && v.d && v.t !== null);
+  }
+
   function currentTime() {
+    var v = pageVideoNow();
+    if (v && v.t !== null) return v.t;
     var s = player.active;
     if (s && state && state.now && s.seq === state.now.seq && s.state !== 'done') return s.position();
     return DT.positionOf(state);
@@ -457,6 +562,8 @@
 
   function duration() {
     if (!state || !state.now) return 0;
+    var v = pageVideoNow();
+    if (v) return v.d || 0;
     var s = player.active;
     return state.now.duration || (s && s.duration) || 0;
   }
@@ -471,7 +578,9 @@
       return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
     }
     scrub.addEventListener('pointerdown', function (ev) {
-      if (!duration() || state.now.live) return;
+      if (!duration() || isLive()) return;
+      var pv = pageVideoNow();
+      if (pv && !pv.seek) return; // a page's video that can't be skipped in
       ev.stopPropagation();
       dragging = true;
       scrub.setPointerCapture(ev.pointerId);
@@ -503,7 +612,7 @@
     });
     window.paintTime = function () {
       var d = duration();
-      var live = state && state.now && state.now.live;
+      var live = isLive();
       var t = preview !== null ? preview : currentTime();
       $('#tCur').textContent = live ? '' : DT.fmt(t);
       $('#tDur').innerHTML = '';
@@ -513,6 +622,8 @@
       $('#scrubFill').style.width = pct + '%';
       $('#scrubKnob').style.left = pct + '%';
       var s = player.active;
+      // (A page's video isn't loaded here: there is no "loaded this far" to draw.)
+      if (state && state.now && state.now.id === 'page') s = null;
       var buf = s && d ? Math.min(100, ((t + s.buffered()) / d) * 100) : pct;
       $('#scrubBuf').style.width = buf + '%';
       // The played part that is still on hand (a skip back into it happens at
@@ -526,11 +637,50 @@
     };
   })();
   setInterval(paintTime, 250);
+  // A page's video being paused or played in the page reaches this screen's
+  // picture a few seconds after the server hears of it: the buttons follow then.
+  var pagePausedShown = null;
+  setInterval(function () {
+    var p = !!state && pausedInPage();
+    var live = isLive();
+    if (p === pagePausedShown && live === pagePausedShown_live) return;
+    pagePausedShown = p;
+    pagePausedShown_live = live;
+    if (state) renderStage();
+  }, 250);
+  var pagePausedShown_live = null;
 
   // ---------- top bar ----------
 
-  $('#quality').addEventListener('change', function () {
-    control.cmd('quality', { q: this.value });
+  // Two lists of the same choices: in the top bar, and in the bar over the
+  // picture, where it is the one within reach in fullscreen.
+  function showQuality() {
+    var auto = isAuto();
+    ['#quality', '#qualityFs'].forEach(function (id) {
+      var list = $(id);
+      // (While it is open, it is the person's: not changed under their finger.)
+      if (document.activeElement === list) return;
+      list.querySelector('option[value="auto"]').textContent = auto ? 'Auto (' + playQuality() + 'p)' : 'Auto';
+      list.value = auto ? 'auto' : playQuality();
+    });
+  }
+  ['#quality', '#qualityFs'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      control.cmd('quality', { q: this.value });
+      this.blur();
+      bump();
+    });
+  });
+  // The one over the picture: a tap on it isn't a tap on the picture, and the controls stay up while it is open.
+  ['pointerdown', 'click'].forEach(function (name) {
+    $('#qualityFs').addEventListener(name, function (e) {
+      e.stopPropagation();
+      clearTimeout(overlayTimer);
+    });
+  });
+  $('#qualityFs').addEventListener('blur', function () {
+    showQuality();
+    bump();
   });
 
   // ---------- stats readout ----------
@@ -633,13 +783,13 @@
   }
 
   // ---------- theater ----------
-  // The Theater button shows or hides the lists (Up Next, Search, Recent).
-  // Blue means they're showing; off leaves just the video. `theater` is true
-  // while they're hidden.
+  // Theater, as on a video site: switched on (the button lit), the lists (Up
+  // Next, For You, Search, Recent) go away and the video has the width of
+  // the screen. Switched off, they are back. `theater` is true while it is on.
 
   function applyTheater() {
     document.body.classList.toggle('theater', theater);
-    pressed($('#theaterBtn'), !theater);
+    pressed($('#theaterBtn'), theater);
   }
   applyTheater();
   $('#theaterBtn').addEventListener('click', function () {
@@ -662,11 +812,6 @@
     document.body.classList.toggle('has-now', !!(state && state.now));
     setIcon($('#fsToggle'), on ? 'compress' : 'expand');
     $('#fsToggle').setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
-    // Fill zooms the picture to cover the window (edges are cropped); Fit
-    // shows all of it with black bars.
-    var fill = !!(state && state.settings && state.settings.fill);
-    document.body.classList.toggle('fill', fill);
-    $('#fillToggle').textContent = fill ? 'Fit' : 'Fill';
   }
 
   // Where the browser allows it, also hide the browser's own bars. Tesla only
@@ -700,14 +845,6 @@
     e.stopPropagation();
     setFullscreen(!isFullscreen());
   });
-  $('#fillToggle').addEventListener('click', function (e) {
-    e.stopPropagation();
-    if (!state) return;
-    state.settings.fill = !state.settings.fill;
-    applyFullscreen();
-    control.cmd('fill', { on: state.settings.fill });
-    showOverlay(true);
-  });
   document.addEventListener('keydown', function (ev) {
     var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target && ev.target.tagName) || '');
     if (ev.key === 'Escape' && isFullscreen()) setFullscreen(false);
@@ -727,7 +864,9 @@
     var h = DrivePlayer.h264();
     var lines = ['Browser: ' + browserLine().replace('decodes ', ''), 'Window: ' + window.innerWidth + 'x' + window.innerHeight];
     if (state) {
-      lines.push('Quality: ' + state.settings.quality + 'p' + (playQuality() !== state.settings.quality ? ' (stepped down to ' + playQuality() + 'p)' : ''));
+      lines.push(isAuto()
+        ? 'Quality: Auto, at ' + playQuality() + 'p'
+        : 'Quality: ' + state.settings.quality + 'p' + (playQuality() !== state.settings.quality ? ' (stepped down to ' + playQuality() + 'p)' : ''));
     }
     if (!s) {
       lines.push('Playing: nothing');

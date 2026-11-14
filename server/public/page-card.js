@@ -100,7 +100,11 @@
       status = 'Not in the car';
       note = 'The car is playing something else.';
     } else if (server.paused) status = 'Paused';
-    else {
+    else if (p.waiting) {
+      // The car's picture has stopped (loading, or its connection has dipped): the page's video is held until it is back, so the car misses none of it.
+      status = 'Waiting for the car';
+      tone = 'busy';
+    } else {
       status = 'In the car';
       tone = 'ok';
     }

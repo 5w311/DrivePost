@@ -43,6 +43,88 @@ test('choosing a quality by hand clears the step-down', () => {
   assert.equal(s.command('quality', { q: '4320' }), 'Bad quality');
 });
 
+test('Auto: the quality finds its level, and keeps it from one video to the next', () => {
+  const s = makeStore('720');
+  s.command('play', { item: A });
+  assert.equal(s.command('stepUp'), null);
+  assert.equal(s.playQuality(), '720', 'going up is only for Auto');
+
+  let seq = s.now.seq;
+  assert.equal(s.command('quality', { q: 'auto' }), null);
+  assert.equal(s.settings.quality, 'auto');
+  assert.equal(s.playQuality(), '720', 'Auto carries on from what was playing');
+  assert.equal(s.now.seq, seq, 'so nothing starts over for it');
+  assert.equal(s.publicState().playQuality, '720');
+  assert.equal(s.publicState().settings.quality, 'auto');
+
+  // The car measures room to spare: one level up, and the stream reopens at it.
+  s.command('stepUp');
+  assert.equal(s.playQuality(), '1080');
+  assert.ok(s.now.seq > seq);
+  seq = s.now.seq;
+  s.command('stepUp');
+  assert.equal(s.playQuality(), '1080', 'the top is the top');
+  assert.equal(s.now.seq, seq);
+
+  // The connection can't carry it after all: down, and not tried again for a while.
+  s.command('stepDown', { why: 'connection' });
+  assert.equal(s.playQuality(), '720');
+  s.command('stepUp');
+  assert.equal(s.playQuality(), '720', 'held below what it just came down from');
+  s.command('play', { item: B });
+  assert.equal(s.playQuality(), '720', 'the next video starts where Auto stands, not back at the top');
+  s.autoHeld.until = Date.now() - 1; // ten minutes on
+  s.command('stepUp');
+  assert.equal(s.playQuality(), '1080', 'then it may try again');
+
+  // The screen itself can't play it: that doesn't change down the road.
+  s.command('stepDown', { why: 'screen' });
+  assert.equal(s.playQuality(), '720');
+  s.command('stepUp');
+  assert.equal(s.playQuality(), '720');
+  s.saveNow();
+  const again = new Store({ dataDir: path.dirname(s.file), defaultQuality: '480' });
+  assert.equal(again.settings.quality, 'auto', 'Auto, where it stood and what the screen can play all survive a restart');
+  assert.equal(again.playQuality(), '720');
+  again.command('play', { item: A });
+  again.command('stepUp');
+  assert.equal(again.playQuality(), '720');
+  again.command('stepDown');
+  again.command('stepDown');
+  again.command('stepDown');
+  assert.equal(again.playQuality(), '360', 'and the bottom is the bottom');
+
+  // Choosing a quality by hand ends it; choosing Auto again starts it with a clean slate.
+  again.command('quality', { q: '480' });
+  assert.equal(again.playQuality(), '480');
+  again.command('quality', { q: 'auto' });
+  assert.equal(again.playQuality(), '480');
+  again.command('stepUp');
+  again.command('stepUp');
+  assert.equal(again.playQuality(), '1080', 'what it learned last time no longer holds it back');
+});
+
+test('Auto goes up two levels in one step when there is room for it, and never past its ceiling', () => {
+  const s = makeStore('360');
+  s.command('quality', { q: 'auto' });
+  s.command('play', { item: A });
+  s.command('stepUp', { x: 4 });
+  assert.equal(s.playQuality(), '480', 'four times the room: one level');
+  s.command('stepUp', { x: 12 });
+  assert.equal(s.playQuality(), '1080', 'twelve times: two');
+  s.command('stepDown', { why: 'screen' });
+  s.command('stepDown', { why: 'screen' });
+  assert.equal(s.playQuality(), '480');
+  s.command('stepUp', { x: 20 });
+  assert.equal(s.playQuality(), '480', "the screen couldn't play 720p: no amount of room takes it back there");
+});
+
+test('a server can be set to start every profile on Auto', () => {
+  const s = makeStore('auto');
+  assert.equal(s.settings.quality, 'auto');
+  assert.equal(s.playQuality(), '480', 'which begins in the lower middle and goes up from there');
+});
+
 test('queue advances and keeps resume points', () => {
   const s = makeStore('480');
   s.command('play', { item: A });
@@ -62,9 +144,10 @@ test('screen settings are shared and saved', () => {
   const s = makeStore('480');
   assert.equal(!!s.publicState().settings.fullscreen, false);
   s.command('fullscreen', { on: true });
-  s.command('fill', { on: 1 });
+  // (There was a Fill button once. A page left open since then may still ask: it is heard out, and nothing comes of it.)
+  assert.equal(s.command('fill', { on: 1 }), null);
   assert.equal(s.publicState().settings.fullscreen, true);
-  assert.equal(s.publicState().settings.fill, true);
+  assert.equal('fill' in s.publicState().settings, false);
   assert.equal(s.settings.quality, '480', 'other settings are kept');
   s.saveNow();
   const again = new Store({ dataDir: path.dirname(s.file), defaultQuality: '480' });
