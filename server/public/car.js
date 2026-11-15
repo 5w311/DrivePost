@@ -506,7 +506,11 @@
   }
   $('#playPause').addEventListener('click', function (e) {
     e.stopPropagation();
-    control.cmd('toggle');
+    // Said as what the button was showing, play or pause, and not as "the
+    // other way": a page's video shows here a moment after the server hears
+    // of it, and by then the server's idea of the other way may be another.
+    var paused = !!(state && (state.paused || pausedInPage()));
+    control.cmd(paused ? 'resume' : 'pause');
     bump();
   });
   // Ten seconds back or on. A page's video isn't here to skip in: it is in

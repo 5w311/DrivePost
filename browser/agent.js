@@ -37,7 +37,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
-import { readPlayer, isNews } from './media.js';
+import { readPlayer, isNews, placeAfter } from './media.js';
 
 const env = process.env;
 const SERVER = env.DRIVEPOST_WS || 'ws://drivepost:8080/ws/browser';
@@ -410,6 +410,11 @@ class Session {
       '--no-default-browser-check',
       '--password-store=basic',
       '--hide-crash-restore-bubble',
+      // A page is opened here because someone asked for it, to watch what is on it: its video may start by
+      // itself, sound and all, as it does in a browser its owner has used the site in. Left to itself a new
+      // browser turns that down, and the site waits for a click on its play button with nobody at the screen
+      // to give it (or plays without sound, where the browser's media controls can't reach it).
+      '--autoplay-policy=no-user-gesture-required',
       // Nothing leaves except through DrivePost's guard (and no side doors around it).
       ...(this.proxy ? [`--proxy-server=${this.proxy}`, '--proxy-bypass-list=<-loopback>', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : []),
       // One window, filling the screen, with none of the browser's own bars: the screen is the picture.
@@ -680,22 +685,60 @@ class Session {
    * Play, pause and skip, through the browser's own media controls: the ones
    * a keyboard's play key and a desktop's media buttons use. They act on
    * whatever in the page is playing, without anything being done to the page.
+   * DrivePost is told how it went: 'done', 'ignored' (the player didn't do
+   * it) or 'none' (the browser knows of nothing playing or paused).
    */
-  async media(what, by) {
+  async media(what, by, to, who) {
     if (this.over || !alive(this.proc)) return;
     const bus = (dest, ...rest) => run('dbus-send', ['--session', `--dest=${dest}`, '--type=method_call', '--print-reply', '--reply-timeout=2000', ...rest], { vars: this.desk.vars });
+    const said = (result) => tell({ t: 'said', id: this.id, what, who: String(who || ''), result });
     const names = await bus('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames');
     const player = /org\.mpris\.MediaPlayer2\.chrom[A-Za-z0-9_.]*/.exec(names.out);
-    // Nothing in the page is playing or paused that the browser knows of.
-    if (!player) return tell({ t: 'said', id: this.id, what, result: 'none' });
+    if (!player) return said('none');
     const call = (method, ...args) => bus(player[0], '/org/mpris/MediaPlayer2', `org.mpris.MediaPlayer2.Player.${method}`, ...args);
+    const read = async () => {
+      const all = await bus(player[0], '/org/mpris/MediaPlayer2', 'org.freedesktop.DBus.Properties.GetAll', 'string:org.mpris.MediaPlayer2.Player');
+      return all.code === 0 ? readPlayer(all.out) : null;
+    };
     const micros = (s) => `int64:${Math.round(s * 1e6)}`;
-    if (what === 'pause') await call('Pause');
-    else if (what === 'play') await call('Play');
-    else if (what === 'seek') {
-      const s = Math.min(600, Math.max(-600, Number(by) || 0));
-      if (s) await call('Seek', micros(s));
+    let result = 'done';
+    if (what === 'pause' || what === 'play') {
+      await call(what === 'pause' ? 'Pause' : 'Play');
+      // Did it? A player can turn a deaf ear, or have gone since it was last heard of.
+      const want = what === 'pause' ? 'paused' : 'playing';
+      let now = null;
+      for (let i = 0; i < 4 && !this.over; i++) {
+        await sleep(i ? 350 : 200);
+        now = await read();
+        if (now && now.status === want) break;
+      }
+      if (!now || now.status === 'stopped') result = 'none';
+      else if (now.status !== want) result = 'ignored';
+    } else if (what === 'seek' || what === 'seekto') {
+      const was = await read();
+      if (!was || was.status === 'stopped') return said('none');
+      let place = null;
+      if (what === 'seekto') {
+        place = Math.max(0, Number(to) || 0);
+        if (was.d !== null) place = Math.min(place, Math.max(0, was.d - 1));
+      } else {
+        const s = Math.min(600, Math.max(-600, Number(by) || 0));
+        if (!s) return;
+        place = placeAfter(was, s); // (see there for why a place and not "that much on")
+        // Nothing says where it is: all that can be asked is that much on or back.
+        if (place === null) await call('Seek', micros(s));
+      }
+      if (place !== null) {
+        const asked = Date.now();
+        await call('SetPosition', `objpath:${was.track || '/org/mpris/MediaPlayer2/TrackList/NoTrack'}`, micros(place));
+        await sleep(450);
+        const now = await read();
+        // (Playing, it has moved on a little since. Anywhere near will do: it is a video that stayed where it was that is looked for.)
+        if (now && now.t !== null && Math.abs(now.t - place) > 3 + (Date.now() - asked) / 1000 && Math.abs(now.t - was.t) < 3 + (Date.now() - asked) / 1000) result = 'ignored';
+      }
     }
+    said(result);
+    this.readMedia().catch(() => {});
   }
 
   fail(message) {
@@ -749,7 +792,7 @@ function handle(msg) {
   else if (msg.t === 'ads') s.steer(msg, (m) => s.ads(m.on));
   else if (msg.t === 'input') s.steer(msg, (m) => s.input(m));
   else if (msg.t === 'nav') s.steer(msg, (m) => s.nav(m.what));
-  else if (msg.t === 'media') s.steer(msg, (m) => s.media(m.what, m.by));
+  else if (msg.t === 'media') s.steer(msg, (m) => s.media(m.what, m.by, m.to, m.who));
   else if (msg.t === 'view') s.view(!!msg.on);
   else if (msg.t === 'again') run(s.again());
 }

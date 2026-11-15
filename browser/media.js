@@ -25,6 +25,8 @@ export function readPlayer(text, at = Date.now()) {
     d: len !== null && len > 0 && len < 48 * 3600 * 1e6 ? len / 1e6 : null,
     rate: rate !== null && rate > 0 ? rate : 1,
     seek: /string "CanSeek"\s+variant\s+boolean true/.test(s),
+    // What the controls call the video: a skip to a place in it is addressed to that.
+    track: (/string "mpris:trackid"\s+variant\s+object path "([^"]+)"/.exec(s) || [])[1] || null,
     at,
   };
 }
@@ -43,4 +45,19 @@ export function isNews(prev, next) {
   const e = expected(prev, next.at);
   if ((e === null) !== (next.t === null)) return true;
   return e !== null && Math.abs(e - next.t) > 0.75; // a skip, or another video
+}
+
+/*
+ * Where to take a video that is to go `by` seconds on (or back, negative),
+ * given what its controls just said of it, or null if they don't say where
+ * it is. A place, and not "that much on": a site with skip buttons of its
+ * own is only told the direction by the browser, and skips by its own
+ * amount whatever was asked, ten seconds for a request of one or of three
+ * hundred. A place in the video is passed on as it is.
+ */
+export function placeAfter(m, by) {
+  if (!m || m.t === null) return null;
+  let to = Math.max(0, m.t + by);
+  if (m.d !== null) to = Math.min(to, Math.max(0, m.d - 1));
+  return to;
 }

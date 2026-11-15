@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readPlayer, expected, isNews } from '../../browser/media.js';
+import { readPlayer, expected, isNews, placeAfter } from '../../browser/media.js';
 
 // What dbus-send prints for a browser playing a 90-second video, 9.9 seconds in.
 const PLAYING = `method return time=1.2 sender=:1.1 -> destination=:1.9 serial=50 reply_serial=2
@@ -19,6 +19,10 @@ const PLAYING = `method return time=1.2 sender=:1.1 -> destination=:1.9 serial=5
                dict entry(
                   string "mpris:length"
                   variant                      int64 90000000
+               )
+               dict entry(
+                  string "mpris:trackid"
+                  variant                      object path "/org/chromium/MediaPlayer2/TrackList/Track82ECD4CC"
                )
                dict entry(
                   string "xesam:title"
@@ -43,7 +47,8 @@ const PLAYING = `method return time=1.2 sender=:1.1 -> destination=:1.9 serial=5
 
 test("the browser's media controls are read: playing or paused, how far in, how long", () => {
   const m = readPlayer(PLAYING, 1000);
-  assert.deepEqual(m, { status: 'playing', t: 9.896346, d: 90, rate: 1, seek: true, at: 1000 });
+  assert.deepEqual(m, { status: 'playing', t: 9.896346, d: 90, rate: 1, seek: true, track: '/org/chromium/MediaPlayer2/TrackList/Track82ECD4CC', at: 1000 });
+  assert.equal(readPlayer(PLAYING.replace(/string "mpris:trackid"[^)]*\)/, ')')).track, null);
   const paused = readPlayer(PLAYING.replace('"Playing"', '"Paused"').replace('double 1', 'double 1.5'), 5);
   assert.equal(paused.status, 'paused');
   assert.equal(paused.rate, 1.5);
@@ -76,4 +81,17 @@ test('time passing on a playing video is not news; a pause, a skip or another vi
   assert.equal(isNews(null, was), true, 'something started');
   assert.equal(isNews(was, null), true, 'and went away');
   assert.equal(isNews(null, null), false);
+});
+
+test('a skip is asked for as a place in the video, not as so much on or back', () => {
+  // (A site with skip buttons of its own hears only "on" or "back" from the browser, and skips by its own amount.)
+  const m = { status: 'playing', t: 100, d: 600, rate: 1, seek: true, at: 0 };
+  assert.equal(placeAfter(m, 10), 110);
+  assert.equal(placeAfter(m, -1.4), 98.6);
+  assert.equal(placeAfter(m, -300), 0, 'not before the beginning');
+  assert.equal(placeAfter(m, 550), 599, 'nor quite onto the end, which would finish it');
+  assert.equal(placeAfter({ ...m, d: null }, 550), 650, 'a video that gives no length is taken at its word');
+  // One that doesn't say where it is can only be asked for so much on or back.
+  assert.equal(placeAfter({ ...m, t: null }, 10), null);
+  assert.equal(placeAfter(null, 10), null);
 });

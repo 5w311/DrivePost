@@ -459,12 +459,17 @@ test("a page's own video: the screens are told of it, and their own buttons act 
   assert.deepEqual(s.publicState().page.media, { status: 'playing', t: 60, d: 600, rate: 1, seek: true, at });
   assert.ok(Math.abs(s.pageMediaTime() - 64) < 0.3, 'four seconds on from where it was said to be');
   assert.equal(s.pausedInPage(), false);
-  // The time bar is the video's own: a spot on it is a skip by the difference, made in the browser.
+  // The time bar is the video's own: a spot on it is that place in the video, however far off, and the browser takes it there.
   const seq = s.now.seq;
   s.command('seek', { to: 100 });
-  assert.deepEqual(asked.pop(), ['seek', 36]);
+  assert.deepEqual(asked.pop(), ['seekto', 100]);
+  s.command('seek', { to: 5400 });
+  assert.deepEqual(asked.pop(), ['seekto', 5400]);
   s.command('restart');
-  assert.deepEqual(asked.pop(), ['seek', -64]);
+  assert.deepEqual(asked.pop(), ['seekto', 0]);
+  // The ten-second buttons ask for so much on or back.
+  s.command('skip', { by: -10 });
+  assert.deepEqual(asked.pop(), ['seek', -10]);
   assert.equal(s.now.seq, seq, 'the car goes on showing the page: no new stream for it');
 
   // Paused in the page itself (from the phone's view of it): the car shows the page all the same, and Play plays the video.

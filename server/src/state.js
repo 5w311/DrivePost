@@ -454,10 +454,9 @@ export class Store extends EventEmitter {
         if (this.now) this.paused = !this.paused;
         break;
       case 'seek': {
-        // On a page, the time bar is the page's own video's: it is skipped by the difference.
-        const at = this.pageMediaTime();
+        // On a page, the time bar is the page's own video's: that video is taken to the place asked for.
         if (this.now && this.now.id === PAGE_ID) {
-          if (at !== null) this.pageMedia('seek', (Number(data.to) || 0) - at);
+          if (this.pageMediaTime() !== null) this.pageMedia('seekto', Math.max(0, Number(data.to) || 0));
         } else this.seekTo(Number(data.to) || 0);
         break;
       }
@@ -465,13 +464,11 @@ export class Store extends EventEmitter {
         if (this.now && this.now.id === PAGE_ID) this.pageMedia('seek', Number(data.by) || 0);
         else this.seekTo(this.currentTime() + (Number(data.by) || 0));
         break;
-      case 'restart': {
-        const at = this.pageMediaTime();
+      case 'restart':
         if (this.now && this.now.id === PAGE_ID) {
-          if (at !== null) this.pageMedia('seek', -at);
+          if (this.pageMediaTime() !== null) this.pageMedia('seekto', 0);
         } else this.seekTo(0);
         break;
-      }
       case 'quality': {
         const q = String(data.q);
         if (!QUALITIES.includes(q) && q !== 'auto') return 'Bad quality';

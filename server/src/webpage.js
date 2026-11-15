@@ -21,6 +21,7 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import { addressAllowed, linkIn, siteOf } from './links.js';
 import { startShare } from './mirror.js';
@@ -32,6 +33,28 @@ const FRESH_STARTS = 2; // times in a row a recording may be started afresh befo
 const STALLED_MS = 12 * 1000; // a recording that stops arriving for this long has stalled
 // About how far behind the browser's screen a car's picture runs, when the car hasn't been playing long enough to say.
 const BEHIND_S = PAGE_START_LAG_S;
+
+/*
+ * Sites whose player these controls can stop and not start again: paused
+ * through the browser's media controls, it stayed paused when asked to play
+ * (PageKeeper finds that out, the one time it costs someone a tap on the
+ * page). On such a site the video is never paused from here: not for a car
+ * that is stuck, and not by the car's Pause, which then pauses the car
+ * alone. Remembered between restarts; forgotten after a month, or as soon
+ * as a Play from here is seen to work there.
+ */
+const WONT_START_FOR_MS = 30 * 24 * 3600 * 1000;
+const sitesFile = path.join(config.dataDir, 'page-sites.json');
+const wontStart = new Map(); // site -> when it was found out
+try {
+  for (const [site, at] of Object.entries(JSON.parse(fs.readFileSync(sitesFile, 'utf8')).wontStart || {})) {
+    if (typeof at === 'number' && Date.now() - at < WONT_START_FOR_MS) wontStart.set(String(site).slice(0, 200), at);
+  }
+} catch {}
+function saveSites() {
+  fs.writeFile(sitesFile, JSON.stringify({ wontStart: Object.fromEntries(wontStart) }), () => {});
+}
+const startsAgain = (site) => !(wontStart.has(site) && Date.now() - wontStart.get(site) < WONT_START_FOR_MS);
 
 let agent = null; // the browser's program, once it has connected: { ws, address }
 let page = null; // the page that is open, if one is
@@ -249,6 +272,7 @@ function moved(msg) {
   if (!/^https?:/i.test(url)) return;
   page.url = url.slice(0, 2000);
   page.site = siteOf(url);
+  if (page.keeper) page.keeper.noHold = !startsAgain(page.site);
   page.title = String(msg.title || '').slice(0, 200);
   hooks.changed(page.profile, view(page));
 }
@@ -301,9 +325,47 @@ function kept(mine) {
   hooks.changed(mine.profile, view(mine));
 }
 
+/*
+ * How something asked of the page's video went (the browser says: 'done',
+ * 'ignored' by the player, or 'none' there to ask). What a person asked for
+ * from the car or a phone and didn't get, they are told. (What the keeper
+ * asked for, it watches for itself.)
+ */
 function said(msg) {
-  // A skip was asked for and the browser knows of nothing playing to skip in. (A pause that finds nothing has still paused the car.)
-  if (msg.what === 'seek' && msg.result === 'none') hooks.toast(page.profile, 'Nothing on the page is playing that could be skipped in.');
+  const mine = page;
+  const what = String(msg.what || '');
+  const result = String(msg.result || '');
+  if (msg.who === 'keeper') return;
+  if (what === 'seek' || what === 'seekto') {
+    if (result === 'none') hooks.toast(mine.profile, 'Nothing on the page is playing that could be skipped in.');
+    else if (result === 'ignored') hooks.toast(mine.profile, "The page's player didn't skip: a live broadcast can't be skipped in.");
+  } else if (what === 'pause') {
+    // (A pause that finds nothing to pause has still paused the car.)
+    if (result === 'ignored') hooks.toast(mine.profile, "Paused in the car. The page's own player didn't pause when asked: pause it on the page, in the phone's view.");
+  } else if (what === 'play') {
+    const asked = mine.playAsked;
+    mine.playAsked = null;
+    if (!asked || Date.now() - asked.at > 15000 || !asked.paused) return;
+    if (result === 'done') {
+      // (Play from here works on this site, whatever was once found.)
+      if (wontStart.delete(mine.site)) saveSites();
+      mine.keeper.noHold = false;
+    } else hooks.toast(mine.profile, "The page's player didn't start when asked. Tap play on the page, in the phone's view.");
+  }
+}
+
+// The page's video was paused from here (to wait for the car, or by someone's Pause) and didn't start again when asked (PageKeeper).
+function stuck(mine, asked) {
+  if (page !== mine) return;
+  console.log(`[page] ${mine.site}: its video was paused from here and didn't start again when asked. On this site it will be left playing from now on`);
+  wontStart.set(mine.site, Date.now());
+  saveSites();
+  hooks.toast(
+    mine.profile,
+    asked
+      ? "The page's player didn't start again when asked. Tap play on the page, in the phone's view. On this site, Pause will pause the car alone from now on."
+      : "The page's video was paused to wait for the car, and its player didn't start again when asked. Tap play on the page, in the phone's view. On this site it will be left playing from now on.",
+  );
 }
 
 // What the screens are told about it.
@@ -367,6 +429,8 @@ export async function openPage(profile, text) {
     sound: true,
     held: null, // its video was paused from the car or a phone: how far behind it the car was showing (seconds)
     media: null, // the page's own video, as the browser's media controls last said (see mediaSaid)
+    playAsked: null, // the car or a phone asked for it to be played: { at, paused } (was it known to be paused?)
+    saidWont: false, // it has been said, for this page, that Pause can't pause its video (see wontStart)
     keeper: null, // keeps that video and the car together (page-keeper.js)
     waitingSaid: false,
     lagSaid: null,
@@ -381,9 +445,11 @@ export async function openPage(profile, text) {
     askedAgainAt: 0,
     openTimer: null,
   });
-  const media = (what, by = 0) => toAgent({ t: 'media', id: mine.id, what, by });
+  const media = (what, by = 0) => toAgent({ t: 'media', id: mine.id, what, by, who: 'keeper' });
   mine.keeper = new PageKeeper({
     base: PAGE_START_LAG_S,
+    hold: startsAgain(site),
+    stuck: (asked) => stuck(mine, asked),
     pause: () => media('pause'),
     play: () => media('play'),
     seek: (by) => media('seek', by),
@@ -480,21 +546,31 @@ export function pageMedia(profile, what, by = 0) {
   const mine = pageOf(profile);
   // (Shown again in the car: played on, if it was a pause from the car that stopped it.)
   if (mine && what === 'show' && mine.held !== null) what = 'play';
-  if (!mine || !['pause', 'play', 'seek'].includes(what)) return false;
+  if (!mine || !['pause', 'play', 'seek', 'seekto'].includes(what)) return false;
+  const ask = (w, more = {}) => toAgent({ t: 'media', id: mine.id, what: w, by: 0, who: 'car', ...more });
   if (what === 'pause') {
     // (Already waiting for a car that was stuck: it is owed exactly what it hadn't shown. A video
     // that isn't playing has nothing to go back over.)
     const owed = mine.keeper.handOver();
+    // A player that these controls can stop and not start again (see wontStart): the car is paused, and the video is left playing.
+    if (!startsAgain(mine.site)) {
+      if (!mine.saidWont) hooks.toast(mine.profile, "Paused in the car. This site's player can't be started again from here, so its video is left playing.");
+      mine.saidWont = true;
+      return true;
+    }
     if (mine.held === null) mine.held = owed !== null ? owed : mine.media && mine.media.status !== 'playing' ? 0 : Math.min(30, pageLag(profile) ?? BEHIND_S);
   } else if (what === 'play') {
     const back = mine.held;
     mine.held = null;
-    if (back) toAgent({ t: 'media', id: mine.id, what: 'seek', by: -Math.round(back * 10) / 10 });
+    mine.playAsked = { at: Date.now(), paused: !!mine.media && mine.media.status === 'paused' };
+    if (back) ask('seek', { by: -Math.round(back * 10) / 10 });
     // Played again after a pause made here: the car starts a new stream for
     // it, and the video starts once the car has that picture (the keeper sees to it).
     if (back !== null && mine.keeper.playWhenBack()) return true;
   }
-  toAgent({ t: 'media', id: mine.id, what, by: what === 'seek' ? Math.max(-600, Math.min(600, Number(by) || 0)) : 0 });
+  // A place in the video (the time bar), or so much on or back (the ten-second buttons).
+  if (what === 'seekto') ask('seekto', { to: Math.max(0, Math.min(48 * 3600, Number(by) || 0)) });
+  else ask(what, { by: what === 'seek' ? Math.max(-600, Math.min(600, Number(by) || 0)) : 0 });
   return true;
 }
 

@@ -77,7 +77,10 @@
   }
 
   var controls = $('#controls');
-  var playBtn = DT.iconButton('play', 'Play or pause', function () { control.cmd('toggle'); }, 'play-btn');
+  // (Said as what the button shows, play or pause: see the car's.)
+  var playBtn = DT.iconButton('play', 'Play or pause', function () {
+    control.cmd(state && state.now && !state.paused && !pausedInPage() ? 'pause' : 'resume');
+  }, 'play-btn');
   [
     DT.iconButton('stop', 'Stop', function () { control.cmd('stop'); }),
     DT.iconButton('back10', 'Back 10 seconds', function () { control.cmd('skip', { by: -10 }); }),

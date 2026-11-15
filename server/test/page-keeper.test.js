@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { PageKeeper } from '../src/page-keeper.js';
 
 // A keeper with a clock that is moved by hand, a page whose video obeys, and a car that reports twice a second.
-function world({ base = 2.5, obeys = true, seekable = true } = {}) {
+// (`resumes: false`: a player that pauses when asked and won't play again. `tearsDown`: one that is gone from the
+// browser's controls once it is paused. `noPos`: one that doesn't say where in its video it is.)
+function world({ base = 2.5, obeys = true, seekable = true, resumes = true, tearsDown = false, noPos = false, hold = true } = {}) {
   let t = 1_000_000;
   const did = [];
   let obeyed = 0;
   const video = { status: 'playing', pos: 0, at: t, d: 600 };
   const posNow = () => video.pos + (video.status === 'playing' ? (t - video.at) / 1000 : 0);
-  const say = () => k.media({ status: video.status, t: posNow(), d: video.d, rate: 1, seek: seekable, at: t });
+  const say = () => k.media(video.status === 'gone' ? null : { status: video.status, t: noPos ? null : posNow(), d: noPos ? null : video.d, rate: 1, seek: seekable, at: t });
   const set = (status, pos = posNow()) => {
     video.pos = pos;
     video.at = t;
@@ -18,6 +20,8 @@ function world({ base = 2.5, obeys = true, seekable = true } = {}) {
   };
   const k = new PageKeeper({
     base,
+    hold,
+    stuck: (asked) => did.push(asked ? 'stuck (their own pause)' : 'stuck'),
     now: () => t,
     pause: () => {
       did.push('pause');
@@ -50,8 +54,8 @@ function world({ base = 2.5, obeys = true, seekable = true } = {}) {
         while (obeyed < did.length) {
           const a = did[obeyed++];
           if (!obeys) continue;
-          if (a === 'pause' && video.status === 'playing') set('paused');
-          else if (a === 'play' && video.status !== 'playing') set('playing');
+          if (a === 'pause' && video.status === 'playing') set(tearsDown ? 'gone' : 'paused');
+          else if (a === 'play' && video.status === 'paused' && resumes) set('playing');
           else if (a.startsWith('seek ')) set(video.status, Math.max(0, posNow() + Number(a.slice(5))));
         }
       }
@@ -139,20 +143,58 @@ test('a car that lost its stream and starts a new one: the video goes back to wh
   assert.deepEqual(w.did.slice(2), ['play']);
 });
 
-test('a page just opened: its video waits until the car has its picture, and starts over from where it was', () => {
+test('a page just opened, its video having started by itself: it waits until the car has its picture, and starts over from where it began', () => {
   const w = world();
-  w.run(300, null);
+  w.run(4000, null); // the page loads and its video starts, before there is any picture of it to show
   w.k.show(true);
-  const from = w.posNow();
   w.run(3000, null); // the car is still loading the page's picture
-  // Paused, and taken back to where it was when the page was put on: that is the frame the car's stream opens on.
+  // Paused, and taken back to where it began: the car has seen none of it.
   assert.equal(w.did.length, 2);
   assert.equal(w.did[0], 'pause');
-  assert.match(w.did[1], /^seek -1\.\d$/);
+  assert.match(w.did[1], /^seek -5(\.\d)?$/);
   assert.equal(w.video.status, 'paused');
+  assert.ok(w.posNow() < 1, String(w.posNow()));
   w.run(1500, { stream: 'a', state: 'playing', lag: 2.5 });
   assert.deepEqual(w.did.slice(2), ['play']);
-  assert.ok(Math.abs(w.posNow() - from) < 2, `it plays from about where it was when the page was put on (${from} -> ${w.posNow()})`);
+  assert.ok(w.posNow() < 2, `it plays from its beginning (${w.posNow()})`);
+});
+
+test('a car that has the picture at once: nothing is held, and a video that began before the page was put on is taken back to its beginning', () => {
+  const w = world();
+  w.run(3000, null); // the page loads and its video starts
+  w.k.show(true);
+  w.run(2000, { stream: 'a', state: 'playing', lag: 1.5 });
+  assert.equal(w.did.length, 1);
+  assert.match(w.did[0], /^seek -[34](\.\d)?$/);
+  assert.ok(w.posNow() < 1.5, String(w.posNow()));
+  w.run(5000, { stream: 'a', state: 'playing', lag: 1.5 });
+  assert.equal(w.did.length, 1, 'once');
+  // A video that starts after the car has the picture needs nothing done. Nor does a broadcast, which has no beginning to go to.
+  const late = world();
+  late.set('paused');
+  late.k.show(true);
+  late.run(3000, { stream: 'a', state: 'playing', lag: 1.5 });
+  late.set('playing');
+  late.run(4000, { stream: 'a', state: 'playing', lag: 1.5 });
+  assert.deepEqual(late.did, []);
+  const live = world({ noPos: true });
+  live.run(3000, null);
+  live.k.show(true);
+  live.run(4000, { stream: 'a', state: 'playing', lag: 1.5 });
+  assert.deepEqual(live.did, []);
+});
+
+test('a page put back on in the car with its video well under way: the video waits from where it was then, not from its beginning', () => {
+  const w = world();
+  w.run(5 * 60 * 1000, null); // five minutes in, on a page the car wasn't showing
+  w.k.show(true);
+  const from = w.posNow();
+  w.run(3000, null);
+  assert.equal(w.did[0], 'pause');
+  assert.match(w.did[1], /^seek -1\.\d$/);
+  w.run(1500, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did.slice(2), ['play']);
+  assert.ok(Math.abs(w.posNow() - from) < 2, `${from} -> ${w.posNow()}`);
 });
 
 test('played from the page itself while it was held: that is respected, until the car is back', () => {
@@ -176,15 +218,133 @@ test("a video that won't pause is left to play, and the car follows as its conne
   w.k.show(true);
   w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
   w.run(5000, null);
-  assert.deepEqual(w.did, ['pause']);
+  // (Given up on, and told to play in case the pause is only late in landing: it isn't to be left paused.)
+  assert.deepEqual(w.did, ['pause', 'play']);
   assert.equal(w.k.waiting, false, 'given up on');
   w.run(4000, { stream: 'a', state: 'playing', lag: 6 });
-  assert.deepEqual(w.did, ['pause'], 'six seconds behind a broadcast is lived with');
+  assert.deepEqual(w.did, ['pause', 'play'], 'six seconds behind a broadcast is lived with');
   w.run(2000, { stream: 'a', state: 'playing', lag: 12 });
-  assert.deepEqual(w.did, ['pause', 'afresh'], 'twelve is not');
+  assert.deepEqual(w.did, ['pause', 'play', 'afresh'], 'twelve is not');
   // Not asked to pause again and again.
+  w.run(6000, null);
+  assert.deepEqual(w.did, ['pause', 'play', 'afresh']);
+});
+
+test('a car between two streams, having just been started afresh, is not a car that is stuck', () => {
+  // Someone taps play on the page from a phone. The car, a little behind, is brought up to the page at that tap, and
+  // the video starts while the car's new stream is still on its way.
+  const w = world();
+  w.set('paused');
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 4.2 });
+  w.did.length = 0;
+  w.k.steered();
+  assert.deepEqual(w.did, ['afresh']);
+  w.set('playing');
+  w.run(3000, null); // the old stream has stopped, the new one hasn't said anything yet
+  assert.deepEqual(w.did, ['afresh'], 'the video is left playing');
+  w.run(3000, { stream: 'b', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['afresh']);
+  // But a car that never comes back from it is stuck like any other.
+  w.k.steered();
+  w.run(1000, { stream: 'b', state: 'playing', lag: 2.5 });
+  w.run(6000, null);
+  assert.equal(w.did[w.did.length - 1], 'pause');
+});
+
+test("a video that doesn't say where it is: held all the same, and let go once the car's picture has reached the standstill", () => {
+  const w = world({ noPos: true });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(2500, null);
+  assert.deepEqual(w.did, ['pause']);
+  assert.equal(w.video.status, 'paused');
+  assert.equal(w.k.waiting, true, 'not taken for a video that plays on: it did pause');
+  w.run(4000, null);
+  assert.equal(w.k.waiting, true);
+  // The same stream comes back to life. Its picture is 2.5 s behind: it is let go once that picture is past the pause.
+  w.run(1000, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play']);
+  assert.equal(w.video.status, 'playing');
+});
+
+test("a player that pauses when asked and won't start again: asked twice, then said to be stuck, and never held again", () => {
+  const w = world({ resumes: false });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
   w.run(3000, null);
-  assert.deepEqual(w.did, ['pause', 'afresh']);
+  w.run(2500, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play'], 'let go of once the car is back');
+  w.run(3000, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play', 'play'], 'asked again');
+  w.run(2500, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play', 'play'], 'given a little longer the second time');
+  w.run(3000, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play', 'play', 'stuck']);
+  // Someone starts it on the page itself. From then on it is left alone, however the car is doing.
+  w.set('playing');
+  w.run(2000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(8000, null);
+  assert.deepEqual(w.did, ['pause', 'play', 'play', 'stuck']);
+  assert.equal(w.video.status, 'playing');
+});
+
+test("a player that is gone from the browser's controls once it is paused: asked to play once the car is back, then said to be stuck", () => {
+  const w = world({ tearsDown: true });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(3000, null);
+  assert.deepEqual(w.did, ['pause']);
+  assert.equal(w.video.status, 'gone');
+  assert.equal(w.k.waiting, true, 'still being waited with: the car has not come back');
+  w.run(11000, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play', 'play', 'stuck']);
+});
+
+test("a video that didn't start again because someone was at the page meanwhile isn't called stuck", () => {
+  const w = world({ resumes: false });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(3000, null);
+  w.k.steered(); // a tap on the page, from a phone
+  w.run(12000, { stream: 'a', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play', 'play']);
+});
+
+test('the car is taken off the page while its video is held, and put back on it: the video carries on once the car has the picture', () => {
+  const w = world();
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(3000, null);
+  assert.deepEqual(w.did, ['pause']);
+  w.k.show(false); // another video is put on in the car
+  w.run(20000, null);
+  assert.deepEqual(w.did, ['pause'], 'left as it is while the car plays something else');
+  w.k.show(true); // "Show it in the car"
+  assert.equal(w.k.waiting, true);
+  w.run(1500, { stream: 'b', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['pause', 'play']);
+  // Not if someone played and paused it on the page in between: then it is theirs.
+  const v = world();
+  v.k.show(true);
+  v.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  v.run(3000, null);
+  v.k.show(false);
+  v.set('playing');
+  v.run(2000, null);
+  v.set('paused');
+  v.k.show(true);
+  v.run(3000, { stream: 'b', state: 'playing', lag: 2.5 });
+  assert.deepEqual(v.did, ['pause']);
+});
+
+test("a page whose player is known not to start again is never paused for the car", () => {
+  const w = world({ hold: false });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  w.run(9000, null);
+  assert.deepEqual(w.did, []);
+  assert.equal(w.k.waiting, false);
 });
 
 test('with no video playing there is nothing to hold, and a car that has fallen behind is simply brought up to the page', () => {
@@ -238,6 +398,24 @@ test("a recording that is itself arriving late puts any stream that far behind: 
   // The recording catches up, and all of it reaches the car at once, which plays it in its own time: now it is the car that is behind.
   w.run(1500, { stream: 'a', state: 'playing', lag: 5.5, late: 0 });
   assert.deepEqual(w.did, ['afresh']);
+});
+
+test("someone's own pause that the player doesn't come back from is found out the same way, and said to be theirs", () => {
+  const w = world({ resumes: false });
+  w.k.show(true);
+  w.run(4000, { stream: 'a', state: 'playing', lag: 2.5 });
+  // Pause on the car: the page's video is paused, and the car stops showing the page.
+  assert.equal(w.k.handOver(), null);
+  w.set('paused');
+  w.k.show(false);
+  w.run(5000, null);
+  // Play on the car: the video is played once the car has the page's picture again.
+  assert.equal(w.k.playWhenBack(), true);
+  w.k.show(true);
+  w.run(2000, { stream: 'b', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['play']);
+  w.run(9000, { stream: 'b', state: 'playing', lag: 2.5 });
+  assert.deepEqual(w.did, ['play', 'play', 'stuck (their own pause)']);
 });
 
 test('paused from the car while its video was being held: playing it again goes back over what the car missed', () => {
