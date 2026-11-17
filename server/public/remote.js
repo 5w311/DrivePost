@@ -30,6 +30,8 @@
       state = msg.state;
       pageVideo.take(state);
       if (DT.pageCard) DT.pageCard.state(state);
+      // (A page has no chapters here: its video is the site's own.)
+      extras.want(state.now && state.now.id !== 'page' ? state.now.id : null, state.settings.sponsors);
       render();
     },
     pos: function (msg) {
@@ -76,6 +78,14 @@
     return state.now.live ? 0 : state.now.duration || 0;
   }
 
+  // What is known about the video besides the video: its chapters, and a sponsor's stretches of it (common.js).
+  var extras = new DT.Extras(function () { paintTime(); render(); });
+  var SPONSOR_SAYS = {
+    off: 'Sponsored parts of a video play like the rest of it.',
+    ask: 'A sponsored part is marked on the time bar, and a Skip button comes up in the car while it plays.',
+    skip: 'The car goes straight past a sponsored part, and says so, with a way back.'
+  };
+
   var controls = $('#controls');
   // (Said as what the button shows, play or pause: see the car's.)
   var playBtn = DT.iconButton('play', 'Play or pause', function () {
@@ -100,9 +110,15 @@
     if (state.now) {
       var n = state.now;
       np.appendChild(el('div', { class: 'thumb' }, [DT.thumbOf(n)]));
+      // (Whose it is can be tapped, when it is a YouTube channel: its latest videos are listed under Search.)
+      var ref = channelOfNow();
+      var rest = [ref ? null : n.channel, n.site, isLive() ? 'LIVE' : null, state.paused || pausedInPage() ? 'Paused' : null].filter(Boolean).join(' · ');
       np.appendChild(el('div', { style: 'min-width:0' }, [
         el('div', { class: 'np-title', text: n.title }),
-        el('div', { class: 'np-sub', text: [n.channel, n.site, isLive() ? 'LIVE' : null, state.paused || pausedInPage() ? 'Paused' : null].filter(Boolean).join(' · ') })
+        el('div', { class: 'np-sub' }, [
+          ref ? el('button', { type: 'button', class: 'channel-link', text: n.channel || 'This channel', onclick: function () { showChannel(ref); } }) : null,
+          el('span', { text: ref && rest ? ' · ' + rest : rest })
+        ])
       ]));
     } else {
       np.appendChild(el('div', { class: 'muted', text: 'Nothing playing. Search below or paste a link.' }));
@@ -126,6 +142,15 @@
     document.querySelectorAll('#formatSeg button').forEach(function (b) {
       b.classList.toggle('on', b.getAttribute('data-v') === (state.settings.format || 'auto'));
     });
+
+    document.querySelectorAll('#captionsSeg button').forEach(function (b) {
+      b.classList.toggle('on', (b.getAttribute('data-on') === '1') === !!state.settings.captions);
+    });
+    var sponsors = state.settings.sponsors || 'off';
+    document.querySelectorAll('#sponsorSeg button').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-v') === sponsors);
+    });
+    $('#sponsorSay').textContent = SPONSOR_SAYS[sponsors] + (sponsors === 'off' ? '' : ' YouTube videos only. Where they are comes from SponsorBlock, a list kept by viewers; it is asked in a way that doesn\'t say which video is playing.');
 
     renderQueue();
     renderRecent();
@@ -153,8 +178,37 @@
     var pct = d ? (t / d) * 100 : 0;
     $('#rFill').style.width = pct + '%';
     $('#rKnob').style.left = pct + '%';
+    // Its chapters and a sponsor's stretches, marked on the bar, and a way to a chapter by name.
+    var mine = state.now.id !== 'page' && !isLive();
+    extras.paint($('#rScrub .scrub-track'), mine ? d : 0);
+    var chapters = mine && extras.data ? extras.data.chapters : [];
+    var chapter = mine ? extras.chapterAt(t) : null;
+    var label = chapters.length ? (chapter ? chapter.title : 'Chapters') : '';
+    var btn = $('#chaptersBtn');
+    btn.classList.toggle('hidden', !label);
+    if (btn.getAttribute('data-label') !== label) {
+      btn.setAttribute('data-label', label);
+      btn.innerHTML = '';
+      btn.appendChild(el('span', { class: 'chapters-name', text: label }));
+      btn.appendChild(el('span', { class: 'chapters-count', text: chapters.length + ' chapters' }));
+    }
   }
   setInterval(paintTime, 500);
+
+  // The video's chapters, to go to one by name.
+  $('#chaptersBtn').addEventListener('click', function () {
+    var chapters = extras.data ? extras.data.chapters : [];
+    if (!chapters.length || !state || !state.now) return;
+    var at = extras.chapterAt(DT.positionOf(state));
+    var sheet = DT.sheet('Chapters', [el('div', { class: 'sheet-list' }, chapters.map(function (c) {
+      return el('button', { type: 'button', class: at === c ? 'on' : '', onclick: function () {
+        control.cmd('seek', { to: c.t });
+        sheet.close();
+      } }, [el('span', { text: c.title }), el('span', { class: 'when', text: DT.fmt(c.t) })]);
+    }))], { list: true });
+    var on = document.querySelector('.sheet-list button.on');
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: 'center' });
+  });
 
   (function () {
     var scrub = $('#rScrub');
@@ -240,10 +294,24 @@
       }
       // Finding out what a link is can take a few seconds for a site that isn't YouTube.
       return DT.api('/api/resolve', { body: { text: text } }).then(function (r) {
+        // A playlist: all of it (or from the video the link was to), played or lined up.
+        if (r.list) {
+          return DT.api('/api/list/play', { body: { list: r.list.id, from: r.item ? r.item.id : null, how: how === 'play' ? 'play' : 'queue' } }).then(function (done) {
+            linkBox.value = '';
+            var n = done.count + (done.count === 1 ? ' video' : ' videos');
+            DT.toast(done.playing ? 'Playing: ' + done.title + ' (' + n + ')' : done.count ? 'Added ' + n + ' to Up Next: ' + done.title : 'Those are in Up Next already');
+          });
+        }
+        // A channel: its latest videos, to pick from.
+        if (r.channel) {
+          linkBox.value = '';
+          listChannel(r.channel, r.items);
+          return;
+        }
         var lined = how === 'queue' && state && state.now;
         control.cmd(how === 'play' ? 'play' : 'enqueue', { item: r.item });
         linkBox.value = '';
-        DT.toast((lined ? 'Added to Up Next: ' : 'Playing: ') + r.item.title);
+        DT.toast((lined ? 'Added to Up Next: ' : 'Playing: ') + r.item.title + (r.item.at ? ' (from ' + DT.fmt(r.item.at) + ')' : ''));
       }, function (e) {
         // Leave what was pasted in the box, to see what it was and to try again.
         if (!typed) linkBox.value = text.slice(0, 500);
@@ -300,6 +368,36 @@
     wrap.appendChild(row);
     wrap.appendChild(el('div', { class: 'btn-row', style: 'margin:0;padding:0 12px 12px' }, addButtons(item)));
     return wrap;
+  }
+
+  // A channel's latest videos, where the search results go.
+  function listChannel(channel, items) {
+    var box = $('#results');
+    box.innerHTML = '';
+    $('#q').value = '';
+    renderSearches();
+    box.appendChild(el('div', { class: 'list-head' }, [
+      el('div', { class: 'list-head-words' }, [
+        el('div', { class: 'list-head-name', text: channel.title }),
+        el('div', { class: 'list-head-sub', text: 'Channel · latest videos' })
+      ]),
+      el('div', { class: 'btn-row' }, [el('button', { class: 'ghost', text: 'Put the list away', onclick: function () { box.innerHTML = ''; renderSearches(); } })])
+    ]));
+    if (!items.length) box.appendChild(el('div', { class: 'empty', text: 'No videos to show.' }));
+    items.forEach(function (item) { box.appendChild(resultRow(item)); });
+    renderSearches();
+    try { box.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { box.scrollIntoView(true); }
+  }
+  function showChannel(ref) {
+    DT.toast('Finding that channel…');
+    DT.api('/api/channel?ref=' + encodeURIComponent(ref)).then(function (r) { listChannel(r.channel, r.items); }, function (e) { DT.toast(e.message); });
+  }
+  // Whose the video that is on is, when that is a YouTube channel.
+  function channelOfNow() {
+    var n = state && state.now;
+    if (!n || n.id === 'page' || n.url) return null;
+    var known = extras.data && extras.data.id === n.id && extras.data.channel ? extras.data.channel : null;
+    return n.channelId || (known && known.id) || null;
   }
 
   DT.autocomplete($('#q'), {
@@ -469,6 +567,14 @@
   });
   document.querySelectorAll('#screenSeg button').forEach(function (b) {
     b.addEventListener('click', function () { control.cmd('fullscreen', { on: b.getAttribute('data-fs') === '1' }); });
+  });
+  document.querySelectorAll('#captionsSeg button').forEach(function (b) {
+    b.addEventListener('click', function () { control.cmd('captions', { on: b.getAttribute('data-on') === '1' }); });
+  });
+  document.querySelectorAll('#sponsorSeg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      control.cmd('sponsors', { v: b.getAttribute('data-v') });
+    });
   });
   document.querySelectorAll('#formatSeg button').forEach(function (b) {
     b.addEventListener('click', function () { control.cmd('format', { v: b.getAttribute('data-v') }); });

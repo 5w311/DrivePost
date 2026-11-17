@@ -45,6 +45,35 @@
     </section>
 
     <section class="card">
+      <div class="card-head"><h2>Alerts</h2></div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0">A message to your phone when something the server needs stops working, and another when it works again. The server looks at these every few minutes:</p>
+        <div id="alertChecks" class="alert-checks"></div>
+        <form id="alertForm" class="alert-form" autocomplete="off" novalidate>
+          <label for="alertTo">Where to send them</label>
+          <input id="alertTo" type="url" inputmode="url" placeholder="https://ntfy.sh/a-name-only-you-know" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <div class="btn-row">
+            <button class="primary" type="submit">Save</button>
+            <button id="alertMake" type="button">Make one for me</button>
+            <button id="alertTest" type="button">Send a test</button>
+          </div>
+        </form>
+        <p id="alertSay" class="muted" style="font-size:14px"></p>
+        <p class="muted" style="font-size:14px">Alerts travel by <b>ntfy</b>, a free notification app. Install ntfy on your phone, tap <b>+</b>, and type the topic: the last part of the address above, after the last slash. Then tap <b>Send a test</b> here. A topic has no password: whoever knows its name can read what is sent to it, so use one nobody would guess (<b>Make one for me</b> does). The messages say what stopped working and nothing else: no addresses, no names of videos.</p>
+        <details class="more">
+          <summary>If the whole machine goes off</summary>
+          <p class="muted" style="font-size:14px">A server that is off, or a house without internet, can't send anything. For that, a service outside has to notice the silence. Give this server an address to fetch every five minutes while all is well (a "heartbeat": <b>healthchecks.io</b> has a free one), and set that service to tell you when the fetches stop.</p>
+          <form id="beatForm" class="alert-form" autocomplete="off" novalidate>
+            <label for="alertBeat">Heartbeat address</label>
+            <input id="alertBeat" type="url" inputmode="url" placeholder="https://hc-ping.com/..." autocapitalize="off" autocorrect="off" spellcheck="false">
+            <div class="btn-row"><button type="submit">Save</button></div>
+          </form>
+          <p id="beatSay" class="muted" style="font-size:14px;margin-bottom:0"></p>
+        </details>
+      </div>
+    </section>
+
+    <section class="card">
       <div class="card-head"><h2>Server</h2></div>
       <div class="card-body">
         <div id="updateBox" class="update-box">

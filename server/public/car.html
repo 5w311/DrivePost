@@ -40,7 +40,7 @@
         <div id="stageMsg" class="stage-msg"></div>
         <div id="stats" class="stats hidden"></div>
         <div id="overlay" class="overlay">
-          <div class="overlay-top"><div id="fsTitle" class="overlay-title"></div></div>
+          <div class="overlay-top"><div id="fsTitle" class="overlay-title"></div><div id="fsChapter" class="overlay-chapter"></div></div>
           <div class="overlay-center">
             <button class="ctl" id="back10" aria-label="Back 10 seconds"></button>
             <button class="ctl main" id="playPause" aria-label="Play or pause"></button>
@@ -57,6 +57,7 @@
               </div>
             </div>
             <span id="tDur">0:00</span>
+            <button class="ctl small cc" id="ccBtn" type="button" aria-pressed="false" aria-label="Captions"><span>CC</span></button>
             <select id="qualityFs" class="ctl small text" aria-label="Quality">
               <option value="auto">Auto</option>
               <option value="360">360p</option>
@@ -67,13 +68,15 @@
             <button class="ctl small" id="fsToggle" aria-label="Fullscreen"></button>
           </div>
         </div>
+        <div id="captions" class="captions hidden"></div>
         <div id="pausedTag" class="paused-tag hidden">Paused</div>
+        <button id="skipBtn" class="skip-btn hidden" type="button">Skip sponsor</button>
         <div id="tapStart" class="tap-start hidden"><button id="tapStartBtn" class="primary">Tap to play</button></div>
       </div>
       <div class="now-meta">
         <div class="now-text">
           <div id="nowTitle" class="now-title"></div>
-          <div id="nowSub" class="now-sub"></div>
+          <div id="nowSub" class="now-sub"><button id="nowChannel" type="button" class="channel-link hidden"></button><span id="nowRest"></span></div>
         </div>
         <button id="statsBtn" class="ghost" type="button" aria-pressed="false">Stats</button>
       </div>

@@ -62,14 +62,39 @@
     });
   };
 
-  DT.toast = function (msg) {
+  // A line of words at the foot of the screen for a few seconds. `opts`: a
+  // button beside them ({ action: 'Undo', run: fn }), which it then stays up
+  // a little longer for.
+  DT.toast = function (msg, opts) {
     var t = document.getElementById('toast');
     if (!t) return;
     t.textContent = msg;
+    t.classList.toggle('with-action', !!(opts && opts.action));
+    if (opts && opts.action) {
+      t.appendChild(DT.el('button', { class: 'toast-action', type: 'button', text: opts.action, onclick: function (ev) {
+        ev.stopPropagation();
+        t.classList.remove('show');
+        opts.run();
+      } }));
+    }
     t.classList.add('show');
     clearTimeout(DT._toastTimer);
     // Long enough to read: a line and a half more for every extra line of words.
-    DT._toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3500 + Math.min(5000, Math.max(0, String(msg).length - 60) * 45));
+    DT._toastTimer = setTimeout(function () { t.classList.remove('show'); }, (opts && opts.action ? 6000 : 3500) + Math.min(5000, Math.max(0, String(msg).length - 60) * 45));
+  };
+
+  // A sheet over the page: a title, whatever goes in it, and Close. `opts`:
+  // { center, wide }. Returns { close }.
+  DT.sheet = function (title, children, opts) {
+    opts = opts || {};
+    var scrim = DT.el('div', { class: 'scrim' + (opts.center ? ' center' : '') });
+    var sheet = DT.el('div', { class: 'sheet' + (opts.wide ? ' wide' : '') + (opts.list ? ' listed' : '') }, [DT.el('div', { class: 'sheet-title', text: title })].concat(children || []));
+    sheet.appendChild(DT.el('button', { class: 'ghost', text: 'Close', onclick: close }));
+    scrim.appendChild(sheet);
+    scrim.addEventListener('click', function (ev) { if (ev.target === scrim) close(); });
+    document.body.appendChild(scrim);
+    function close() { scrim.remove(); }
+    return { close: close };
   };
 
   // ---- staying on the current version ----
@@ -520,6 +545,87 @@
     }
     form.addEventListener('submit', hide);
     return { hide: hide };
+  };
+
+  /*
+   * What is known about a video besides the video (the server's
+   * /api/extras): its chapters, a sponsor's stretches of it (for a profile
+   * that has those marked or skipped), whether it has captions, and whose it
+   * is. `want(id, key)` says which video the screen is on now; `key` is
+   * anything that changes what the answer would be (the sponsor setting).
+   * `onChange` runs when there is something new to draw.
+   */
+  DT.Extras = function (onChange) {
+    this.id = null;
+    this.key = null;
+    this.data = null;
+    this.onChange = onChange || function () {};
+    this.again = null;
+  };
+  DT.Extras.prototype.want = function (id, key) {
+    key = key || '';
+    if (id === this.id && key === this.key) return;
+    var self = this;
+    var fresh = id !== this.id;
+    this.id = id;
+    this.key = key;
+    clearTimeout(this.again);
+    if (fresh) {
+      this.data = null;
+      this.onChange();
+    }
+    if (!id) return;
+    var tries = 0;
+    (function ask() {
+      DT.api('/api/extras?id=' + encodeURIComponent(id)).then(function (r) {
+        if (self.id !== id || self.key !== key) return;
+        self.data = r;
+        self.onChange();
+        // Not looked up yet when this was asked (the video was still being found): once more, a little later.
+        if (!r.known && ++tries < 3) self.again = setTimeout(ask, 7000);
+      }, function () {
+        if (self.id === id && self.key === key && ++tries < 3) self.again = setTimeout(ask, 7000);
+      });
+    })();
+  };
+  // The chapter that `t` (seconds) is in, or null.
+  DT.Extras.prototype.chapterAt = function (t) {
+    var list = (this.data && this.data.chapters) || [];
+    var found = null;
+    for (var i = 0; i < list.length && list[i].t <= t + 0.25; i++) found = list[i];
+    return found;
+  };
+  // The sponsor's stretch that `t` is in, or null. (Not its last moments: by then it is as good as over.)
+  DT.Extras.prototype.skipAt = function (t) {
+    var list = (this.data && this.data.skips) || [];
+    for (var i = 0; i < list.length; i++) if (t >= list[i].from - 0.1 && t < list[i].to - 0.6) return list[i];
+    return null;
+  };
+  /*
+   * Draw a video's chapters and sponsor stretches on a time bar: `track` is
+   * the bar's track, `d` the video's length. Chapters show as thin gaps
+   * between them, a sponsor's stretch as a length of another colour.
+   */
+  DT.Extras.prototype.paint = function (track, d) {
+    var data = this.data;
+    var key = data && d ? [data.id, Math.round(d), data.chapters.length, data.skips.map(function (s) { return s.from + '-' + s.to; }).join(',')].join('|') : '';
+    var box = track.querySelector('.scrub-marks');
+    if (!box) {
+      box = DT.el('div', { class: 'scrub-marks' });
+      // (Under the knob, over the fill.)
+      track.insertBefore(box, track.querySelector('.scrub-knob'));
+    }
+    if (box.getAttribute('data-key') === key) return;
+    box.setAttribute('data-key', key);
+    box.innerHTML = '';
+    if (!key) return;
+    var pct = function (t) { return Math.max(0, Math.min(100, (t / d) * 100)); };
+    data.skips.forEach(function (s) {
+      box.appendChild(DT.el('div', { class: 'scrub-skip', style: 'left:' + pct(s.from) + '%;width:' + Math.max(0.4, pct(s.to) - pct(s.from)) + '%' }));
+    });
+    data.chapters.forEach(function (c) {
+      if (c.t > 0.5 && c.t < d - 0.5) box.appendChild(DT.el('div', { class: 'scrub-tick', style: 'left:' + pct(c.t) + '%' }));
+    });
   };
 
   DT.iconButton = function (name, label, onclick, cls) {

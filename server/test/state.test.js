@@ -183,3 +183,90 @@ test('a saved format this version does not know falls back to automatic', () => 
   const s = new Store({ dataDir, defaultQuality: '480' });
   assert.equal(s.settings.format, 'auto');
 });
+
+test('sponsor breaks and captions are choices each profile keeps, and neither starts the video over', () => {
+  const s = makeStore('480');
+  assert.equal(s.settings.sponsors, 'off', 'sponsored parts play, until someone says otherwise');
+  assert.equal(s.settings.captions, false);
+  s.command('play', { item: A });
+  const seq = s.now.seq;
+  assert.equal(s.command('sponsors', { v: 'skip' }), null);
+  assert.equal(s.command('captions', { on: true }), null);
+  assert.equal(s.settings.sponsors, 'skip');
+  assert.equal(s.settings.captions, true);
+  assert.equal(s.now.seq, seq, 'what is playing carries on');
+  assert.equal(s.command('sponsors', { v: 'always' }), 'Bad choice');
+  assert.equal(s.settings.sponsors, 'skip');
+  s.saveNow();
+  const again = new Store({ dataDir: path.dirname(s.file), defaultQuality: '480' });
+  assert.equal(again.settings.sponsors, 'skip');
+  assert.equal(again.settings.captions, true);
+  // A setting that was saved as something else altogether is put right.
+  fs.writeFileSync(s.file, JSON.stringify({ settings: { sponsors: 'yes', captions: 'yes' } }));
+  const odd = new Store({ dataDir: path.dirname(s.file), defaultQuality: '480' });
+  assert.equal(odd.settings.sponsors, 'off');
+  assert.equal(odd.settings.captions, false);
+});
+
+test("a video's row keeps whose it is, when that is a channel's real ID", () => {
+  const s = makeStore('480');
+  const channelId = 'UC' + 'c'.repeat(22);
+  s.command('play', { item: { ...A, channel: 'Someone', channelId } });
+  assert.equal(s.now.channelId, channelId);
+  assert.equal(s.history[0].channelId, channelId);
+  s.command('enqueue', { item: { ...B, channelId: 'javascript:alert(1)' } });
+  assert.equal('channelId' in s.queue[0], false);
+});
+
+test('a playlist is played from its first video with the rest behind it, or added to Up Next, each video once', () => {
+  const s = makeStore('480');
+  const list = ['ccccccccccc', 'ddddddddddd', 'eeeeeeeeeee'].map((id, i) => ({ id, title: `List ${i + 1}`, duration: 100 }));
+  // Nothing on: "add to Up Next" plays the first and lines up the rest.
+  assert.equal(s.command('enqueueMany', { items: list, how: 'queue' }), null);
+  assert.equal(s.now.id, 'ccccccccccc');
+  assert.deepEqual(s.queue.map((q) => q.id), ['ddddddddddd', 'eeeeeeeeeee']);
+  assert.ok(s.queue.every((q) => q.key), 'each has its own place in the line');
+  // Added again while it plays: nothing is lined up twice, and what is on isn't lined up behind itself.
+  s.command('enqueueMany', { items: [...list, B], how: 'queue' });
+  assert.deepEqual(s.queue.map((q) => q.id), ['ddddddddddd', 'eeeeeeeeeee', 'bbbbbbbbbbb']);
+  // "Play all" of another list: it goes first, in its order, and what was lined up stays behind it.
+  const other = [A, { id: 'eeeeeeeeeee', title: 'List 3', duration: 100 }, { id: 'fffffffffff', title: 'New', duration: 50 }];
+  s.command('enqueueMany', { items: other, how: 'play' });
+  assert.equal(s.now.id, 'aaaaaaaaaaa');
+  assert.deepEqual(s.queue.map((q) => q.id), ['eeeeeeeeeee', 'fffffffffff', 'ddddddddddd', 'bbbbbbbbbbb']);
+  // Rubbish in a list is left out; a list of nothing but rubbish is refused.
+  assert.equal(s.command('enqueueMany', { items: [{ id: 'nope' }, null, 'x'], how: 'queue' }), 'Nothing to play in that list');
+  assert.equal(s.command('enqueueMany', { items: 'everything', how: 'play' }), 'Nothing to play in that list');
+  // Up Next has an end.
+  const many = Array.from({ length: 300 }, (_, i) => ({ id: `v${String(i).padStart(10, '0')}`, title: `Video ${i}` }));
+  s.command('enqueueMany', { items: many, how: 'queue' });
+  s.command('enqueueMany', { items: many.map((m) => ({ ...m, id: 'w' + m.id.slice(1) })), how: 'queue' });
+  assert.equal(s.queue.length, 500);
+});
+
+test("a video put on by a link that says where to start begins there, this once", () => {
+  const s = makeStore('480');
+  // Played before, and left at four minutes in.
+  s.command('play', { item: A });
+  s.carPosition({ seq: s.now.seq, t: 240, state: 'playing' });
+  s.command('stop');
+  // The link's time comes before where it was left.
+  s.command('play', { item: { ...A, at: 96 } });
+  assert.equal(s.now.startAt, 96);
+  assert.equal('at' in s.now, false, 'it is where this playing starts, not something the video keeps');
+  assert.equal('at' in s.history[0], false);
+  // "Play from start" still means the start.
+  s.command('play', { item: { ...A, at: 96 }, fromStart: true });
+  assert.equal(s.now.startAt, 0);
+  // Lined up, it starts there when its turn comes.
+  s.command('enqueue', { item: { ...B, at: 30 } });
+  assert.equal(s.queue[0].at, 30);
+  s.command('next');
+  assert.equal(s.now.id, B.id);
+  assert.equal(s.now.startAt, 30);
+  // A time past the end of the video, or no time at all, is no time.
+  s.command('play', { item: { ...A, at: 5000 } });
+  assert.equal(s.now.startAt, 240, 'back to where it was left');
+  s.command('play', { item: { ...A, at: 'soon' } });
+  assert.equal(s.now.startAt, 240);
+});

@@ -173,7 +173,63 @@
       weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
     });
     showUpdate(view.server.update);
+    showAlerts(view.alerts);
   }
+
+  // ---- alerts: what the server keeps an eye on, and where it says so ----
+  var CHECK_SAYS = { ok: 'Working', bad: 'Not working', unsure: 'Looking again', unset: 'Not checked', waiting: 'Not looked at yet' };
+  function showAlerts(a) {
+    if (!a) return;
+    var box = $('#alertChecks');
+    box.innerHTML = '';
+    a.checks.forEach(function (c) {
+      box.appendChild(DT.el('div', { class: 'alert-check ' + c.state }, [
+        DT.el('span', { class: 'alert-dot', 'aria-hidden': 'true' }),
+        DT.el('div', { class: 'alert-what' }, [
+          DT.el('div', { class: 'alert-label', text: c.label.charAt(0).toUpperCase() + c.label.slice(1) }),
+          c.words ? DT.el('div', { class: 'alert-words', text: c.words + (c.state === 'bad' && c.since ? ' Since ' + ago(c.since) + '.' : '') }) : null
+        ]),
+        DT.el('span', { class: 'alert-state', text: CHECK_SAYS[c.state] || '' })
+      ]));
+    });
+    // (Not over what is being typed.)
+    if (document.activeElement !== $('#alertTo')) $('#alertTo').value = a.to;
+    if (document.activeElement !== $('#alertBeat')) $('#alertBeat').value = a.beat;
+    $('#alertTest').disabled = !a.to;
+    var topic = a.to ? a.to.replace(/\/+$/, '').split('/').pop() : '';
+    $('#alertSay').textContent = !a.to
+      ? 'Nowhere yet: troubles are only written to the server\'s log.'
+      : 'Topic: ' + topic + (a.sent ? '. Last message ' + ago(a.sent.at) + (a.sent.ok ? ': sent.' : ": didn't go (" + a.sent.error + ').') : '. Nothing has been sent yet.');
+    $('#beatSay').textContent = !a.beat ? '' : a.beatError ? "The last fetch didn't go (" + a.beatError + ').' : a.beatAt ? 'Last fetched ' + ago(a.beatAt) + '.' : 'Not fetched yet: the first one goes within a few minutes.';
+  }
+  function alertAct(body, done) {
+    return DT.api('/api/admin/alerts', { body: body }).then(function (v) {
+      took(v);
+      if (done) DT.toast(done);
+    }).catch(function (e) {
+      if (signedOut(e)) return;
+      DT.toast(e.message);
+    });
+  }
+  $('#alertForm').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    $('#alertTo').blur();
+    alertAct({ to: $('#alertTo').value.trim() }, $('#alertTo').value.trim() ? 'Saved. Send a test to see it arrive.' : 'Alerts are off.');
+  });
+  $('#alertMake').addEventListener('click', function () {
+    $('#alertTo').blur();
+    alertAct({ make: true }, 'Made. Follow this topic in the ntfy app, then send a test.');
+  });
+  $('#alertTest').addEventListener('click', function () {
+    var typed = $('#alertTo').value.trim();
+    $('#alertTo').blur();
+    alertAct({ to: typed, test: true }, 'Sent. It should be on your phone in a moment.');
+  });
+  $('#beatForm').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    $('#alertBeat').blur();
+    alertAct({ beat: $('#alertBeat').value.trim() }, $('#alertBeat').value.trim() ? 'Saved.' : 'No heartbeat.');
+  });
 
   // ---- updates: what the server's updater is doing, and Force update ----
   // For each state: the heading, what it says, which button it has ('force',

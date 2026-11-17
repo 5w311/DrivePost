@@ -9,6 +9,10 @@
   var firstState = true;
   var silent = null; // a video that began without sound, the browser keeping it back: { seq, from, at }
   var pageVideo = new DT.PageVideo(); // a page's own video, as the server's browser has it
+  // What is known about the video that is on besides the video: chapters, a sponsor's stretches (common.js).
+  var extras = new DT.Extras(function () { if (window.paintTime) window.paintTime(); });
+  var letBe = {}; // sponsor stretches of this video that have been dealt with once (by where they start): gone back into, they play
+  var letBeFor = null; // the video those are of
   var REWIND_MS = 30000; // sound brought in by a tap this soon after takes the video back to where it began
   var loadedSeq = null;
   var loadedId = null; // the video the open stream is of
@@ -17,6 +21,7 @@
   var jumps = []; // skips made on this page before the server knew: { to, at }
   var errorMsg = null;
   var searchResults = null;
+  var searchHead = null; // what the results are, when they aren't a search's: a playlist's videos ({ list, from }) or a channel's ({ channel })
   var searching = false;
   var tab = 'queue';
   var overlayTimer = null;
@@ -296,6 +301,10 @@
       showQuality();
       renderLists();
       syncPlayback();
+      // (A page has no chapters here: its video is the site's own.)
+      extras.want(state.now && state.now.id !== 'page' ? state.now.id : null, state.settings.sponsors);
+      wantCaptions();
+      showCc();
     },
     pos: function () {},
     format: function (msg) {
@@ -415,7 +424,7 @@
         el('div', { text: 'Search for a video, or send one from your phone.' })
       ]));
       $('#nowTitle').textContent = '';
-      $('#nowSub').textContent = '';
+      paintSub();
       wasPaused = null;
       showOverlay(false);
       return;
@@ -423,7 +432,7 @@
 
     $('#nowTitle').textContent = now.title;
     $('#fsTitle').textContent = now.title;
-    $('#nowSub').textContent = [now.channel, now.site, isLive() ? 'Live' : null].filter(Boolean).join(' · ');
+    paintSub();
 
     if (errorMsg) {
       var box = el('div', {}, [
@@ -469,6 +478,29 @@
     wasPaused = paused;
     $('#pausedTag').classList.toggle('hidden', !paused);
   }
+
+  // Under the title: whose it is, where from, and the chapter that is playing.
+  // Whose it is can be tapped, when it is a YouTube channel: its other videos come up in the lists.
+  function channelOf(now) {
+    if (!now || now.id === 'page' || now.url) return null;
+    var known = extras.data && extras.data.id === now.id && extras.data.channel ? extras.data.channel : null;
+    var ref = now.channelId || (known && known.id) || null;
+    return ref ? { ref: ref, title: now.channel || (known && known.name) || 'This channel' } : null;
+  }
+  function paintSub() {
+    var now = state && state.now;
+    var btn = $('#nowChannel');
+    var channel = channelOf(now);
+    var chapter = now && now.id !== 'page' && !isLive() ? extras.chapterAt(currentTime()) : null;
+    var rest = now ? [channel ? null : now.channel, now.site, isLive() ? 'Live' : null, chapter ? chapter.title : null].filter(Boolean).join(' · ') : '';
+    btn.classList.toggle('hidden', !channel);
+    btn.textContent = channel ? channel.title : '';
+    btn._channel = channel;
+    $('#nowRest').textContent = channel && rest ? ' · ' + rest : rest;
+  }
+  $('#nowChannel').addEventListener('click', function () {
+    if (this._channel) showChannel(this._channel.ref, this._channel.title);
+  });
 
   // "Tap to play" means play: also when the video is waiting paused, as it is
   // after the browser was closed or the server restarted. (A tap anywhere
@@ -638,9 +670,140 @@
         ? 'linear-gradient(to right, var(--accent-gone) 0, var(--accent-gone) ' + gone + '%, var(--rig-accent) ' + gone + '%)'
         : '';
       scrub.style.visibility = live ? 'hidden' : 'visible';
+      // Its chapters and a sponsor's stretches, marked on the bar, and the chapter by name.
+      var mine = state && state.now && state.now.id !== 'page' && !live;
+      extras.paint($('#scrub .scrub-track'), mine ? d : 0);
+      var chapter = mine ? extras.chapterAt(t) : null;
+      var name = chapter ? chapter.title : '';
+      if ($('#fsChapter').textContent !== name) {
+        $('#fsChapter').textContent = name;
+        paintSub();
+      }
     };
   })();
   setInterval(paintTime, 250);
+
+  // ---------- a sponsor's part of a video ----------
+  // With "Sponsor breaks" set to Skip (on a phone), the video goes straight
+  // past each one, once, and says so with a way back. Set to Ask, a button
+  // comes up while one plays. A stretch that was skipped and then gone back
+  // into plays like any other part.
+  function sponsorNow() {
+    var now = state && state.now;
+    var s = player.active;
+    if (!now || now.id === 'page' || !extras.data || extras.data.id !== now.id || !extras.data.skips.length) return null;
+    if (letBeFor !== now.key) {
+      letBeFor = now.key;
+      letBe = {};
+    }
+    if (!s || s.seq !== now.seq || s.state !== 'playing' || state.paused || errorMsg || waitsForTap()) return null;
+    var seg = extras.skipAt(s.position());
+    return seg && !letBe[seg.from] ? seg : null;
+  }
+  function skipSponsor(seg, asked) {
+    letBe[seg.from] = true;
+    // (One that runs to the end of the video lands on its last second, and the video ends as it would have.)
+    skipTo(seg.to);
+    if (!asked) {
+      DT.toast('Skipped a sponsor break (' + DT.fmt(seg.to - seg.from) + ')', { action: 'Go back', run: function () { skipTo(seg.from); } });
+    }
+  }
+  setInterval(function () {
+    var seg = sponsorNow();
+    var mode = state ? state.settings.sponsors : 'off';
+    if (seg && mode === 'skip') skipSponsor(seg, false);
+    var offer = seg && mode === 'ask' ? seg : null;
+    var btn = $('#skipBtn');
+    btn.classList.toggle('hidden', !offer);
+    btn._seg = offer;
+  }, 250);
+  $('#skipBtn').addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    if (this._seg) skipSponsor(this._seg, true);
+    this.classList.add('hidden');
+  });
+
+  // ---------- captions ----------
+  // A video's own captions (the ones people wrote for it, else the ones its
+  // site made from the sound), drawn over the picture in step with it. CC in
+  // the bar switches them on and off, for this profile. A page's video has
+  // its site's captions instead (the phone's Captions key).
+  var caps = { id: null, cues: null, none: '', said: false, again: null };
+  function wantCaptions() {
+    var now = state && state.now;
+    var id = now && now.id !== 'page' && state.settings.captions ? now.id : null;
+    if (id === caps.id) return;
+    clearTimeout(caps.again);
+    caps = { id: id, cues: null, none: '', said: false, again: null };
+    if (id) fetchCaptions(id, 0);
+  }
+  function fetchCaptions(id, tries) {
+    DT.api('/api/captions?id=' + encodeURIComponent(id)).then(function (r) {
+      if (caps.id !== id) return;
+      caps.cues = r.cues || null;
+      caps.none = r.cues ? '' : r.none || 'This video has no captions.';
+      // (Couldn't be fetched this time: once more in a while, without saying it twice.)
+      if (!r.cues && r.later && tries < 2) caps.again = setTimeout(function () { fetchCaptions(id, tries + 1); }, 20000);
+      if (!r.cues && !caps.said) {
+        caps.said = true;
+        DT.toast(caps.none);
+      }
+      showCc();
+    }, function () {
+      if (caps.id === id && tries < 2) caps.again = setTimeout(function () { fetchCaptions(id, tries + 1); }, 20000);
+    });
+  }
+  function showCc() {
+    var on = !!(state && state.settings.captions);
+    var btn = $('#ccBtn');
+    btn.classList.toggle('on', on);
+    btn.classList.toggle('none', on && !!caps.none);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('hidden', !!(state && state.now && state.now.id === 'page'));
+  }
+  $('#ccBtn').addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    if (!state) return;
+    var on = !state.settings.captions;
+    control.cmd('captions', { on: on });
+    if (!on) DT.toast('Captions off');
+    bump();
+  });
+  // The lines that are up at `t`: the last two that have begun and not ended (captions made from the sound roll, two lines at a time).
+  function linesAt(t) {
+    var cues = caps.cues;
+    if (!cues || !cues.length) return [];
+    var lo = 0, hi = cues.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (cues[mid][0] <= t) lo = mid + 1;
+      else hi = mid;
+    }
+    var out = [];
+    for (var i = lo - 1; i >= 0 && out.length < 2 && t - cues[i][0] < 21; i--) if (t < cues[i][1]) out.unshift(cues[i][2]);
+    return out;
+  }
+  var capsShown = '';
+  setInterval(function () {
+    var box = $('#captions');
+    var now = state && state.now;
+    var s = player.active;
+    var lines = [];
+    if (caps.cues && now && caps.id === now.id && s && s.seq === now.seq && s.state !== 'done' && !errorMsg && !waitsForTap()) lines = linesAt(s.position());
+    var text = lines.join('\n');
+    if (text === capsShown) return;
+    capsShown = text;
+    box.innerHTML = '';
+    lines.forEach(function (l) { box.appendChild(el('span', { text: l })); });
+    box.classList.toggle('hidden', !lines.length);
+  }, 100);
+  // (Their size goes by the picture's, whatever the window's.)
+  function sizeCaptions() {
+    $('#stage').style.setProperty('--stage-w', $('#stage').clientWidth + 'px');
+  }
+  window.addEventListener('resize', sizeCaptions);
+  setInterval(sizeCaptions, 1500);
+  sizeCaptions();
   // A page's video being paused or played in the page reaches this screen's
   // picture a few seconds after the server hears of it: the buttons follow then.
   var pagePausedShown = null;
@@ -970,8 +1133,9 @@
 
   // Emptying the box puts the earlier searches back in place of the results.
   $('#q').addEventListener('input', function () {
-    if (!$('#q').value.trim() && searchResults && !searching) {
+    if (!$('#q').value.trim() && searchResults && !searching && !(searchHead && searchHead.channel)) {
       searchResults = null;
+      searchHead = null;
       renderLists();
     }
   });
@@ -1006,16 +1170,27 @@
     }
     setTab('search');
     scrollToLists();
-    searching = true;
-    searchResults = null;
-    renderLists();
     // A link to anywhere is looked up rather than searched for.
     var looksLikeLink = /^(https?:\/\/|www\.)|youtu\.?be|youtube\.com/i.test(q);
-    var req = looksLikeLink
-      ? DT.api('/api/resolve', { body: { text: q } }).then(function (r) { return [r.item]; })
-      : DT.api('/api/search?q=' + encodeURIComponent(q)).then(function (r) { return r.results; });
-    req.then(function (results) {
-      searchResults = results;
+    listInSearch(looksLikeLink
+      ? DT.api('/api/resolve', { body: { text: q } }).then(function (r) {
+          // One video, or a playlist's videos, or a channel's latest.
+          if (r.list) return { head: { list: r.list, from: r.item ? r.item.id : null }, results: r.items };
+          if (r.channel) return { head: { channel: r.channel }, results: r.items };
+          return { head: null, results: [r.item] };
+        })
+      : DT.api('/api/search?q=' + encodeURIComponent(q)).then(function (r) { return { head: null, results: r.results }; }));
+  }
+
+  // Put what `req` finds ({ head, results }) in the Search list.
+  function listInSearch(req) {
+    searching = true;
+    searchResults = null;
+    searchHead = null;
+    renderLists();
+    req.then(function (found) {
+      searchResults = found.results;
+      searchHead = found.head;
     }).catch(function (e) {
       searchResults = [];
       DT.toast(e.message);
@@ -1023,6 +1198,31 @@
       searching = false;
       renderLists();
     });
+  }
+
+  // A channel's latest videos, in the Search list.
+  function showChannel(ref, title) {
+    if (theater) {
+      theater = false;
+      try { localStorage.setItem('dt.theater', '0'); } catch (e) {}
+      applyTheater();
+    }
+    $('#q').value = '';
+    setTab('search');
+    scrollToLists();
+    listInSearch(DT.api('/api/channel?ref=' + encodeURIComponent(ref)).then(function (r) {
+      return { head: { channel: r.channel }, results: r.items };
+    }));
+  }
+
+  // Put a playlist on: `how` is 'play' (from its first video, or from the one the link was to) or 'queue'.
+  function playList(head, how) {
+    DT.api('/api/list/play', { body: { list: head.list.id, from: head.from, how: how } }).then(function (r) {
+      DT.toast(how === 'play'
+        ? 'Playing: ' + r.title + ' (' + r.count + (r.count === 1 ? ' video)' : ' videos)')
+        : r.count ? 'Added ' + r.count + (r.count === 1 ? ' video' : ' videos') + ' to Up Next' : 'Those are in Up Next already');
+      if (how === 'play') scrollToVideo();
+    }, function (e) { DT.toast(e.message); });
   }
 
   // ---------- lists ----------
@@ -1088,10 +1288,13 @@
     var buttons = [];
     if (extra) buttons = buttons.concat(extra(act));
     else {
-      buttons.push(act(progress ? 'Resume from ' + DT.fmt(progress) : 'Play now', function () { control.cmd('play', { item: item }); scrollToVideo(); }, true));
-      if (progress) buttons.push(act('Play from start', function () { control.cmd('play', { item: item, fromStart: true }); scrollToVideo(); }));
+      // (`item.at`: its link said where to start, "t=96". That comes before where it was left last time.)
+      var from = item.at || progress;
+      buttons.push(act(item.at ? 'Play from ' + DT.fmt(item.at) : progress ? 'Resume from ' + DT.fmt(progress) : 'Play now', function () { control.cmd('play', { item: item }); scrollToVideo(); }, true));
+      if (from) buttons.push(act('Play from start', function () { control.cmd('play', { item: item, fromStart: true }); scrollToVideo(); }));
       buttons.push(act('Play next', function () { control.cmd('playNext', { item: item }); DT.toast('Playing next'); }));
       buttons.push(act('Add to Up Next', function () { control.cmd('enqueue', { item: item }); DT.toast('Added to Up Next'); }));
+      if (item.channelId) buttons.push(act('More from ' + (item.channel || 'this channel'), function () { showChannel(item.channelId, item.channel); }));
     }
     sheet = openSheet(item.title, buttons);
   }
@@ -1177,13 +1380,37 @@
     }
     else if (!searchResults) s.appendChild(el('div', { class: 'empty', text: 'Type in the search box at the top.' }));
     else if (!searchResults.length) s.appendChild(el('div', { class: 'empty', text: 'No results.' }));
-    else searchResults.forEach(function (item) {
-      s.appendChild(DT.itemRow(item, {
-        progress: progress[item.id],
-        active: state.now && state.now.id === item.id,
-        onclick: function () { itemSheet(item); }
-      }));
-    });
+    else {
+      // What these are, when they aren't a search's results, and (for a playlist) the whole of it at a tap.
+      if (searchHead && searchHead.list) {
+        var head = searchHead;
+        var more = head.list.count > searchResults.length ? 'the first ' + searchResults.length + ' of ' + head.list.count : searchResults.length + (searchResults.length === 1 ? ' video' : ' videos');
+        s.appendChild(el('div', { class: 'list-head' }, [
+          el('div', { class: 'list-head-words' }, [
+            el('div', { class: 'list-head-name', text: head.list.title }),
+            el('div', { class: 'list-head-sub', text: ['Playlist', head.list.channel, more].filter(Boolean).join(' · ') })
+          ]),
+          el('div', { class: 'btn-row' }, [
+            el('button', { class: 'primary', text: head.from ? 'Play from this video' : 'Play all', onclick: function () { playList(head, 'play'); } }),
+            el('button', { text: 'Add all to Up Next', onclick: function () { playList(head, 'queue'); } })
+          ])
+        ]));
+      } else if (searchHead && searchHead.channel) {
+        s.appendChild(el('div', { class: 'list-head' }, [
+          el('div', { class: 'list-head-words' }, [
+            el('div', { class: 'list-head-name', text: searchHead.channel.title }),
+            el('div', { class: 'list-head-sub', text: 'Channel · latest videos' })
+          ])
+        ]));
+      }
+      searchResults.forEach(function (item) {
+        s.appendChild(DT.itemRow(item, {
+          progress: progress[item.id],
+          active: state.now && state.now.id === item.id,
+          onclick: function () { itemSheet(item); }
+        }));
+      });
+    }
 
     // Recent
     var r = $('#panel-recent');

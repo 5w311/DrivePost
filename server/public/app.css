@@ -43,6 +43,7 @@
   --ok-ring: rgba(14, 112, 70, 0.24);
   --bad-ring: rgba(189, 45, 32, 0.28);
   --accent-gone: rgba(31, 78, 216, 0.45);   /* the played part of the seek bar that is no longer on hand */
+  --skip-mark: #2fbf71;   /* a sponsor's stretch of the seek bar */
   --bar: rgba(242, 243, 239, 0.84);         /* the phone pages' top bar, see-through */
   --pill: var(--rig-surface);               /* the chosen item of a toggle group */
   --thumb: var(--rig-surface);              /* a slider's thumb */
@@ -78,6 +79,7 @@
     --ok-ring: rgba(67, 192, 136, 0.26);
     --bad-ring: rgba(255, 111, 96, 0.3);
     --accent-gone: rgba(112, 151, 255, 0.45);
+    --skip-mark: #2fbf71;   /* a sponsor's stretch of the seek bar */
     --bar: rgba(16, 19, 22, 0.84);
     --pill: var(--rig-surface-3);
     --thumb: var(--rig-ink);
@@ -112,6 +114,7 @@
   --ok-ring: rgba(67, 192, 136, 0.26);
   --bad-ring: rgba(255, 111, 96, 0.3);
   --accent-gone: rgba(112, 151, 255, 0.45);
+  --skip-mark: #2fbf71;   /* a sponsor's stretch of the seek bar */
   --bar: rgba(16, 19, 22, 0.84);
   --pill: var(--rig-surface-3);
   --thumb: var(--rig-ink);
@@ -226,6 +229,19 @@ select {
 .row-sub { color: var(--rig-ink-2); font-size: 13.5px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-actions { display: flex; gap: 2px; flex: none; }
 .empty { color: var(--rig-ink-2); padding: 28px 16px; text-align: center; }
+/* What a list of videos is, when it isn't a search's results: a playlist (with the whole of it at a tap) or a channel. */
+.list-head { padding: 14px 14px 12px; border-bottom: 1px solid var(--rig-line); display: flex; flex-direction: column; gap: 10px; }
+.list-head-name { font-weight: 700; font-size: 16.5px; line-height: 1.3; }
+.list-head-sub { color: var(--rig-ink-2); font-size: 13.5px; margin-top: 2px; }
+.list-head .btn-row { margin: 0; }
+/* Whose the video is, under its title: a tap lists that channel's videos. */
+.channel-link {
+  display: inline; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
+  font: inherit; color: inherit; text-decoration: underline; text-decoration-color: var(--rig-line-2); text-underline-offset: 3px; cursor: pointer;
+  /* (Taller to the finger than to the eye.) */
+  padding: 10px 0; margin: -10px 0;
+}
+.channel-link:active { color: var(--rig-accent); }
 
 /* ---------- toast, sheet, modal ---------- */
 .toast {
@@ -238,6 +254,10 @@ select {
   opacity: 0; pointer-events: none;
 }
 .toast.show { transform: translate(-50%, 0); opacity: 1; }
+/* With something to tap beside the words (Undo). */
+.toast.with-action { display: flex; align-items: center; gap: 14px; padding: 8px 8px 8px 16px; }
+.toast.with-action.show { pointer-events: auto; }
+.toast-action { flex: none; min-height: 44px; padding: 0 16px; font-weight: 700; color: var(--rig-accent); background: var(--rig-accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ring); }
 
 .scrim {
   position: fixed; inset: 0; background: var(--rig-overlay); z-index: 40;
@@ -411,6 +431,27 @@ html.pulls-to-reload, html.pulls-to-reload body { overscroll-behavior-y: contain
   transform: translate(-50%, -50%);
 }
 .live-badge { background: var(--rig-bad); color: #fff; font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 999px; }
+/* Marks on the time bar: a thin gap where one chapter ends and the next begins, and a sponsor's stretch in its own colour. */
+.scrub-marks { position: absolute; inset: 0; pointer-events: none; }
+.scrub-tick { position: absolute; top: -1px; bottom: -1px; width: 3px; margin-left: -1.5px; background: var(--scrub-gap, rgba(0, 0, 0, 0.75)); }
+.scrub-skip { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--skip-mark); }
+.progress .scrub-tick { --scrub-gap: var(--rig-surface); }
+/* While a sponsor's stretch plays, with "Sponsor breaks" on Ask: one tap is past it. */
+.skip-btn {
+  position: absolute; right: 16px; bottom: 84px; z-index: 2; min-height: 52px; padding: 0 20px;
+  font-size: 16px; font-weight: 700; color: #fff; background: rgba(16, 18, 22, 0.78);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55); border-radius: 999px;
+}
+.skip-btn:active { background: rgba(255, 255, 255, 0.22); }
+/* The chapter that is playing, under the title when the video fills the window. */
+.overlay-chapter { margin-top: 3px; font-size: 14.5px; font-weight: 600; color: rgba(255, 255, 255, 0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A sheet that is a list to pick from (chapters): it scrolls, and its rows say two things. */
+.sheet.listed { max-height: 86vh; }
+.sheet-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 0 -4px; padding: 0 4px; }
+.sheet-list button { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
+.sheet-list button.on { color: var(--rig-accent); background: var(--rig-accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ring); }
+.sheet-list .when { flex: none; font-variant-numeric: tabular-nums; color: var(--rig-ink-2); }
 
 .stats {
   position: absolute; left: 12px; top: 12px; z-index: 2; pointer-events: none;
@@ -498,6 +539,23 @@ select.ctl.small.text {
   text-align: center; text-align-last: center; cursor: pointer; background-image: none;
 }
 select.ctl.small.text option { color: #111; background: #fff; }
+/* Captions: the button in the bar (lit while they are on), and the lines themselves over the picture. */
+.ctl.small.cc { display: grid; place-items: center; }
+.ctl.small.cc span {
+  display: block; padding: 3px 7px; border-radius: 6px; font-size: 14px; line-height: 1.2; font-weight: 800; letter-spacing: 0.03em;
+  color: #fff; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+.ctl.small.cc.on span { background: #fff; color: #14161a; }
+.ctl.small.cc.none span { opacity: 0.5; }
+.captions {
+  position: absolute; left: 6%; right: 6%; bottom: 7%; z-index: 1; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 0.12em;
+  font-size: calc(var(--stage-w, 800px) * 0.031); line-height: 1.28; font-weight: 600; color: #fff; text-align: center;
+  transition: bottom 0.15s ease;
+}
+.captions span { background: rgba(8, 9, 11, 0.78); padding: 0.08em 0.45em; border-radius: 0.2em; white-space: pre-wrap; }
+/* (Out of the way of the controls while they are up.) */
+.overlay.show ~ .captions, .captions.raised { bottom: 96px; }
 /* Toggles that are switched on look pressed. */
 .top-actions button.on { background: var(--rig-accent); color: var(--rig-accent-ink); box-shadow: var(--rig-shadow-sm); }
 
@@ -608,6 +666,10 @@ body.remote { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
 .np .thumb { width: 128px; }
 .np-title { font-weight: 700; line-height: 1.3; }
 .np-sub { color: var(--rig-ink-2); font-size: 14px; margin-top: 2px; }
+/* The chapter that is playing, on the remote: a tap lists them all. */
+.chapters-btn { width: 100%; margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; text-align: left; }
+.chapters-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 650; color: var(--rig-ink); }
+.chapters-count { flex: none; color: var(--rig-ink-2); font-size: 13.5px; }
 /* The phone's seek bar sits on a card, not on the video: a slider (rig-slider). */
 .progress { margin-top: 14px; }
 .progress .scrub-track { height: 6px; background: var(--rig-surface-3); box-shadow: inset 0 0 0 1px var(--rig-line); }
@@ -661,6 +723,23 @@ a.btn { display: flex; align-items: center; justify-content: center; text-align:
   box-shadow: inset 0 0 0 1px var(--rig-line);
   word-break: break-all; user-select: all;
 }
+/* Admin, Alerts: what the server keeps an eye on (a row each, with how it stands), and where it sends word. */
+.alert-checks { display: grid; gap: 6px; margin-bottom: 16px; }
+.alert-check { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--rig-radius); background: var(--rig-surface-2); box-shadow: inset 0 0 0 1px var(--rig-line); }
+.alert-dot { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--rig-ink-3); }
+.alert-check.ok .alert-dot { background: var(--rig-good, #2fbf71); }
+.alert-check.bad .alert-dot { background: var(--rig-bad); }
+.alert-check.unsure .alert-dot { background: var(--rig-warn, #d9a100); }
+.alert-check.bad { background: var(--rig-bad-soft); }
+.alert-what { flex: 1; min-width: 0; }
+.alert-label { font-weight: 650; }
+.alert-words { color: var(--rig-ink-2); font-size: 14px; margin-top: 2px; }
+.alert-state { flex: none; color: var(--rig-ink-2); font-size: 13.5px; margin-top: 2px; }
+.alert-check.bad .alert-state { color: var(--rig-bad); font-weight: 650; }
+.alert-form { display: grid; gap: 8px; margin-bottom: 10px; }
+.alert-form label { font-weight: 650; font-size: 14px; }
+.alert-form .btn-row { margin: 2px 0 0; flex-wrap: wrap; }
+.alert-form .btn-row button { flex: 0 1 auto; white-space: nowrap; }
 .kv { display: grid; gap: 6px; margin: 10px 0; }
 /* Profiles on the Admin page: each an item (rig-item); one that is asking is tinted. */
 .plist { display: grid; gap: 8px; margin-bottom: 12px; }

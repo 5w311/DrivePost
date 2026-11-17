@@ -34,6 +34,7 @@
           <div class="times"><span id="rCur">0:00</span><span id="rDur">0:00</span></div>
         </div>
         <div class="controls" id="controls"></div>
+        <button id="chaptersBtn" type="button" class="ghost chapters-btn hidden"></button>
       </div>
     </section>
 
@@ -151,6 +152,29 @@
           <button data-v="mpeg1" type="button">MPEG-1</button>
         </div>
         <p class="muted" style="font-size:14px;margin:10px 0 0"><b>H.264</b> plays the video as YouTube (or the site it came from) made it: sharper, usually less data, and almost no work for your server. If the car can't play it, or a video has no H.264 version, DrivePost uses MPEG-1 by itself. <b>MPEG-1</b> always converts on your server, which works in any browser.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Captions</div>
+      <div class="card-body">
+        <div class="seg" id="captionsSeg">
+          <button data-on="0" type="button">Off</button>
+          <button data-on="1" type="button">On</button>
+        </div>
+        <p class="muted" style="font-size:14px;margin:10px 0 0">Shown in the car over the video, when a video has them: the ones written for it, or else the ones YouTube makes from the sound. The car's <b>CC</b> button is the same switch. A page has its own site's captions: use <b>Captions</b> on the Page card.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">Sponsor breaks</div>
+      <div class="card-body">
+        <div class="seg" id="sponsorSeg">
+          <button data-v="off" type="button">Play</button>
+          <button data-v="ask" type="button">Ask</button>
+          <button data-v="skip" type="button">Skip</button>
+        </div>
+        <p id="sponsorSay" class="muted" style="font-size:14px;margin:10px 0 0"></p>
       </div>
     </section>
 

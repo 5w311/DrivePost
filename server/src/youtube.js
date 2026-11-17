@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
+import { noteLookup, isChannelId } from './extras.js';
 
 export const TEST_PATTERN_ID = 'test-pattern';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
@@ -35,6 +36,56 @@ export function extractVideoId(text) {
   }
   return null;
 }
+
+/*
+ * Where in the video a YouTube link says to start, in seconds, or null: the
+ * "t=96" (or "t=1m36s", or "start=96") that Share > "Start at" and a
+ * right-click on the player put in a link.
+ */
+export function extractStartAt(text) {
+  const s = String(text || '');
+  if (!/youtu\.be\/|youtube(?:-nocookie)?\.com\//i.test(s)) return null;
+  const m = s.match(/[?&#](?:t|start|time_continue)=([0-9]+(?:\.[0-9]+)?s?|(?:[0-9]+h)?(?:[0-9]+m)?(?:[0-9]+s)?)(?=[&#\s]|$)/i);
+  if (!m || !m[1]) return null;
+  const v = m[1].toLowerCase();
+  let at;
+  if (/^[0-9.]+s?$/.test(v)) at = parseFloat(v);
+  else {
+    const part = (unit) => Number((v.match(new RegExp(`([0-9]+)${unit}`)) || [])[1] || 0);
+    at = part('h') * 3600 + part('m') * 60 + part('s');
+  }
+  return Number.isFinite(at) && at >= 1 && at < 48 * 3600 ? Math.floor(at) : null;
+}
+
+/*
+ * The playlist a YouTube link names, if any: a link to the list itself, or a
+ * video's link that says which list it was opened from. YouTube's endless
+ * "mixes" (made up for each viewer as they go) and its private lists (Watch
+ * later, Liked videos) aren't lists this server could read, and a link with
+ * one of those is just the video's.
+ */
+const LIST_ID = /^[A-Za-z0-9_-]{12,64}$/;
+export const isListId = (id) => typeof id === 'string' && LIST_ID.test(id) && !/^(RD|WL|LL|LM)/.test(id);
+export function extractListId(text) {
+  const s = String(text || '');
+  if (!/youtu\.be\/|youtube(?:-nocookie)?\.com\//i.test(s)) return null;
+  const m = s.match(/[?&]list=([A-Za-z0-9_-]+)/);
+  return m && isListId(m[1]) ? m[1] : null;
+}
+
+/*
+ * The channel a YouTube link names, as what the lists go by: its ID
+ * ("UC..."), its handle ("@name"), or the older "c/name" and "user/name".
+ */
+const CHANNEL_REF = /^(UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9._%-]{2,90}|(?:c|user)\/[A-Za-z0-9._%-]{1,90})$/;
+export const isChannelRef = (ref) => typeof ref === 'string' && CHANNEL_REF.test(ref);
+export function extractChannel(text) {
+  const m = String(text || '').match(/youtube\.com\/(?:channel\/(UC[A-Za-z0-9_-]{22})|(@[A-Za-z0-9._%-]{2,90})|((?:c|user)\/[A-Za-z0-9._%-]{1,90}))(?:[/?#]|$|\s)/i);
+  if (!m) return null;
+  const ref = m[1] || m[2] || m[3].replace(/^(c|user)\//i, (x) => x.toLowerCase());
+  return isChannelRef(ref) ? ref : null;
+}
+const channelUrl = (ref) => `https://www.youtube.com/${ref.startsWith('UC') ? `channel/${ref}` : ref}/videos`;
 
 function baseArgs() {
   const args = ['--no-warnings'];
@@ -101,6 +152,8 @@ function toItem(e) {
     duration: typeof e.duration === 'number' ? Math.round(e.duration) : null,
     live: e.live_status === 'is_live' || e.is_live === true,
     thumb: thumbFor(e.id),
+    // Whose it is, where the search says: the lists can then show that channel's other videos.
+    ...(isChannelId(e.channel_id) ? { channelId: e.channel_id } : {}),
   };
 }
 
@@ -110,6 +163,46 @@ export function search(query, count = 20) {
   return searchCache.get(q.toLowerCase(), async () => {
     const json = JSON.parse(await ytdlp(['--flat-playlist', '--dump-single-json', `ytsearch${count}:${q}`]));
     return (json.entries || []).filter((e) => e && ID_RE.test(e.id)).map(toItem);
+  });
+}
+
+// A row of a list isn't always a video one can play: YouTube lists the ones that were taken down or made private too.
+const gone = (e) => /^\[(private|deleted) video\]$/i.test(String(e.title || '').trim());
+
+/*
+ * A playlist: { id, title, channel, count, items }. The first `max` of it:
+ * a list can run to thousands, and nobody lines up that many.
+ */
+export const LIST_MAX = 200;
+const listCache = new Cache(15 * 60 * 1000, 60);
+export function playlist(listId, max = LIST_MAX) {
+  if (!isListId(listId)) return Promise.reject(new Error("That isn't a playlist this server can read."));
+  return listCache.get(`list:${listId}:${max}`, async () => {
+    const json = JSON.parse(await ytdlp(['--flat-playlist', '--dump-single-json', '--playlist-end', String(max), `https://www.youtube.com/playlist?list=${listId}`], 60000));
+    const entries = Array.isArray(json.entries) ? json.entries : [];
+    const items = entries.filter((e) => e && ID_RE.test(e.id) && !gone(e)).map(toItem);
+    if (!items.length) throw new Error('That playlist has no videos this server can play.');
+    return {
+      id: listId,
+      title: String(json.title || 'Playlist').replace(/\s+/g, ' ').trim().slice(0, 200),
+      channel: String(json.channel || json.uploader || '').replace(/\s+/g, ' ').trim().slice(0, 100),
+      // How many the list has in all, when that is more than were fetched (the ones that can't be played aside).
+      count: entries.length >= max ? Math.max(items.length, Number(json.playlist_count) || 0) : items.length,
+      items,
+    };
+  });
+}
+
+// A channel's latest videos, newest first: { ref, title, items }.
+export function channelVideos(ref, max = 30) {
+  if (!isChannelRef(ref)) return Promise.reject(new Error("That isn't a channel this server can read."));
+  return listCache.get(`channel:${ref}:${max}`, async () => {
+    const json = JSON.parse(await ytdlp(['--flat-playlist', '--dump-single-json', '--playlist-end', String(max), channelUrl(ref)], 60000));
+    const title = String(json.channel || json.uploader || json.title || 'Channel').replace(/\s+/g, ' ').replace(/ - Videos$/, '').trim().slice(0, 100);
+    const id = /^UC[A-Za-z0-9_-]{22}$/.test(json.channel_id || '') ? json.channel_id : '';
+    // (The rows of a channel's own list don't each say whose they are.)
+    const items = (json.entries || []).filter((e) => e && ID_RE.test(e.id) && !gone(e)).map((e) => toItem({ channel: title, channel_id: id, ...e }));
+    return { ref: id || ref, title, items };
   });
 }
 
@@ -237,10 +330,47 @@ export function routeOrder(now = Date.now()) {
   return [...names.filter((n) => !resting(n, now)), ...names.filter((n) => resting(n, now))];
 }
 
+let workedAt = 0; // when a video last really played by one of the routes
 export function routeWorked(name) {
   if (using !== name) console.log(`[youtube] getting videos by the "${name}" route`);
   using = name;
+  workedAt = Date.now();
   refused.delete(name);
+}
+export const lastWorkedAt = () => workedAt;
+
+/*
+ * Is YouTube handing this server videos right now? Asked of a video that has
+ * been up since 2005, afresh (not what is kept from an earlier lookup), by
+ * each route in turn until one delivers: a lookup, and then the first bytes
+ * of what it points to. Returns { ok, route } or { ok: false, why }.
+ * (alerts.js asks, a few times a day, when nobody has played anything lately.)
+ */
+export const PROBE_ID = 'jNQXAC9IVRw';
+export async function probe(deps = {}) {
+  const ask = deps.ytdlp || ytdlp;
+  const status = deps.linkStatus || linkStatus;
+  let why = '';
+  for (const name of routeOrder()) {
+    const route = routeNamed(name);
+    try {
+      const json = JSON.parse(await ask([...route.args, '-J', '--no-playlist', '-f', route.format(360), `https://www.youtube.com/watch?v=${PROBE_ID}`], 60000));
+      const f = (json.requested_formats && json.requested_formats.length ? json.requested_formats : [json]).find((x) => x && x.url);
+      if (!f) {
+        why = `${name}: nothing to play`;
+        continue;
+      }
+      // (Held back for the length of an ad: see ROUTES.)
+      const wait = typeof f.available_at === 'number' ? f.available_at * 1000 - Date.now() : 0;
+      if (wait > 0) await new Promise((done) => setTimeout(done, Math.min(wait + 500, 20000)));
+      const code = await status({ url: f.url, headers: f.http_headers || json.http_headers || {}, list: /m3u8/i.test(f.protocol || '') || /\.m3u8(\?|$)/i.test(f.url) }, deps.fetch);
+      if (code === 200 || code === 206) return { ok: true, route: name };
+      why = `${name}: its link answered ${code}`;
+    } catch (err) {
+      why = `${name}: ${String(err.message || err).slice(0, 120)}`;
+    }
+  }
+  return { ok: false, why };
 }
 
 export function routeRefused(name, why) {
@@ -364,6 +494,8 @@ export function streamInfo(id, quality, routeName = ROUTES[0].name) {
       }
       throw err;
     }
+    // (Its chapters, its captions and whose it is come with the same answer: see extras.js.)
+    noteLookup(id, json);
     const formats = json.requested_formats && json.requested_formats.length ? json.requested_formats : [json];
     const picked = formats.filter((f) => f && f.url);
     const each = whatEachHas(picked);

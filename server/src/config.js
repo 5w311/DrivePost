@@ -49,6 +49,14 @@ export const config = {
   // makes to fill the list beside a video. No account, no key.
   relatedUrl: env.RELATED_URL || 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false',
 
+  // The viewers' list of where the sponsored parts of YouTube videos are
+  // (SponsorBlock), for profiles that switch "Sponsor breaks" on.
+  // SPONSORBLOCK_URL= (empty) takes the switch's effect away altogether.
+  sponsorUrl: env.SPONSORBLOCK_URL === undefined ? 'https://sponsor.ajay.app' : env.SPONSORBLOCK_URL.trim().replace(/\/+$/, ''),
+
+  // The language captions are shown in when a video has them: "en", "es", "de"...
+  captionsLang: /^[A-Za-z]{2,3}$/.test((env.CAPTIONS_LANG || '').trim()) ? env.CAPTIONS_LANG.trim().toLowerCase() : 'en',
+
   // Which update is running: "3faa11d Title of the commit". Baked into the
   // image when it is built by the updater; empty otherwise.
   commit: (env.DRIVEPOST_COMMIT || '').trim().slice(0, 160),

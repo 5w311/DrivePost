@@ -22,10 +22,25 @@ import {
   extractVideoId,
   startAutoUpdate,
   prewarm,
+  streamInfo,
+  routeOrder,
+  isValidId,
+  extractListId,
+  extractChannel,
+  extractStartAt,
+  probe,
+  lastWorkedAt,
+  isListId,
+  isChannelRef,
+  playlist,
+  channelVideos,
   TEST_PATTERN_ID,
   TEST_PATTERN_ITEM,
 } from './youtube.js';
-import { isLinkId, isPlayableId, linkIn, linkItem, prewarmLink } from './links.js';
+import { isLinkId, isPlayableId, linkIn, linkItem, prewarmLink, linkStreamInfo } from './links.js';
+import { notedFor, pickCaptions, sponsorSkips } from './extras.js';
+import { captionsFor } from './captions.js';
+import { Alerts, newTopic } from './alerts.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
@@ -239,6 +254,77 @@ function commitsUrl() {
 // on, who is waiting for a profile, and which build is running. `etag` names
 // this state of things: a page that says which one it has is only answered
 // when there is another (watchAdmin).
+/*
+ * What is looked at every few minutes, for a message to the owner's phone
+ * when one of them stops working (alerts.js). Each `look` answers
+ * { ok } or { ok: false, words }, or null when there is nothing to check.
+ */
+const CHECK_MS = (Number(process.env.ALERT_CHECK_SECONDS) || 5 * 60) * 1000;
+const YOUTUBE_MS = (Number(process.env.ALERT_YOUTUBE_SECONDS) || 3 * 60 * 60) * 1000;
+const DISK_LOW = 1024 * 1024 * 1024;
+const alerts = new Alerts({
+  file: path.join(config.dataDir, 'alerts.json'),
+  checks: {
+    outside: {
+      label: 'reaching DrivePost at its public address',
+      unset: 'No public address is set (PUBLIC_URL in .env), so there is nothing to try.',
+      every: CHECK_MS,
+      after: 2,
+      // Out to the internet and back in the way a car comes: through the tunnel.
+      look: async () => {
+        if (!config.publicUrl) return null;
+        try {
+          const res = await fetch(`${config.publicUrl}/healthz`, { redirect: 'manual', signal: AbortSignal.timeout(12000) });
+          if (res.status === 200 && /"ok"\s*:\s*true/.test(await res.text())) return { ok: true };
+          // Something in front of the address wants a sign-in or the like before it lets a request through
+          // (a gate put there on purpose): whether DrivePost is behind it can't be told from here.
+          if ((res.status >= 300 && res.status < 400) || res.status === 401 || res.status === 403) {
+            return { skip: `The public address answers ${res.status} to a plain request (something in front of it asks for a sign-in), so this can't be told from here.` };
+          }
+          return { ok: false, words: `DrivePost can't be reached at its public address (it answers ${res.status}). The tunnel may be down.` };
+        } catch {
+          return { ok: false, words: "DrivePost can't be reached at its public address. The tunnel may be down." };
+        }
+      },
+    },
+    youtube: {
+      label: 'getting videos from YouTube',
+      every: YOUTUBE_MS,
+      recheck: Math.min(YOUTUBE_MS, Math.max(CHECK_MS, 15 * 60 * 1000)),
+      after: 2,
+      look: async () => {
+        // (A video that played lately says it better than a test would.)
+        if (Date.now() - lastWorkedAt() < YOUTUBE_MS) return { ok: true };
+        const found = await probe();
+        return found.ok ? { ok: true } : { ok: false, words: `YouTube isn't handing this server videos right now (${found.why}). yt-dlp updates itself once a day, which usually cures it.` };
+      },
+    },
+    browser: {
+      label: 'the browser container, for opening pages',
+      unset: 'Pages are switched off on this server (PAGES=off).',
+      every: CHECK_MS,
+      after: 2,
+      look: async () => (!config.pages.on ? null : pagesReady() ? { ok: true } : { ok: false, words: "The browser container isn't connected, so pages can't be opened." }),
+    },
+    update: {
+      label: 'installing updates',
+      every: CHECK_MS,
+      after: 1,
+      look: async () => (update.failed ? { ok: false, words: `An update couldn't be installed: ${update.failed.commit}. The updater tries again in an hour.` } : { ok: true }),
+    },
+    disk: {
+      label: "room on the server's disk",
+      every: CHECK_MS * 6,
+      after: 1,
+      look: async () => {
+        const st = await fs.promises.statfs(config.dataDir);
+        const free = st.bavail * st.bsize;
+        return free >= DISK_LOW ? { ok: true } : { ok: false, words: `The server's disk is nearly full: ${Math.round(free / (1024 * 1024))} MB left.` };
+      },
+    },
+  },
+});
+
 function adminView() {
   const view = {
     profiles: auth.listProfiles().map((p) => {
@@ -249,6 +335,7 @@ function adminView() {
     requests: auth.listRequests(),
     allowRequests: auth.allowRequests,
     server: { version: VERSION, commit: config.commit, commits: commitsUrl(), startedAt: STARTED, update: updateView() },
+    alerts: alerts.view(),
   };
   // Time going by since the last look isn't news; a new look is.
   const what = JSON.stringify({ ...view, server: { ...view.server, update: { ...view.server.update, lookedAgo: update.lookedAt } } });
@@ -494,13 +581,82 @@ function linkedTo(text) {
   return { url };
 }
 
+/*
+ * What a pasted or shared link leads to, for the screens to show and play:
+ * { item } for one video; { list, items } for a playlist (with `item` too
+ * when the link was to one video of it); { channel, items } for a channel's
+ * latest videos. Throws in words when it leads to nothing playable.
+ */
+async function resolved(text) {
+  const to = linkedTo(text);
+  const listId = extractListId(text);
+  if (listId) {
+    try {
+      const pl = await playlist(listId);
+      const item = to.id ? pl.items.find((i) => i.id === to.id) || (await videoMeta(to.id).catch(() => null)) : null;
+      return { ...(item ? { item } : {}), list: { id: pl.id, title: pl.title, channel: pl.channel, count: pl.count }, items: pl.items };
+    } catch (err) {
+      // (A list that can't be read, in a link that also names a video: the video alone.)
+      if (!to.id) throw new Error(`Couldn't read that playlist: ${err.message}`);
+    }
+  }
+  const channel = to.id ? null : extractChannel(text);
+  if (channel) {
+    let found;
+    try {
+      found = await channelVideos(channel);
+    } catch (err) {
+      throw new Error(`Couldn't read that channel: ${err.message}`);
+    }
+    return { channel: { ref: found.ref, title: found.title }, items: found.items };
+  }
+  if (to.error) throw Object.assign(new Error(to.error), { status: 400 });
+  if (to.id) {
+    try {
+      // (A link that says where to start, "t=96": the video is put on from there.)
+      const at = extractStartAt(text);
+      return { item: { ...(await videoMeta(to.id)), ...(at ? { at } : {}) } };
+    } catch (err) {
+      throw new Error(`Couldn't look that up: ${err.message}`);
+    }
+  }
+  // A link to another site fails in words of its own (links.js).
+  return { item: await linkItem(to.url) };
+}
+
+// The videos of a playlist to line up: all of it, or from one of its videos on.
+function listFrom(pl, from) {
+  const at = from ? pl.items.findIndex((i) => i.id === from) : -1;
+  return at > 0 ? pl.items.slice(at) : pl.items;
+}
+
 // Add a shared link to a profile's car: play it if nothing is on, otherwise queue it.
 async function shareText(store, text) {
   const to = linkedTo(text);
+  // A playlist: all of it (or from the video the link was to) goes to Up Next.
+  const listId = extractListId(text);
+  if (listId) {
+    try {
+      const pl = await playlist(listId);
+      const items = listFrom(pl, to.id);
+      const wasIdle = !store.now;
+      const before = store.queue.length;
+      const error = store.command('enqueueMany', { items, how: 'queue' });
+      if (!error) {
+        const added = store.queue.length - before + (wasIdle ? 1 : 0);
+        return { ok: true, title: pl.title, message: added ? `${wasIdle ? 'Playing' : 'Added to Up Next'}: ${pl.title} (${added} ${added === 1 ? 'video' : 'videos'})` : `Already in Up Next: ${pl.title}` };
+      }
+    } catch (err) {
+      if (!to.id) return { ok: false, message: `Couldn't read that playlist: ${err.message}` };
+    }
+  }
   if (to.error) return { ok: false, message: to.error };
   let meta;
-  if (to.id) meta = await videoMeta(to.id).catch(() => ({ id: to.id, title: 'YouTube video', channel: '' }));
-  else {
+  if (to.id) {
+    meta = await videoMeta(to.id).catch(() => ({ id: to.id, title: 'YouTube video', channel: '' }));
+    const at = extractStartAt(text);
+    if (at) meta = { ...meta, at };
+  } else {
     // Another site's video: finding out what it is also finds out whether it can be played.
     try {
       meta = await linkItem(to.url);
@@ -511,6 +667,46 @@ async function shareText(store, text) {
   const wasIdle = !store.now;
   store.command('enqueue', { item: meta });
   return { ok: true, title: meta.title, message: wasIdle ? `Playing: ${meta.title}` : `Added to Up Next: ${meta.title}` };
+}
+
+/*
+ * What a profile's screens draw around a video (extras.js): its chapters,
+ * whose it is, whether it has captions to show, and the sponsor's stretches
+ * if this profile has that switched on. `known` is false while the video
+ * hasn't been looked up yet, and the screens ask again.
+ */
+// What the lookup of a video said about it besides where it is, waiting for that lookup if it hasn't been made.
+async function notedOf(store, id) {
+  if (!isPlayableId(id) || id === TEST_PATTERN_ID) return null;
+  if (!notedFor(id)) {
+    // Not looked up yet: the lookup the car's own stream is about to make (or is making), shared with it.
+    const quality = store.playQuality();
+    const look = isLinkId(id) ? linkStreamInfo(id, quality) : streamInfo(id, quality, routeOrder()[0]);
+    await Promise.race([look.catch(() => null), new Promise((done) => setTimeout(done, 12000))]);
+  }
+  return notedFor(id);
+}
+
+async function extrasOf(store, id) {
+  const nothing = { id, known: true, chapters: [], channel: null, captions: null, skips: [] };
+  if (!isPlayableId(id) || id === TEST_PATTERN_ID) return nothing;
+  const found = await notedOf(store, id);
+  let skips = [];
+  if (store.settings.sponsors !== 'off' && isValidId(id)) {
+    skips = await sponsorSkips(id).catch((err) => {
+      console.warn(`[sponsors] ${err.message}`);
+      return [];
+    });
+  }
+  if (!found) return { ...nothing, known: false, skips };
+  return {
+    id,
+    known: true,
+    chapters: found.chapters,
+    channel: found.channel.id || found.channel.name ? found.channel : null,
+    captions: pickCaptions(found, config.captionsLang),
+    skips,
+  };
 }
 
 const PAGES = { '/': 'car.html', '/remote': 'remote.html', '/setup': 'setup.html' };
@@ -736,6 +932,25 @@ async function route(req, res) {
     setImmediate(adminChanged); // any other Admin page that is open
     return send(res, 200, adminView());
   }
+  // Alerts: where they are sent ({ to }), the heartbeat ({ beat }), a topic made up for the purpose
+  // ({ make: true }), and a message to try it with ({ test: true }).
+  if (req.method === 'POST' && p === '/api/admin/alerts') {
+    if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
+    const body = await readJson(req);
+    try {
+      if (body.make) alerts.set({ to: newTopic() });
+      else if (body.to !== undefined || body.beat !== undefined) alerts.set({ to: body.to, beat: body.beat });
+    } catch (err) {
+      return send(res, 400, { error: err.message });
+    }
+    if (body.test) {
+      if (!alerts.to) return send(res, 400, { error: 'Say where to send them first.' });
+      const went = await alerts.say('This is a test from DrivePost. Alerts will arrive like this one.');
+      if (!went) return send(res, 502, { error: `The test didn't go: ${alerts.sent.error}.` });
+    }
+    setImmediate(adminChanged);
+    return send(res, 200, adminView());
+  }
   // Adding, renaming and removing profiles, and answering people who asked for one.
   if (req.method === 'POST' && p === '/api/profiles') {
     if (!admin) return send(res, 403, { error: 'Sign in to Admin first.' });
@@ -908,6 +1123,23 @@ async function route(req, res) {
       return send(res, 200, await recommendFor({ now: store.now, history: store.history, queue: store.queue }));
     }
 
+    // A video's chapters, sponsor stretches and so on, for the screens to draw.
+    if (req.method === 'GET' && p === '/api/extras') {
+      return send(res, 200, await extrasOf(store, url.searchParams.get('id') || ''));
+    }
+
+    // A video's captions, as timed lines for the car to draw over its picture (captions.js).
+    if (req.method === 'GET' && p === '/api/captions') {
+      const id = url.searchParams.get('id') || '';
+      await notedOf(store, id);
+      try {
+        return send(res, 200, { id, ...(await captionsFor(id)) });
+      } catch (err) {
+        // (Not fetched this time: the car may ask again later.)
+        return send(res, 200, { id, none: err.message, later: true });
+      }
+    }
+
     if (req.method === 'GET' && p === '/api/suggest') {
       const suggestions = await suggest(url.searchParams.get('q')).catch(() => []);
       return send(res, 200, { suggestions });
@@ -915,13 +1147,43 @@ async function route(req, res) {
 
     if (req.method === 'POST' && p === '/api/resolve') {
       const body = await readJson(req);
-      const to = linkedTo(body.text);
-      if (to.error) return send(res, 400, { error: to.error });
       try {
-        return send(res, 200, { item: to.id ? await videoMeta(to.id) : await linkItem(to.url) });
+        return send(res, 200, await resolved(body.text));
       } catch (err) {
-        // A link to another site fails in words of its own (links.js).
-        return send(res, 502, { error: to.id ? `Couldn't look that up: ${err.message}` : err.message });
+        return send(res, err.status || 502, { error: err.message });
+      }
+    }
+
+    // A playlist is put on: played from its first video (or from `from`, one of its videos) with the
+    // rest lined up behind it (`how`: 'play'), or added to Up Next ('queue').
+    if (req.method === 'POST' && p === '/api/list/play') {
+      const body = await readJson(req);
+      if (!isListId(body.list)) return send(res, 400, { error: "That isn't a playlist." });
+      try {
+        const pl = await playlist(body.list);
+        const items = listFrom(pl, isValidId(body.from) ? body.from : null);
+        const how = body.how === 'play' ? 'play' : 'queue';
+        const lined = store.queue.length;
+        const idle = !store.now;
+        const error = store.command('enqueueMany', { items, how });
+        if (error) return send(res, 400, { error });
+        // How many of them went in: all, when it is played; the ones not lined up already, when it is added.
+        const count = how === 'play' ? items.length : store.queue.length - lined + (idle ? 1 : 0);
+        return send(res, 200, { ok: true, title: pl.title, count, playing: how === 'play' || idle });
+      } catch (err) {
+        return send(res, 502, { error: `Couldn't read that playlist: ${err.message}` });
+      }
+    }
+
+    // A channel's latest videos.
+    if (req.method === 'GET' && p === '/api/channel') {
+      const ref = url.searchParams.get('ref') || '';
+      if (!isChannelRef(ref)) return send(res, 400, { error: "That isn't a channel." });
+      try {
+        const found = await channelVideos(ref);
+        return send(res, 200, { channel: { ref: found.ref, title: found.title }, items: found.items });
+      } catch (err) {
+        return send(res, 502, { error: `Couldn't read that channel: ${err.message}` });
       }
     }
 
@@ -1218,6 +1480,13 @@ process.on('SIGINT', shutdown);
 
 if (auth.profile(ORIGINAL)) storeFor(ORIGINAL); // a server from before profiles: its one car, ready as before
 startAutoUpdate();
+// The first look at how things stand a minute after starting (the tunnel and the browser container take
+// a moment to come up), then whatever is due, twice a minute (alerts.js).
+setTimeout(() => {
+  const look = () => alerts.tick().then(adminChanged, (err) => console.warn(`[alerts] ${err.message}`));
+  look();
+  setInterval(look, Math.min(30 * 1000, CHECK_MS)).unref();
+}, (Number(process.env.ALERT_FIRST_SECONDS) || 60) * 1000).unref();
 server.listen(config.port, () => {
   console.log(`DrivePost listening on :${config.port}${config.commit ? ` (${config.commit})` : ''}`);
   if (auth.adminClosed) {

@@ -24,6 +24,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { config } from './config.js';
 import { Cache, run, ytdlp, isValidId, thumbFor, HEIGHTS } from './youtube.js';
+import { noteLookup } from './extras.js';
 
 const LINK_ID = /^link-[0-9a-f]{16}$/;
 export const isLinkId = (id) => typeof id === 'string' && LINK_ID.test(id);
@@ -402,6 +403,7 @@ export function lookup(url, deps = {}) {
     }
     const video = videoIn(json);
     if (!video) throw new Error(plainly('no video found', site));
+    noteLookup(linkId(url), video); // (its chapters and captions, if the site gives any: extras.js)
     const duration = num(video.duration);
     const live = video.is_live === true || video.live_status === 'is_live';
     const title = String(video.title || video.fulltitle || '').replace(/\s+/g, ' ').trim().slice(0, 200);

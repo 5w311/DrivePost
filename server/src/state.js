@@ -6,8 +6,10 @@ import { isValidId, thumbFor, TEST_PATTERN_ID } from './youtube.js';
 import { isLinkId, isLinkAddress, linkId, rememberLink, siteOf, isPageRowId, pageRowId } from './links.js';
 import { PAGE_ID, pageItem } from './mirror.js';
 import { QUALITIES } from './config.js';
+import { isChannelId } from './extras.js';
 
 const HISTORY_MAX = 40;
+const QUEUE_MAX = 500; // Up Next doesn't grow past this (a playlist lined up twice over)
 // A page says its name a moment after it opens, and may change it once or
 // twice as it loads. After this long, a new name means the page has been
 // steered somewhere else, and Recent keeps the name it opened with.
@@ -57,7 +59,11 @@ export function cleanItem(raw) {
     return { ...row, url: raw.url, site: siteOf(raw.url), thumb };
   }
   if (!isValidId(raw.id)) return null;
-  return { ...row, thumb: thumbFor(raw.id) };
+  // Where its link said to start ("t=96"), for when it is put on.
+  const at = Math.floor(Number(raw.at));
+  const from = Number.isFinite(at) && at >= 1 && at < 48 * 3600 && !row.live && (!row.duration || at < row.duration - 1) ? { at } : {};
+  // (Whose it is, when that is known: "more from this channel" goes by it.)
+  return { ...row, thumb: thumbFor(raw.id), ...(isChannelId(raw.channelId) ? { channelId: raw.channelId } : {}), ...from };
 }
 
 // What is known of a page's own video, or null.
@@ -67,6 +73,7 @@ function cleanMedia(m) {
   return { status: m.status, t: num(m.t), d: num(m.d), rate: num(m.rate) || 1, seek: m.seek !== false, at: num(m.at) || Date.now() };
 }
 
+export const SPONSOR_MODES = ['off', 'ask', 'skip'];
 const AUTO_START = '480'; // where Auto begins on a server whose own default is Auto
 const AUTO_HOLD_MS = 10 * 60 * 1000; // how long Auto stays below a quality the connection couldn't carry
 
@@ -91,6 +98,9 @@ export class Store extends EventEmitter {
     delete this.settings.fill; // (a setting that is no more)
     this.autoHeld = null; // Auto came down from a quality the connection couldn't carry: { at: that quality, until } (not tried again before then)
     if (!['auto', 'mpeg1'].includes(this.settings.format)) this.settings.format = 'auto';
+    // Sponsor breaks in YouTube videos: left alone ('off'), offered for skipping ('ask'), or skipped ('skip').
+    if (!SPONSOR_MODES.includes(this.settings.sponsors)) this.settings.sponsors = 'off';
+    this.settings.captions = this.settings.captions === true;
     this.seq = saved.seq || 0;
     // Bring back what was playing, but paused so it waits for a tap in the car.
     const now = saved.now ? cleanItem(saved.now) : null;
@@ -219,7 +229,10 @@ export class Store extends EventEmitter {
       this.autoCap = null;
       return;
     }
-    const start = startAt ?? this.resumePoint(item);
+    // (`at`: where the link it came by said to start. That is where it starts, this once: not where it was left last time.)
+    const { at, ...row } = item;
+    item = row;
+    const start = startAt ?? (at > 0 ? at : this.resumePoint(item));
     if (!this.now || this.now.id !== item.id) this.autoCap = null;
     this.now = { ...this.keyed(item), seq: ++this.seq, startAt: start };
     this.paused = false;
@@ -402,6 +415,29 @@ export class Store extends EventEmitter {
         if (!this.now) this.setNow(item);
         else this.queue.unshift(this.keyed(item));
         break;
+      case 'enqueueMany': {
+        // A playlist (server.js): played from its first video with the rest
+        // lined up behind it ('play'), or all of it added to Up Next ('queue').
+        const lined = new Set(this.queue.map((q) => q.id));
+        const seen = new Set();
+        const items = (Array.isArray(data.items) ? data.items : [])
+          .slice(0, 300)
+          .map(cleanItem)
+          .filter((i) => i && !i.page && !seen.has(i.id) && seen.add(i.id));
+        if (!items.length) return 'Nothing to play in that list';
+        if (data.how === 'play') {
+          // The list, in its order, ahead of whatever was lined up before (less what the list has itself).
+          const [first, ...rest] = items;
+          this.setNow(first);
+          this.queue = [...rest.map((i) => this.keyed(i)), ...this.queue.filter((q) => !seen.has(q.id))].slice(0, QUEUE_MAX);
+        } else {
+          // Behind what is lined up, without what is on or lined up already. With nothing on, its first video plays.
+          const fresh = items.filter((i) => !lined.has(i.id) && !(this.now && this.now.id === i.id));
+          if (!this.now && fresh.length) this.setNow(fresh.shift());
+          this.queue = [...this.queue, ...fresh.map((i) => this.keyed(i))].slice(0, QUEUE_MAX);
+        }
+        break;
+      }
       case 'playFromQueue': {
         const i = this.queue.findIndex((q) => q.key === data.key);
         if (i < 0) return 'Not in queue';
@@ -522,6 +558,15 @@ export class Store extends EventEmitter {
         if (!['auto', 'mpeg1'].includes(data.v)) return 'Bad format';
         this.settings = { ...this.settings, format: data.v };
         this.restartStream();
+        break;
+      case 'sponsors':
+        // What to do about a sponsor's part of a video (extras.js). The car does the skipping.
+        if (!SPONSOR_MODES.includes(data.v)) return 'Bad choice';
+        this.settings = { ...this.settings, sponsors: data.v };
+        break;
+      case 'captions':
+        // Whether the car shows a video's captions, when it has any.
+        this.settings = { ...this.settings, captions: !!data.on };
         break;
       case 'blockAds':
         // In pages opened in the server's browser: refuse what they ask of ad and tracker machines (adblock.js).
